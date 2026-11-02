@@ -6,13 +6,14 @@ import crypto from 'crypto';
 
 // Initialize Supabase (requires environment variables)
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+// Usamos a Service Role Key no backend para garantir que as gravações de log e ponto não sejam bloqueadas por RLS
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
 let supabase: any = null;
 if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 } else {
-  console.warn('Supabase environment variables missing. Supabase functionality disabled.');
+  console.error('CRITICAL: Supabase environment variables missing (VITE_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY). All persistence is disabled.');
 }
 
 const app = express();
@@ -53,7 +54,7 @@ app.post('/api/validate-point', async (req, res) => {
     const token = authHeader.split('Bearer ')[1];
     
     // Verify token with Supabase
-    if (!supabase) return res.status(503).send('Service Unavailable');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) {
       await logEvent('unknown', 'Unauthorized access attempt');
@@ -108,7 +109,7 @@ app.post('/api/save-biometric', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).send('Service Unavailable');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
@@ -128,7 +129,110 @@ app.post('/api/save-biometric', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     await logEvent('error', `Save biometric error: ${error}`);
-    res.status(500).send('Internal Server Error');
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Create/Update Collaborator
+app.post('/api/save-collaborator', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return res.status(401).send('Unauthorized');
+    
+    const collaborator = req.body;
+    
+    // Authorization check
+    if (user.user_metadata.tenantId !== collaborator.tenantId) {
+      return res.status(403).send('Forbidden');
+    }
+    
+    // Upsert into Supabase
+    const { data, error: dbError } = await supabase
+      .from('collaborators')
+      .upsert({
+        collaborator_id: collaborator.id,
+        tenant_id: collaborator.tenantId,
+        nome: collaborator.nome,
+        cpf: collaborator.cpf,
+        matricula: collaborator.matricula,
+        pis: collaborator.pis,
+        data_admissao: collaborator.dataAdmissao,
+        cargo_id: collaborator.cargoId,
+        cargo_titulo: collaborator.cargoTitulo,
+        departamento_id: collaborator.departamentoId,
+        departamento_nome: collaborator.departamentoNome,
+        gestor_id: collaborator.gestorId,
+        gestor_nome: collaborator.gestorNome,
+        estabelecimento_id: collaborator.estabelecimentoId,
+        estabelecimento_nome: collaborator.estabelecimentoNome,
+        regime: collaborator.regime,
+        horario_inicio: collaborator.horarioInicio,
+        horario_fim: collaborator.horarioFim,
+        carga_horaria_diaria: collaborator.cargaHorariaDiariaHoras,
+        intervalo_minutos: collaborator.intervaloMinutos,
+        max_minutos_antecedencia: collaborator.maxMinutosAntecedenciaPermitido,
+        regra_antecedencia_ativa: collaborator.regraAntecedenciaAtiva,
+        pin_coletor: collaborator.pinColetor,
+        status: collaborator.status,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'collaborator_id' })
+      .select();
+      
+    if (dbError) throw dbError;
+    
+    await logEvent(collaborator.tenantId, `Collaborator ${collaborator.nome} (${collaborator.matricula}) saved/updated.`);
+    res.json({ success: true, data });
+  } catch (error) {
+    await logEvent('error', `Save collaborator error: ${error}`);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Save/Update Tenant
+app.post('/api/save-tenant', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return res.status(401).send('Unauthorized');
+    
+    // Only super admin should be able to create tenants
+    if (user.user_metadata.role !== 'SUPER_ADMIN') {
+        return res.status(403).send('Forbidden: Only SUPER_ADMIN can create tenants');
+    }
+    
+    const tenant = req.body;
+    
+    const { data, error: dbError } = await supabase
+      .from('tenants')
+      .upsert({
+        tenant_id: tenant.id,
+        cnpj: tenant.cnpj,
+        razao_social: tenant.razaoSocial,
+        nome_fantasia: tenant.nomeFantasia,
+        slug: tenant.slug,
+        plano: tenant.plano,
+        licencas_contratadas: tenant.licencasContratadas,
+        email_admin: tenant.emailAdmin,
+        status: tenant.status
+      }, { onConflict: 'tenant_id' })
+      .select();
+      
+    if (dbError) throw dbError;
+    
+    await logEvent('system', `New tenant created: ${tenant.razaoSocial}`);
+    res.json({ success: true, data });
+  } catch (error) {
+    await logEvent('error', `Save tenant error: ${error}`);
+    res.status(500).json({ error: String(error) });
   }
 });
 
@@ -139,7 +243,7 @@ app.post('/api/save-point', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).send('Service Unavailable');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
