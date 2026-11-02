@@ -4,11 +4,12 @@
 -- ========================================================
 
 -- LIMPEZA DE TABELAS (Garante que não haverá erro de tipo incompatível)
-DROP TABLE IF EXISTS public.point_registrations;
-DROP TABLE IF EXISTS public.collaborators;
-DROP TABLE IF EXISTS public.tenants;
-DROP TABLE IF EXISTS public.establishments;
-DROP TABLE IF EXISTS public.logs;
+DROP TABLE IF EXISTS public.point_registrations CASCADE;
+DROP TABLE IF EXISTS public.points CASCADE; -- Limpa tabela legada mencionada no erro
+DROP TABLE IF EXISTS public.collaborators CASCADE;
+DROP TABLE IF EXISTS public.tenants CASCADE;
+DROP TABLE IF EXISTS public.establishments CASCADE;
+DROP TABLE IF EXISTS public.logs CASCADE;
 
 -- 1. TABELA DE LOGS
 CREATE TABLE IF NOT EXISTS public.logs (

@@ -282,6 +282,19 @@ app.post('/api/save-point', async (req, res) => {
 });
 
 
+// Health Check / Connection Status
+app.get('/api/status', async (req, res) => {
+  res.json({
+    supabaseConnected: !!supabase,
+    env: {
+      url: !!process.env.VITE_SUPABASE_URL,
+      key: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      encryption: !!process.env.ENCRYPTION_KEY
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Vite Middleware
 async function startServer() {
   const vite = await createViteServer({
