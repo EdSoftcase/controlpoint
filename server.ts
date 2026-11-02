@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
@@ -130,6 +131,52 @@ app.post('/api/save-biometric', async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 });
+
+// Save Point Registration
+app.post('/api/save-point', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).send('Service Unavailable');
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return res.status(401).send('Unauthorized');
+    
+    const registration = req.body;
+    
+    // Authorization check
+    if (user.user_metadata.tenantId !== registration.tenantId) {
+      return res.status(403).send('Forbidden');
+    }
+    
+    // Persist to Supabase
+    const { data, error: dbError } = await supabase
+      .from('point_registrations')
+      .insert({
+        nsr: registration.nsr,
+        tenant_id: registration.tenantId,
+        collaborator_id: registration.colaboradorId,
+        data_hora: registration.dataHora,
+        tipo_marcacao: registration.tipoMarcacao,
+        latitude: registration.latitude,
+        longitude: registration.longitude,
+        hash_sha256: registration.hashSha256,
+        modo_dispositivo: registration.modoDispositivo,
+        detalhes: JSON.stringify(registration)
+      })
+      .select();
+      
+    if (dbError) throw dbError;
+    
+    await logEvent(registration.tenantId, `Point registered for ${registration.colaboradorId} (${registration.tipoMarcacao})`);
+    res.json({ success: true, data });
+  } catch (error) {
+    await logEvent('error', `Save point error: ${error}`);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
 
 // Vite Middleware
 async function startServer() {
