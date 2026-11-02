@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- Global Helpers ---
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return request.auth.token.email_verified == true; }
+    
+    // --- Default Deny ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // --- Collections ---
+    match /tenants/{tenantId} {
+      allow read: if isSignedIn();
+      allow write: if false; 
+      
+      match /collaborators/{collaboratorId} {
+        function isValidCollaborator(data) {
+            return data.collaboratorId is string && data.collaboratorId.size() <= 128 &&
+                   data.tenantId is string && data.tenantId == tenantId &&
+                   data.name is string && data.name.size() <= 256 &&
+                   data.biometricTemplate is string;
+        }
+        allow read: if isSignedIn() && request.auth.token.tenantId == tenantId;
+        allow create: if isSignedIn() && isVerified() && isValidCollaborator(request.resource.data);
+        allow update: if isSignedIn() && isVerified() && isValidCollaborator(request.resource.data) && 
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'biometricTemplate']);
+      }
+
+      match /points/{pointId} {
+        allow read: if isSignedIn() && request.auth.token.tenantId == tenantId;
+        allow create: if isSignedIn() && isVerified() && request.resource.data.tenantId == tenantId;
+        allow update, delete: if false;
+      }
+      
+      match /logs/{logId} {
+        allow read: if isSignedIn() && request.auth.token.tenantId == tenantId;
+        allow write: if false;
+      }
+    }
+  }
+}
