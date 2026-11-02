@@ -119,3 +119,9 @@ CREATE INDEX IF NOT EXISTS idx_colab_tenant ON public.collaborators(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_tenant ON public.point_registrations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_colab ON public.point_registrations(collaborator_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_cnpj ON public.tenants(cnpj);
+
+-- 6. DADOS INICIAIS (SEED)
+INSERT INTO public.tenants (tenant_id, cnpj, razao_social, nome_fantasia, slug, plano, licencas_contratadas, email_admin, status)
+VALUES ('tenant-01', '00.000.000/0001-91', 'Softcase Tecnologia', 'Softcase', 'softcase', 'REP-P Corporativo', 9999, 'admin@softcase.com.br', 'ATIVO')
+ON CONFLICT (tenant_id) DO NOTHING;
+

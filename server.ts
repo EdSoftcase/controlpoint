@@ -4,17 +4,29 @@ import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-// Initialize Supabase (requires environment variables)
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-// Usamos a Service Role Key no backend para garantir que as gravações de log e ponto não sejam bloqueadas por RLS
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-
+// State for Supabase client
 let supabase: any = null;
-if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey);
-} else {
-  console.error('CRITICAL: Supabase environment variables missing (VITE_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY). All persistence is disabled.');
+let currentConfig = {
+  url: process.env.VITE_SUPABASE_URL || '',
+  key: process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+};
+
+function initSupabase(url: string, key: string) {
+  if (url && key) {
+    try {
+      supabase = createClient(url, key);
+      currentConfig = { url, key };
+      console.log('Supabase client (re)initialized successfully.');
+      return true;
+    } catch (err) {
+      console.error('Error initializing Supabase:', err);
+      return false;
+    }
+  }
+  return false;
 }
+
+initSupabase(currentConfig.url, currentConfig.key);
 
 const app = express();
 app.use(express.json());
@@ -45,49 +57,6 @@ async function logEvent(tenantId: string, event: string) {
   if (error) console.error('Error logging event:', error);
 }
 
-// Decision Logic and Auth Middleware
-app.post('/api/validate-point', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
-  
-  try {
-    const token = authHeader.split('Bearer ')[1];
-    
-    // Verify token with Supabase
-    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      await logEvent('unknown', 'Unauthorized access attempt');
-      return res.status(401).send('Unauthorized');
-    }
-    
-    // Logic: Validate tenantId
-    const { tenantId, collaboratorId, lat, lng, establishment } = req.body;
-    
-    // Assuming user metadata contains tenantId
-    if (user.user_metadata.tenantId !== tenantId) {
-      await logEvent(user.user_metadata.tenantId, `Forbidden access attempt to tenant ${tenantId}`);
-      return res.status(403).send('Forbidden');
-    }
-
-    // Logic: Validate Radius
-    const distance = calculateDistanceMeters(lat, lng, establishment.latitude, establishment.longitude);
-    if (distance > establishment.cercaRaioMetros && establishment.bloquearForaDoRaio) {
-        await logEvent(tenantId, `Point rejected: Outside geofence for ${collaboratorId}`);
-        return res.status(403).json({ valid: false, reason: 'Outside geofence' });
-    }
-
-    // Logic: Precedence check (placeholder)
-    // Here we would check if a point already exists for this period, etc.
-    
-    await logEvent(tenantId, `Point validation successful for collaborator ${collaboratorId}`);
-    res.json({ valid: true });
-  } catch (error) {
-    await logEvent('error', `Server error: ${error}`);
-    res.status(503).send('Service Unavailable');
-  }
-});
-
 // Helper: Calculate distance
 function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371e3;
@@ -102,6 +71,111 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return Math.round(R * c);
 }
 
+// Update Supabase Config Dynamically
+app.post('/api/update-config', async (req, res) => {
+  const { url, key } = req.body;
+  if (!url || !key) return res.status(400).json({ error: 'URL and Key are required' });
+  
+  const success = initSupabase(url, key);
+  if (success) {
+    res.json({ success: true, message: 'Configuração atualizada para esta sessão do servidor.' });
+  } else {
+    res.status(500).json({ error: 'Falha ao inicializar Supabase com as novas chaves.' });
+  }
+});
+
+// Hardcoded Admin Credentials
+const DEFAULT_ADMIN = {
+  email: 'admin@softcase.com.br',
+  password: 'Softcase@2026',
+  nome: 'Super Administrador Softcase'
+};
+
+// Bootstrap Admin User
+app.post('/api/bootstrap-admin', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+  
+  const { email, password, nome } = req.body.email ? req.body : DEFAULT_ADMIN;
+  
+  try {
+    // 1. Create Auth User
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { 
+        nome, 
+        role: 'SUPER_ADMIN',
+        roleLabel: 'Super Administrador Softcase',
+        tenantId: 'tenant-01',
+        tenantNome: 'Softcase Tecnologia'
+      }
+    });
+    
+    if (authError && authError.message !== 'User already exists') throw authError;
+
+    // 2. Ensure Default Tenant Exists
+    const { error: tenantError } = await supabase.from('tenants').upsert({
+        tenant_id: 'tenant-01',
+        cnpj: '00.000.000/0001-91',
+        razao_social: 'Softcase Tecnologia',
+        nome_fantasia: 'Softcase',
+        slug: 'softcase',
+        plano: 'REP-P Corporativo',
+        licencas_contratadas: 9999,
+        email_admin: email,
+        status: 'ATIVO'
+    }, { onConflict: 'tenant_id' });
+
+    if (tenantError) throw tenantError;
+    
+    res.json({ 
+      success: true, 
+      message: 'Admin bootstrapped successfully',
+      credentials: { email, password }
+    });
+  } catch (error) {
+    console.error('Bootstrap error:', error);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Decision Logic and Auth Middleware
+app.post('/api/validate-point', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      await logEvent('unknown', 'Unauthorized access attempt');
+      return res.status(401).send('Unauthorized');
+    }
+    
+    const { tenantId, collaboratorId, lat, lng, establishment } = req.body;
+    
+    if (user.user_metadata.tenantId !== tenantId) {
+      await logEvent(user.user_metadata.tenantId, `Forbidden access attempt to tenant ${tenantId}`);
+      return res.status(403).send('Forbidden');
+    }
+
+    const distance = calculateDistanceMeters(lat, lng, establishment.latitude, establishment.longitude);
+    if (distance > establishment.cercaRaioMetros && establishment.bloquearForaDoRaio) {
+        await logEvent(tenantId, `Point rejected: Outside geofence for ${collaboratorId}`);
+        return res.status(403).json({ valid: false, reason: 'Outside geofence' });
+    }
+    
+    await logEvent(tenantId, `Point validation successful for collaborator ${collaboratorId}`);
+    res.json({ valid: true });
+  } catch (error) {
+    await logEvent('error', `Server error: ${error}`);
+    res.status(503).send('Service Unavailable');
+  }
+});
+
 // Store encrypted biometric template
 app.post('/api/save-biometric', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -109,16 +183,13 @@ app.post('/api/save-biometric', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
     const { collaboratorId, encryptedTemplate, tenantId } = req.body;
-    
-    // Authorization
     if (user.user_metadata.tenantId !== tenantId) return res.status(403).send('Forbidden');
     
-    // Save to database
     const { error: dbError } = await supabase.from('collaborators')
       .update({ biometric_template: encryptedTemplate })
       .eq('collaborator_id', collaboratorId);
@@ -140,18 +211,15 @@ app.post('/api/save-collaborator', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
     const collaborator = req.body;
-    
-    // Authorization check
     if (user.user_metadata.tenantId !== collaborator.tenantId) {
       return res.status(403).send('Forbidden');
     }
     
-    // Upsert into Supabase
     const { data, error: dbError } = await supabase
       .from('collaborators')
       .upsert({
@@ -200,17 +268,15 @@ app.post('/api/save-tenant', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
-    // Only super admin should be able to create tenants
     if (user.user_metadata.role !== 'SUPER_ADMIN') {
         return res.status(403).send('Forbidden: Only SUPER_ADMIN can create tenants');
     }
     
     const tenant = req.body;
-    
     const { data, error: dbError } = await supabase
       .from('tenants')
       .upsert({
@@ -243,18 +309,15 @@ app.post('/api/save-point', async (req, res) => {
   
   try {
     const token = authHeader.split('Bearer ')[1];
-    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado. Verifique as variáveis de ambiente.' });
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) return res.status(401).send('Unauthorized');
     
     const registration = req.body;
-    
-    // Authorization check
     if (user.user_metadata.tenantId !== registration.tenantId) {
       return res.status(403).send('Forbidden');
     }
     
-    // Persist to Supabase
     const { data, error: dbError } = await supabase
       .from('point_registrations')
       .insert({
@@ -281,11 +344,64 @@ app.post('/api/save-point', async (req, res) => {
   }
 });
 
+// Create Auth User (requires Service Role Key)
+app.post('/api/create-auth-user', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    
+    const { data: { user: adminUser }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !adminUser) return res.status(401).send('Unauthorized');
+    
+    const role = adminUser.user_metadata.role;
+    if (role !== 'RH_ADMIN' && role !== 'SUPER_ADMIN') {
+      return res.status(403).send('Forbidden: Insufficient permissions');
+    }
+    
+    const { email, password, nome, tenantId, role: targetRole, cpf } = req.body;
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { 
+        nome, 
+        tenantId, 
+        role: targetRole || 'COLABORADOR',
+        cpf
+      }
+    });
+    
+    if (error) throw error;
+    
+    await logEvent(tenantId, `Auth user created for ${email} (${nome})`);
+    res.json({ success: true, user: data.user });
+  } catch (error) {
+    console.error('Error creating auth user:', error);
+    res.status(500).json({ error: String(error) });
+  }
+});
 
 // Health Check / Connection Status
 app.get('/api/status', async (req, res) => {
+  let connected = false;
+  if (supabase) {
+    try {
+      const { error } = await supabase.from('logs').select('count', { count: 'exact', head: true });
+      connected = !error;
+    } catch (e) {
+      connected = false;
+    }
+  }
+
   res.json({
-    supabaseConnected: !!supabase,
+    supabaseConnected: connected,
+    config: {
+        url: currentConfig.url ? `${currentConfig.url.substring(0, 15)}...` : null,
+        hasServiceKey: !!currentConfig.key
+    },
     env: {
       url: !!process.env.VITE_SUPABASE_URL,
       key: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -295,7 +411,6 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
-// Vite Middleware
 async function startServer() {
   const vite = await createViteServer({
     server: { middlewareMode: true },
