@@ -1,0 +1,6 @@
+{
+  "name": "Softcase Ponto - Especificação Funcional",
+  "description": "Especificação Funcional Detalhada (Documento 02), Matriz de Conformidade Portaria 671/2021 e Protótipo Interativo dos Módulos 01 e 02.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
