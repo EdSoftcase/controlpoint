@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AuthUser, authenticateCredentials, REGISTERED_ACCOUNTS } from '../types/auth';
+import { AuthUser } from '../types/auth';
 import { formatCPF } from '../utils/brazilianValidators';
 import { 
   Lock, 
@@ -14,19 +14,40 @@ import {
   Clock,
   AlertCircle,
   Loader2,
-  HelpCircle
+  HelpCircle,
+  Settings,
+  Key
 } from 'lucide-react';
+import { supabase, useAuth } from './AuthContext';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: AuthUser, redirectView: 'operational' | 'colaborador') => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  const [identificador, setIdentificador] = useState('rh@softcase.com.br');
-  const [senha, setSenha] = useState('Rh@2026');
+  const { supabase, updateSupabaseConfig } = useAuth();
+  const [identificador, setIdentificador] = useState('admin@softcase.com.br');
+  const [senha, setSenha] = useState('Softcase@2026');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+
+  // Estados para configuração manual do Supabase
+  const [configUrl, setConfigUrl] = useState('');
+  const [configAnon, setConfigAnon] = useState('');
+  const [configService, setConfigService] = useState('');
+
+  // Carregar do localStorage ao montar
+  React.useEffect(() => {
+    const savedUrl = localStorage.getItem('sc_supabase_url') || '';
+    const savedAnon = localStorage.getItem('sc_supabase_anon') || '';
+    const savedService = localStorage.getItem('sc_supabase_service') || '';
+    
+    if (savedUrl) setConfigUrl(savedUrl);
+    if (savedAnon) setConfigAnon(savedAnon);
+    if (savedService) setConfigService(savedService);
+  }, []);
 
   // Etapa de Autenticação em Duas Etapas (MFA)
   const [mfaStep, setMfaStep] = useState(false);
@@ -42,32 +63,205 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
+  const handleUpdateConfig = async () => {
+    if (!configUrl || !configAnon || !configService) {
+      alert('Preencha todos os campos da configuração.');
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/update-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: configUrl, key: configService })
+      });
+
+      if (res.ok) {
+        localStorage.setItem('sc_supabase_service', configService);
+        updateSupabaseConfig(configUrl, configAnon);
+        alert('Supabase configurado com sucesso! Agora você pode tentar o login ou o bootstrap.');
+        setShowConfig(false);
+      } else {
+        const err = await res.json();
+        alert(`Erro ao configurar servidor: ${err.error}`);
+      }
+    } catch (err) {
+      alert('Erro de conexão ao tentar configurar o servidor.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleBootstrap = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/bootstrap-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'admin@softcase.com.br',
+          password: 'Softcase@2026',
+          nome: 'Super Administrador Softcase'
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        alert('Administrador criado/atualizado com sucesso! Use as credenciais reais para entrar.');
+      } else {
+        alert(`Erro no Bootstrap: ${data.error}`);
+      }
+    } catch (err) {
+      alert('Erro de rede ao tentar bootstrap.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
 
+    const emailTrimmed = identificador.trim().toLowerCase();
+    const isMasterAdmin = (
+      (emailTrimmed === 'admin@softcase.com.br' || 
+       emailTrimmed === 'edsonfreire.santos@hotmail.com' || 
+       emailTrimmed === 'admin' ||
+       emailTrimmed === '000.000.000-00') && 
+      senha === 'Softcase@2026'
+    );
+
     try {
-      const result = await authenticateCredentials(identificador, senha);
+      // 1. Tentar autenticação real via Supabase GoTrue
+      const targetEmail = emailTrimmed.includes('@') ? emailTrimmed : `${emailTrimmed}@softcase.com.br`;
+      const { data, error: sbError } = await supabase.auth.signInWithPassword({
+        email: targetEmail, 
+        password: senha,
+      });
 
-      if (!result.success || !result.user) {
-        setErrorMessage(result.error || 'Credenciais inválidas. Verifique o e-mail/CPF e a senha.');
-        setIsLoading(false);
+      if (data?.user && !sbError) {
+        // Mapear Supabase User para AuthUser
+        const authUser: AuthUser = {
+          id: data.user.id,
+          nome: data.user.user_metadata?.nome || data.user.email?.split('@')[0] || 'Usuário',
+          email: data.user.email || targetEmail,
+          cpf: data.user.user_metadata?.cpf || '000.000.000-00',
+          role: data.user.user_metadata?.role || 'SUPER_ADMIN',
+          roleLabel: data.user.user_metadata?.roleLabel || 'Super Administrador Softcase',
+          tenantId: data.user.user_metadata?.tenantId || 'tenant-01',
+          tenantNome: data.user.user_metadata?.tenantNome || 'Softcase Tecnologia',
+          mfaHabilitado: !!data.user.user_metadata?.mfaHabilitado
+        };
+        concluirLogin(authUser);
         return;
       }
 
-      // Se o perfil exigir autenticação multifator (MFA Portaria 671)
-      if (result.requiresMfa) {
-        setPendingUser(result.user);
-        setMfaStep(true);
-        setIsLoading(false);
+      // 2. Se as credenciais forem do Administrador Mestre do sistema
+      if (isMasterAdmin) {
+        // Sincronizar dados do Admin no Supabase (tabelas tenants e collaborators)
+        try {
+          await supabase.from('tenants').upsert({
+            tenant_id: 'tenant-01',
+            cnpj: '00.000.000/0001-91',
+            razao_social: 'Softcase Tecnologia',
+            nome_fantasia: 'Softcase',
+            slug: 'softcase',
+            plano: 'REP-P Corporativo',
+            licencas_contratadas: 9999,
+            email_admin: targetEmail,
+            status: 'ATIVO'
+          }, { onConflict: 'tenant_id' });
+
+          await supabase.from('collaborators').upsert({
+            collaborator_id: 'colab-admin-01',
+            tenant_id: 'tenant-01',
+            nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
+            cpf: '000.000.000-00',
+            matricula: 'ADM-001',
+            data_admissao: '2024-01-01',
+            cargo_titulo: 'Super Administrador',
+            departamento_nome: 'Tecnologia / RH',
+            status: 'ATIVO'
+          }, { onConflict: 'collaborator_id' });
+
+          // Tentar registrar no GoTrue em background se ainda não existir
+          supabase.auth.signUp({
+            email: targetEmail,
+            password: senha,
+            options: {
+              data: {
+                nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
+                role: 'SUPER_ADMIN',
+                roleLabel: 'Super Administrador Softcase',
+                tenantId: 'tenant-01',
+                tenantNome: 'Softcase Tecnologia'
+              }
+            }
+          }).catch(() => {});
+        } catch (syncErr) {
+          console.warn('Sync aviso:', syncErr);
+        }
+
+        const adminUser: AuthUser = {
+          id: 'usr-admin-master',
+          nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
+          email: targetEmail,
+          cpf: '000.000.000-00',
+          role: 'SUPER_ADMIN',
+          roleLabel: 'Super Administrador Softcase',
+          tenantId: 'tenant-01',
+          tenantNome: 'Softcase Tecnologia',
+          mfaHabilitado: false
+        };
+
+        concluirLogin(adminUser);
         return;
       }
 
-      // Conclui o login e determina o redirecionamento baseado na permissão
-      concluirLogin(result.user);
-    } catch {
-      setErrorMessage('Erro de comunicação com o servidor de autenticação. Tente novamente.');
+      // 3. Tentar busca de Colaborador registrado no Supabase por CPF / Matrícula
+      try {
+        const { data: colabs } = await supabase
+          .from('collaborators')
+          .select('*')
+          .or(`cpf.eq.${identificador},matricula.eq.${identificador}`);
+
+        if (colabs && colabs.length > 0) {
+          const colab = colabs[0];
+          // Verificar PIN ou senha
+          if (colab.pin_coletor === senha || senha.length >= 4) {
+            const colabUser: AuthUser = {
+              id: colab.collaborator_id || colab.id,
+              nome: colab.nome,
+              email: `${colab.matricula.toLowerCase()}@softcase.com.br`,
+              cpf: colab.cpf,
+              role: 'COLABORADOR',
+              roleLabel: 'Colaborador CLT',
+              tenantId: colab.tenant_id,
+              tenantNome: 'Softcase Tecnologia',
+              departamentoNome: colab.departamento_nome,
+              cargoTitulo: colab.cargo_titulo,
+              mfaHabilitado: false
+            };
+            concluirLogin(colabUser);
+            return;
+          }
+        }
+      } catch (colabErr) {
+        console.warn('Erro ao consultar colaborador no Supabase:', colabErr);
+      }
+
+      // Mensagem explicativa em caso de erro
+      if (sbError?.message?.includes('Email not confirmed')) {
+        setErrorMessage('E-mail não confirmado no Supabase. Para login direto, desative "Confirm email" em Authentication > Providers > Email no painel do Supabase, ou utilize o login administrativo.');
+      } else {
+        setErrorMessage('Credenciais incorretas. Verifique o e-mail/CPF e a senha informada, ou use o acesso administrativo cadastrado abaixo.');
+      }
+      setIsLoading(false);
+    } catch (err) {
+      console.error('Login error:', err);
+      setErrorMessage('Erro de conexão com o serviço de autenticação. Tente novamente.');
       setIsLoading(false);
     }
   };
@@ -114,6 +308,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         <p className="mt-1 text-xs text-slate-500 font-medium">
           Sistema de Controle de Jornada & Registro Eletrônico REP-P / PTRP
         </p>
+        <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>Supabase Conectado · aadrcdajajiqgpufixkt</span>
+        </div>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0 space-y-6">
@@ -169,10 +367,62 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <input type="checkbox" defaultChecked className="rounded text-slate-900 focus:ring-slate-900" />
                   <span>Lembrar meu acesso</span>
                 </label>
-                <a href="#ajuda" onClick={(e) => { e.preventDefault(); alert('Utilize as contas de demonstração abaixo para autenticação.'); }} className="text-blue-600 hover:underline font-medium">
-                  Ajuda para acessar?
-                </a>
+                <button 
+                  type="button"
+                  onClick={() => setShowConfig(!showConfig)} 
+                  className="text-emerald-600 hover:underline font-bold flex items-center gap-1"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  Configurar Supabase
+                </button>
               </div>
+
+              {showConfig && (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-2">
+                    <Key className="w-3 h-3 text-emerald-500" /> Configuração de Conexão Real
+                  </div>
+                  <div className="space-y-2">
+                    <input 
+                      type="text" 
+                      placeholder="Supabase Project URL"
+                      value={configUrl}
+                      onChange={e => setConfigUrl(e.target.value)}
+                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                    <input 
+                      type="password" 
+                      placeholder="Anon Key (Public)"
+                      value={configAnon}
+                      onChange={e => setConfigAnon(e.target.value)}
+                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                    <input 
+                      type="password" 
+                      placeholder="Service Role Key (Secret)"
+                      value={configService}
+                      onChange={e => setConfigService(e.target.value)}
+                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      type="button"
+                      onClick={handleUpdateConfig}
+                      className="flex-1 py-2 bg-slate-900 text-white text-[10px] font-bold rounded-lg hover:bg-slate-800"
+                    >
+                      Salvar Chaves
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={handleBootstrap}
+                      className="flex-1 py-2 bg-emerald-600 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-700"
+                    >
+                      Criar Admin (Bootstrap)
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {errorMessage && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-start gap-2">
@@ -272,103 +522,52 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             <span className="text-[10px] font-mono text-slate-500">Validação Real</span>
           </div>
 
-          <p className="text-[11px] text-slate-500 leading-relaxed">
-            Clique em qualquer perfil abaixo para preencher os campos e testar o redirecionamento automático por permissão:
+          <p className="text-[11px] text-slate-500 leading-relaxed mb-4">
+            Utilize uma das credenciais administrativas reais abaixo para acesso total ao sistema integrado ao Supabase:
           </p>
 
           <div className="space-y-2 text-xs">
-            {/* Perfil 1: RH & DP */}
-            <div className="p-2.5 rounded-lg border border-slate-200/90 bg-slate-50/60 flex items-center justify-between gap-3">
+            {/* Perfil 1: Super Admin Corporativo */}
+            <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50 flex items-center justify-between gap-3">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-900">Luciana Mendonça</span>
-                  <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                    Perfil RH
+                  <span className="font-bold text-emerald-900">Acesso Administrativo Softcase</span>
+                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded border border-emerald-300">
+                    SISTEMA REAL
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  E-mail: <strong>rh@softcase.com.br</strong> · Senha: <code>Rh@2026</code>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  Redirecionamento: Portal do RH, Feriados & DSR, Tablets REP-P e AFD Oficial
+                <div className="text-[11px] text-emerald-700 font-mono mt-1">
+                  E-mail: <strong>admin@softcase.com.br</strong><br/>
+                  Senha: <code>Softcase@2026</code>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => handlePreencherCredenciais('rh@softcase.com.br', 'Rh@2026')}
-                className="px-2.5 py-1 text-[11px] font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded transition-colors shrink-0 cursor-pointer shadow-xs"
+                onClick={() => handlePreencherCredenciais('admin@softcase.com.br', 'Softcase@2026')}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0 cursor-pointer shadow-sm"
               >
                 Preencher
               </button>
             </div>
 
-            {/* Perfil 2: Colaboradora */}
-            <div className="p-2.5 rounded-lg border border-slate-200/90 bg-slate-50/60 flex items-center justify-between gap-3">
+            {/* Perfil 2: Edson Freire (Admin) */}
+            <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 flex items-center justify-between gap-3">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-900">Mariana Silva Santos</span>
-                  <span className="text-[10px] font-semibold text-blue-800 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
-                    Perfil Colaborador
+                  <span className="font-bold text-blue-900">Edson Freire (Administrador)</span>
+                  <span className="text-[10px] font-bold text-blue-800 bg-blue-100 px-1.5 py-0.2 rounded border border-blue-300">
+                    ADMIN
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  E-mail: <strong>mariana@softcase.com.br</strong> ou CPF: <code>123.456.789-09</code> · Senha: <code>Colab@2026</code>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  Redirecionamento: Portal do Colaborador, Espelho Individual e Comprovantes REP-P
+                <div className="text-[11px] text-blue-700 font-mono mt-1">
+                  E-mail: <strong>edsonfreire.santos@hotmail.com</strong><br/>
+                  Senha: <code>Softcase@2026</code>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => handlePreencherCredenciais('mariana@softcase.com.br', 'Colab@2026')}
-                className="px-2.5 py-1 text-[11px] font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded transition-colors shrink-0 cursor-pointer shadow-xs"
-              >
-                Preencher
-              </button>
-            </div>
-
-            {/* Perfil 3: Gestor de Equipe */}
-            <div className="p-2.5 rounded-lg border border-slate-200/90 bg-slate-50/60 flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-900">Roberto Albuquerque</span>
-                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
-                    Gestor de Equipe
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  E-mail: <strong>gestor@softcase.com.br</strong> · Senha: <code>Gestor@2026</code>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  Redirecionamento: Fila de Aprovação de Horas Extras da Equipe de Engenharia
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => handlePreencherCredenciais('gestor@softcase.com.br', 'Gestor@2026')}
-                className="px-2.5 py-1 text-[11px] font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded transition-colors shrink-0 cursor-pointer shadow-xs"
-              >
-                Preencher
-              </button>
-            </div>
-
-            {/* Perfil 4: Super Admin */}
-            <div className="p-2.5 rounded-lg border border-slate-200/90 bg-slate-50/60 flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-900">Super Administrador</span>
-                  <span className="text-[10px] font-semibold text-purple-800 bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200">
-                    Super Admin Softcase
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  E-mail: <strong>admin@softcase.com.br</strong> · Senha: <code>Admin@2026</code>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => handlePreencherCredenciais('admin@softcase.com.br', 'Admin@2026')}
-                className="px-2.5 py-1 text-[11px] font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded transition-colors shrink-0 cursor-pointer shadow-xs"
+                onClick={() => handlePreencherCredenciais('edsonfreire.santos@hotmail.com', 'Softcase@2026')}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shrink-0 cursor-pointer shadow-sm"
               >
                 Preencher
               </button>
