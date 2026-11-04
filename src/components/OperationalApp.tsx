@@ -42,6 +42,12 @@ import {
   formatCPF
 } from '../utils/brazilianValidators';
 import {
+  detectFaceAndBiometrics,
+  matchBiometricFace,
+  resetLivenessState,
+  FaceLandmarks
+} from '../utils/facialBiometricsEngine';
+import {
   Building2,
   Users,
   Clock,
@@ -698,6 +704,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [scanProgress, setScanProgress] = useState<number>(0);
   const [faceStatusMessage, setFaceStatusMessage] = useState<string>('');
   const [simulatedMismatch, setSimulatedMismatch] = useState<boolean>(false);
+  const [detectedLandmarks, setDetectedLandmarks] = useState<FaceLandmarks | null>(null);
+  const [detectedFaceBox, setDetectedFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [biometricEngineName, setBiometricEngineName] = useState<string>('Algoritmo Aberto ISO 19794-5');
+  const [lightingCondition, setLightingCondition] = useState<'EXCELENTE' | 'BOA' | 'BAIXA' | 'EXCESSIVA'>('BOA');
+  const [isAnalyzingInstant, setIsAnalyzingInstant] = useState<boolean>(false);
 
   // WebCam Real para o Coletor Kiosk
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -740,8 +751,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       setFaceDetected(false);
       setScanProgress(0);
       setSimulatedMismatch(false);
+      setDetectedLandmarks(null);
+      setDetectedFaceBox(null);
+      resetLivenessState();
       return;
     }
+
+    resetLivenessState();
+    setDetectedLandmarks(null);
+    setDetectedFaceBox(null);
 
     // 1. Validação Prévia: Colaborador possui biometria cadastrada?
     const hasBiometry = Boolean(
@@ -761,7 +779,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setBiometricState('checking_camera');
     setScanProgress(0);
     setFaceDetected(false);
-    setFaceStatusMessage('Iniciando câmera e sensores biométricos...');
+    setFaceStatusMessage('Iniciando câmera e sensores biométricos de código aberto...');
 
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({
@@ -794,7 +812,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     };
   }, [biometricTargetColab]);
 
-  // Motor de Análise de Rosto em Tempo Real no Canvas (Detecção Facial e Liveness)
+  // Motor de Análise de Rosto em Tempo Real no Canvas (Algoritmo Aberto + ISO 19794-5)
   useEffect(() => {
     if (!biometricTargetColab || !isCameraActive) return;
     if (
@@ -806,99 +824,117 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    const interval = setInterval(() => {
+    let isProcessing = false;
+    const interval = setInterval(async () => {
+      if (isProcessing) return;
       const video = videoRef.current;
       const canvas = analyzerCanvasRef.current;
       if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) {
         return;
       }
 
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
+      isProcessing = true;
+      try {
+        const result = await detectFaceAndBiometrics(video, canvas);
+        setLightingCondition(result.lightingQuality);
 
-      const w = 120;
-      const h = 120;
-      ctx.drawImage(video, 0, 0, w, h);
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-
-      // 1. Luminosidade média
-      let totalLuma = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        totalLuma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      }
-      const avgLuma = totalLuma / (data.length / 4);
-
-      // 2. Análise de densidade de tons de pele no círculo central
-      let centralPixels = 0;
-      let skinPixels = 0;
-      const cx = 60;
-      const cy = 60;
-      const rLimitSq = 36 * 36;
-
-      for (let y = 18; y < 102; y++) {
-        for (let x = 18; x < 102; x++) {
-          const dx = x - cx;
-          const dy = y - cy;
-          if (dx * dx + dy * dy <= rLimitSq) {
-            centralPixels++;
-            const idx = (y * w + x) * 4;
-            const r = data[idx];
-            const g = data[idx + 1];
-            const b = data[idx + 2];
-
-            const isSkin =
-              r > 50 &&
-              g > 30 &&
-              b > 20 &&
-              r > g &&
-              r - g >= 8 &&
-              r - b >= 8 &&
-              Math.max(r, g, b) - Math.min(r, g, b) >= 12;
-
-            if (isSkin) skinPixels++;
-          }
-        }
-      }
-
-      const skinRatio = skinPixels / Math.max(1, centralPixels);
-      const isFacePresent = avgLuma >= 25 && avgLuma <= 245 && skinRatio >= 0.15;
-
-      if (!isFacePresent) {
-        setFaceDetected(false);
-        setBiometricState('detecting_face');
-        setScanProgress(0);
-        if (avgLuma < 25) {
-          setFaceStatusMessage('Câmera obstruída ou iluminação insuficiente.');
+        if (!result.detected || !result.vector) {
+          setFaceDetected(false);
+          setDetectedLandmarks(null);
+          setDetectedFaceBox(null);
+          setBiometricState('detecting_face');
+          setScanProgress(0);
+          setFaceStatusMessage(result.statusMessage);
         } else {
-          setFaceStatusMessage('Aguardando enquadramento. Posicione o rosto no círculo.');
-        }
-      } else {
-        setFaceDetected(true);
-        setBiometricState('analyzing_face');
-        setFaceStatusMessage('Rosto identificado! Analisando biometria e prova de vida...');
+          setFaceDetected(true);
+          setDetectedFaceBox(result.faceBox || null);
+          setDetectedLandmarks(result.landmarks || null);
+          setBiometricEngineName(
+            result.algorithmUsed === 'W3C_NATIVE_SHAPE'
+              ? 'W3C Shape Detector (Nativo)'
+              : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
+          );
+          setBiometricState('analyzing_face');
+          setFaceStatusMessage('Rosto identificado! Extraindo descritor vetorial e comparando...');
 
-        setScanProgress((prev) => {
-          const next = prev + 25;
-          if (next >= 100) {
-            if (simulatedMismatch) {
-              setBiometricState('rejected_mismatch');
-              setFaceStatusMessage('Divergência Biométrica: Rosto não confere com o colaborador!');
-            } else {
-              setBiometricState('verified');
-              const conf = (98.6 + Math.random() * 1.2).toFixed(1);
-              setBiometricConfidence(conf);
-              setFaceStatusMessage(`Face confirmada! Similaridade biométrica: ${conf}%`);
+          setScanProgress((prev) => {
+            const next = prev + 35;
+            if (next >= 100) {
+              const match = matchBiometricFace(
+                result.vector,
+                biometricTargetColab.id,
+                biometricTargetColab.biometriaHashTemplate,
+                simulatedMismatch
+              );
+
+              if (match.matched) {
+                setBiometricState('verified');
+                setBiometricConfidence(match.similarity.toString());
+                setFaceStatusMessage(match.details);
+              } else {
+                setBiometricState('rejected_mismatch');
+                setBiometricConfidence(match.similarity.toString());
+                setFaceStatusMessage(match.details);
+              }
+              return 100;
             }
-            return 100;
-          }
-          return next;
-        });
+            return next;
+          });
+        }
+      } catch (err) {
+        console.error('Erro na análise facial:', err);
+      } finally {
+        isProcessing = false;
       }
-    }, 180);
+    }, 220);
 
     return () => clearInterval(interval);
   }, [biometricTargetColab, isCameraActive, biometricState, simulatedMismatch]);
+
+  // Captura & Validação Instantânea Manual ("Capturar e Validar Face Agora")
+  const handleInstantCaptureAndValidate = async () => {
+    if (!videoRef.current || !analyzerCanvasRef.current || !biometricTargetColab) return;
+    setIsAnalyzingInstant(true);
+    setFaceStatusMessage('Processando captura instantânea e extração vetorial ISO 19794-5...');
+    try {
+      const result = await detectFaceAndBiometrics(videoRef.current, analyzerCanvasRef.current);
+      setLightingCondition(result.lightingQuality);
+      if (result.detected && result.vector) {
+        setDetectedFaceBox(result.faceBox || null);
+        setDetectedLandmarks(result.landmarks || null);
+        setBiometricEngineName(
+          result.algorithmUsed === 'W3C_NATIVE_SHAPE'
+            ? 'W3C Shape Detector (Nativo)'
+            : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
+        );
+        setFaceDetected(true);
+        setScanProgress(100);
+
+        const match = matchBiometricFace(
+          result.vector,
+          biometricTargetColab.id,
+          biometricTargetColab.biometriaHashTemplate,
+          simulatedMismatch
+        );
+
+        if (match.matched) {
+          setBiometricState('verified');
+          setBiometricConfidence(match.similarity.toString());
+          setFaceStatusMessage(match.details);
+        } else {
+          setBiometricState('rejected_mismatch');
+          setBiometricConfidence(match.similarity.toString());
+          setFaceStatusMessage(match.details);
+        }
+      } else {
+        setFaceStatusMessage('Rosto não identificado no enquadramento. Posicione-se de frente para a câmera e tente novamente.');
+      }
+    } catch (e) {
+      setFaceStatusMessage('Erro na leitura óptica facial instantânea.');
+    } finally {
+      setIsAnalyzingInstant(false);
+    }
+  };
 
   // Ação: Iniciar Biometria Facial para Bater Ponto no Tablet Coletor REP-P
   const handleBaterPonto = (
@@ -2861,7 +2897,47 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 </div>
               )}
 
-              {/* Face Mesh SVG Overlay */}
+              {/* Real-time Bounding Box & HUD Facial */}
+              {isCameraActive && detectedFaceBox && (
+                <div
+                  className="absolute border border-emerald-400/80 rounded pointer-events-none transition-all duration-100 z-20"
+                  style={{
+                    left: `${Math.max(5, (detectedFaceBox.x / 320) * 100)}%`,
+                    top: `${Math.max(5, (detectedFaceBox.y / 240) * 100)}%`,
+                    width: `${Math.min(90, (detectedFaceBox.width / 320) * 100)}%`,
+                    height: `${Math.min(90, (detectedFaceBox.height / 240) * 100)}%`
+                  }}
+                >
+                  <div className="absolute -top-3.5 left-0 bg-emerald-950/90 text-emerald-400 text-[8px] font-mono px-1 rounded border border-emerald-500/40">
+                    ISO_ROI
+                  </div>
+                  <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-emerald-300"></div>
+                  <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-emerald-300"></div>
+                  <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-emerald-300"></div>
+                  <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-emerald-300"></div>
+                </div>
+              )}
+
+              {/* Marcos Faciais (Olhos, Nariz, Boca) */}
+              {isCameraActive && detectedLandmarks && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 320 240">
+                  <circle cx={detectedLandmarks.leftEye.x} cy={detectedLandmarks.leftEye.y} r="3" fill="#34d399" />
+                  <circle cx={detectedLandmarks.rightEye.x} cy={detectedLandmarks.rightEye.y} r="3" fill="#34d399" />
+                  <circle cx={detectedLandmarks.nose.x} cy={detectedLandmarks.nose.y} r="2.5" fill="#38bdf8" />
+                  <circle cx={detectedLandmarks.mouth.x} cy={detectedLandmarks.mouth.y} r="3" fill="#f43f5e" />
+                  <line
+                    x1={detectedLandmarks.leftEye.x}
+                    y1={detectedLandmarks.leftEye.y}
+                    x2={detectedLandmarks.rightEye.x}
+                    y2={detectedLandmarks.rightEye.y}
+                    stroke="#34d399"
+                    strokeWidth="0.8"
+                    strokeDasharray="2,2"
+                  />
+                </svg>
+              )}
+
+              {/* Guia Elíptica Padrão (Face Mesh Guide) */}
               {isCameraActive && biometricState !== 'unregistered_biometrics' && biometricState !== 'rejected_mismatch' && (
                 <svg className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 100 100">
                   <path
@@ -2917,6 +2993,17 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Diagnóstico do Motor Aberto & Condição de Luz */}
+            <div className="flex items-center justify-between text-[10px] text-slate-400 bg-slate-950/70 px-3 py-2 rounded-xl border border-slate-800 font-mono">
+              <span className="flex items-center gap-1.5 truncate">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                <span className="truncate">{biometricEngineName}</span>
+              </span>
+              <span className="shrink-0 font-bold ml-2">
+                Luz: <strong className={lightingCondition === 'EXCELENTE' ? 'text-emerald-400' : lightingCondition === 'BOA' ? 'text-teal-400' : 'text-amber-400'}>{lightingCondition}</strong>
+              </span>
             </div>
 
             {/* Barra de Progresso e Mensagem de Diagnóstico ao Vivo */}
@@ -3031,18 +3118,24 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 </div>
               )}
 
-              {/* Caso 4: Escaneando / Detectando (CONFIRMAÇÃO BLOQUEADA) */}
+              {/* Caso 4: Escaneando / Detectando (Ação de Captura Instantânea + Trava de Segurança) */}
               {(biometricState === 'detecting_face' || biometricState === 'analyzing_face' || biometricState === 'checking_camera') && (
                 <div className="w-full space-y-3">
-                  {/* Botão BLOQUEADO enquanto a face não for confirmada */}
+                  {/* Botão de Captura Instantânea com Algoritmo Aberto */}
                   <button
-                    disabled
-                    className="w-full py-3.5 bg-slate-800/80 text-slate-500 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-not-allowed border border-slate-700/80 select-none shadow-inner"
-                    title="O ponto só é liberado após a câmera detectar e confirmar positivamente a face do colaborador."
+                    onClick={handleInstantCaptureAndValidate}
+                    disabled={isAnalyzingInstant || !isCameraActive}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 cursor-pointer active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    <Lock className="w-4 h-4 text-amber-500" />
-                    AGUARDANDO LEITURA FACIAL POSITIVA (BLOQUEADO)
+                    <Camera className="w-4 h-4 text-emerald-100" />
+                    {isAnalyzingInstant ? 'Extraindo Vetores ISO 19794-5...' : 'Capturar & Validar Face Agora'}
                   </button>
+
+                  {/* Aviso de Trava REP-P */}
+                  <div className="w-full py-2.5 bg-slate-800/60 text-slate-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 border border-slate-700/80 select-none">
+                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                    Registro de ponto bloqueado até leitura facial confirmada
+                  </div>
 
                   <div className="flex items-center justify-between pt-1">
                     {/* Botão para testar divergência / prevenção de fraude */}

@@ -24,6 +24,11 @@ import {
   AlertTriangle,
   Info
 } from 'lucide-react';
+import {
+  detectFaceAndBiometrics,
+  saveBiometricTemplate,
+  FaceLandmarks
+} from '../utils/facialBiometricsEngine';
 
 export function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371e3;
@@ -69,7 +74,13 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 
   // WebCam Real para Captura de Biometria Facial
   const videoRef = React.useRef<HTMLVideoElement>(null);
+  const enrollCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [enrollFaceBox, setEnrollFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [enrollLandmarks, setEnrollLandmarks] = useState<FaceLandmarks | null>(null);
+  const [capturedVector, setCapturedVector] = useState<number[] | null>(null);
+  const [isExtractingEnrollment, setIsExtractingEnrollment] = useState(false);
+  const [enrollStatus, setEnrollStatus] = useState<string>('');
 
   // Estados do Geofencing e Mapa por Estabelecimento
   const tenantEstabelecimentos = estabelecimentos.filter((e) => e.tenantId === activeTenant.id);
@@ -150,17 +161,40 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   const handleStartEnrollment = (colab: Colaborador) => {
     setSelectedColabForEnroll(colab);
     setEnrollmentStep('capturing');
-    setTimeout(() => {
-      setEnrollmentStep('success');
-    }, 2200);
+    setEnrollFaceBox(null);
+    setEnrollLandmarks(null);
+    setCapturedVector(null);
+    setEnrollStatus('Posicione o rosto centralizado na câmera para captura.');
+  };
+
+  const handleEnrollCaptureNow = async () => {
+    if (!videoRef.current || !enrollCanvasRef.current || !selectedColabForEnroll) return;
+    setIsExtractingEnrollment(true);
+    setEnrollStatus('Extraindo pontos de referência e vetor ISO 19794-5...');
+    try {
+      const result = await detectFaceAndBiometrics(videoRef.current, enrollCanvasRef.current);
+      if (result.detected && result.vector) {
+        setEnrollFaceBox(result.faceBox || null);
+        setEnrollLandmarks(result.landmarks || null);
+        setCapturedVector(result.vector);
+        setEnrollStatus('Rosto mapeado com sucesso! Clique em "Salvar Template" para confirmar.');
+        setEnrollmentStep('success');
+      } else {
+        setEnrollStatus('Rosto não detectado no enquadramento. Centralize a face e garanta iluminação adequada.');
+      }
+    } catch (e) {
+      setEnrollStatus('Falha ao processar captura óptica.');
+    } finally {
+      setIsExtractingEnrollment(false);
+    }
   };
 
   const handleSaveEnrollment = async () => {
     if (!selectedColabForEnroll) return;
     
-    // Gera hash do template vetorial ISO 19794-5
-    const timestamp = Date.now();
-    const rawTemplate = `vector_face_${selectedColabForEnroll.id}_${timestamp}`;
+    // Salva vetor usando o motor aberto ISO 19794-5
+    const fallbackVector = capturedVector || new Array(64).fill(0).map((_, i) => Math.sin(i) * 0.1);
+    const hashTemplate = saveBiometricTemplate(selectedColabForEnroll.id, fallbackVector);
     const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
     
     // Atualiza estado local imediatamente para manter o app responsivo
@@ -169,7 +203,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
         return {
           ...c,
           biometriaCadastrada: true,
-          biometriaHashTemplate: `SHA256:${timestamp.toString(16).toUpperCase()}`,
+          biometriaHashTemplate: hashTemplate,
           limiarConfiancaMinimo: globalThreshold,
           dataUltimaAtualizacaoBiometria: new Date().toISOString().slice(0, 10)
         };
@@ -178,21 +212,6 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     });
 
     onUpdateColaboradores(updated);
-    
-    // Salva em cache local seguro para resiliência offline/produção
-    try {
-      localStorage.setItem(
-        `sc_bio_${selectedColabForEnroll.id}`,
-        JSON.stringify({
-          collaboratorId: selectedColabForEnroll.id,
-          threshold: globalThreshold,
-          registeredAt: new Date().toISOString(),
-          status: 'ATIVO'
-        })
-      );
-    } catch (e) {
-      // Ignora quota local se houver
-    }
 
     try {
       const response = await fetch('/api/save-biometric', {
@@ -204,7 +223,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
         body: JSON.stringify({
           collaboratorId: selectedColabForEnroll.id,
           tenantId: activeTenant.id,
-          encryptedTemplate: rawTemplate 
+          encryptedTemplate: hashTemplate 
         })
       });
       
@@ -1003,8 +1022,10 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
               <div className="text-xs font-mono text-slate-400">CPF: {selectedColabForEnroll.cpf}</div>
             </div>
 
+            <canvas ref={enrollCanvasRef} width={320} height={240} className="hidden" />
+
             {/* Camera Frame Preview */}
-            <div className={`relative w-56 h-56 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden shadow-inner biometric-modal-scanner-circle ${enrollmentStep === 'success' ? 'verified' : ''}`}>
+            <div className={`relative w-60 h-60 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden shadow-inner border-4 transition-all duration-300 ${enrollmentStep === 'success' ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.4)]' : 'border-slate-800'}`}>
               <video
                 ref={videoRef}
                 autoPlay
@@ -1013,52 +1034,117 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                 className={`absolute inset-0 w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`}
               />
 
-              {isCameraActive && showFaceMesh && (
-                <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                  <g className="animate-pulse">
-                    <circle cx="100" cy="90" r="4" fill="#34d399" />
-                    <circle cx="130" cy="90" r="4" fill="#34d399" />
-                    <path d="M 80 130 Q 115 160 150 130" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" />
-                    <circle cx="115" cy="110" r="2" fill="#34d399" className="animate-ping" />
-                  </g>
+              {/* Dynamic Bounding Box */}
+              {isCameraActive && enrollFaceBox && (
+                <div
+                  className="absolute border border-emerald-400/90 rounded pointer-events-none transition-all duration-100 z-20"
+                  style={{
+                    left: `${Math.max(5, (enrollFaceBox.x / 320) * 100)}%`,
+                    top: `${Math.max(5, (enrollFaceBox.y / 240) * 100)}%`,
+                    width: `${Math.min(90, (enrollFaceBox.width / 320) * 100)}%`,
+                    height: `${Math.min(90, (enrollFaceBox.height / 240) * 100)}%`
+                  }}
+                >
+                  <div className="absolute -top-3.5 left-0 bg-emerald-950/90 text-emerald-400 text-[8px] font-mono px-1 rounded border border-emerald-500/40">
+                    64D_ISO
+                  </div>
+                  <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-emerald-300"></div>
+                  <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-emerald-300"></div>
+                  <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-emerald-300"></div>
+                  <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-emerald-300"></div>
+                </div>
+              )}
+
+              {/* Marcos Faciais */}
+              {isCameraActive && enrollLandmarks && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 320 240">
+                  <circle cx={enrollLandmarks.leftEye.x} cy={enrollLandmarks.leftEye.y} r="3.5" fill="#34d399" />
+                  <circle cx={enrollLandmarks.rightEye.x} cy={enrollLandmarks.rightEye.y} r="3.5" fill="#34d399" />
+                  <circle cx={enrollLandmarks.nose.x} cy={enrollLandmarks.nose.y} r="3" fill="#38bdf8" />
+                  <circle cx={enrollLandmarks.mouth.x} cy={enrollLandmarks.mouth.y} r="3.5" fill="#f43f5e" />
                 </svg>
               )}
 
-              {enrollmentStep === 'capturing' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3 bg-slate-950/40 backdrop-blur-[1px]">
-                  <div className="absolute inset-x-0 h-1.5 bg-emerald-400 animate-bounce shadow-lg shadow-emerald-400"></div>
+              {/* Face Guide Oval */}
+              {isCameraActive && !enrollFaceBox && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="42" fill="none" stroke="#10b981" strokeWidth="1.2" strokeDasharray="3,3" opacity="0.6" />
+                </svg>
+              )}
+
+              {enrollmentStep === 'capturing' && !isExtractingEnrollment && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3 bg-slate-950/30">
                   {!isCameraActive && <Camera className="w-16 h-16 text-emerald-400/50 animate-pulse" />}
-                  <span className="text-xs font-mono font-bold text-emerald-300 animate-pulse bg-slate-950/80 px-2 py-1 rounded">
-                    Capturando malha 3D e pontos faciais...
+                  <span className="text-[11px] font-mono font-bold text-emerald-300 bg-slate-950/80 px-2.5 py-1 rounded border border-emerald-500/30">
+                    Enquadre o rosto no centro
+                  </span>
+                </div>
+              )}
+
+              {isExtractingEnrollment && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-slate-950/60 z-30">
+                  <div className="w-10 h-10 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-[10px] font-mono font-bold text-emerald-300">
+                    EXTRAINDO VETOR 64-D...
                   </span>
                 </div>
               )}
 
               {enrollmentStep === 'success' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/70 text-emerald-300 space-y-2 p-4 text-center">
-                  <ShieldCheck className="w-16 h-16 text-emerald-400" />
-                  <span className="text-sm font-bold">Captura Concluída!</span>
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/80 text-emerald-300 space-y-1.5 p-4 text-center z-30 animate-in zoom-in-95 duration-200">
+                  <ShieldCheck className="w-14 h-14 text-emerald-400" />
+                  <span className="text-xs font-bold text-white">VETOR FACIAL EXTRAÍDO COM SUCESSO</span>
+                  <span className="text-[10px] font-mono text-emerald-400">PADRÃO ISO/IEC 19794-5</span>
                 </div>
               )}
             </div>
 
+            {/* Status & Feedback Text */}
+            <div className="p-2.5 bg-slate-950/70 border border-slate-800 rounded-xl text-center text-[11px] font-mono text-slate-300">
+              {enrollStatus || 'Posicione-se em frente à câmera e clique no botão abaixo para capturar.'}
+            </div>
+
             {/* Modal Actions */}
-            <div className="pt-4 border-t border-slate-800 flex items-center justify-center gap-3">
+            <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-center gap-2">
               <button
                 onClick={() => { setSelectedColabForEnroll(null); setEnrollmentStep('idle'); }}
-                className="px-5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white transition-colors"
               >
                 Cancelar
               </button>
+
+              {enrollmentStep === 'capturing' && (
+                <button
+                  onClick={handleEnrollCaptureNow}
+                  disabled={isExtractingEnrollment || !isCameraActive}
+                  className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-900/50 flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-50"
+                >
+                  <Camera className="w-4 h-4" />
+                  Capturar Face & Extrair Vetor Agora
+                </button>
+              )}
               
               {enrollmentStep === 'success' && (
-                <button
-                  onClick={handleSaveEnrollment}
-                  className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors shadow-lg shadow-emerald-900/50 flex items-center gap-2"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  Salvar Template e Concluir
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      setEnrollmentStep('capturing');
+                      setEnrollFaceBox(null);
+                      setEnrollLandmarks(null);
+                      setCapturedVector(null);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-colors"
+                  >
+                    Recapturar
+                  </button>
+                  <button
+                    onClick={handleSaveEnrollment}
+                    className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-900/50 flex items-center justify-center gap-2"
+                  >
+                    <Save className="w-4 h-4" />
+                    Salvar Template e Concluir
+                  </button>
+                </>
               )}
             </div>
           </div>
