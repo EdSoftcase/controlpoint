@@ -100,12 +100,29 @@ CREATE TABLE IF NOT EXISTS public.tenants (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- 6. TABELA DE AUDITORIA BIOMÉTRICA (Portaria 671 / REP-P)
+CREATE TABLE IF NOT EXISTS public.biometric_audit_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    collaborator_id TEXT NOT NULL,
+    timestamp TIMESTAMPTZ DEFAULT now(),
+    similarity NUMERIC(5,2) NOT NULL,
+    lighting_condition TEXT NOT NULL,
+    liveness_score NUMERIC(5,2) NOT NULL,
+    verdict TEXT NOT NULL,
+    algorithm_used TEXT,
+    hash_template TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT fk_biometric_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
+);
+
 -- Habilitar RLS
 ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.collaborators ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.point_registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.establishments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.biometric_audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- Políticas de Acesso
 CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (true);
@@ -113,15 +130,19 @@ CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (true
 CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (true);
 CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (true);
 CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (true);
 
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_colab_tenant ON public.collaborators(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_tenant ON public.point_registrations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_colab ON public.point_registrations(collaborator_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_cnpj ON public.tenants(cnpj);
+CREATE INDEX IF NOT EXISTS idx_biometric_audit_tenant ON public.biometric_audit_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_biometric_audit_colab ON public.biometric_audit_logs(collaborator_id);
 
--- 6. DADOS INICIAIS (SEED)
+-- 7. DADOS INICIAIS (SEED)
 INSERT INTO public.tenants (tenant_id, cnpj, razao_social, nome_fantasia, slug, plano, licencas_contratadas, email_admin, status)
 VALUES ('tenant-01', '00.000.000/0001-91', 'Softcase Tecnologia', 'Softcase', 'softcase', 'REP-P Corporativo', 9999, 'admin@softcase.com.br', 'ATIVO')
 ON CONFLICT (tenant_id) DO NOTHING;
+
 

@@ -292,6 +292,51 @@ app.post('/api/save-biometric', async (req, res) => {
   }
 });
 
+// Store Biometric Audit Log (Portaria 671)
+app.post('/api/save-biometric-audit', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const auditData = req.body;
+    if (user.user_metadata?.tenantId && user.user_metadata.tenantId !== auditData.tenantId) {
+      return res.status(403).send('Forbidden');
+    }
+    
+    const { data, error: dbError } = await supabase
+      .from('biometric_audit_logs')
+      .insert({
+        tenant_id: auditData.tenantId || 'tenant-01',
+        collaborator_id: auditData.collaboratorId,
+        timestamp: auditData.timestamp || new Date().toISOString(),
+        similarity: auditData.similarity,
+        lighting_condition: auditData.lightingCondition,
+        liveness_score: auditData.livenessScore,
+        verdict: auditData.verdict,
+        algorithm_used: auditData.algorithmUsed || 'ISO19794-5',
+        hash_template: auditData.hashTemplate || 'ISO19794-5'
+      })
+      .select();
+      
+    if (dbError) {
+      console.warn('Supabase biometric_audit_logs insert warning:', dbError.message);
+      await logEvent(auditData.tenantId || 'tenant-01', `Biometric audit attempt for ${auditData.collaboratorId}: Verdict=${auditData.verdict}, Similarity=${auditData.similarity}%, Liveness=${auditData.livenessScore}%`);
+    }
+    
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Save biometric audit error:', error);
+    await logEvent('error', `Save biometric audit error: ${error}`);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+
 // Create/Update Collaborator
 app.post('/api/save-collaborator', async (req, res) => {
   const authHeader = req.headers.authorization;
