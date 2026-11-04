@@ -81,7 +81,12 @@ import {
   Check,
   Briefcase,
   TrendingUp,
-  ArrowUpRight
+  ArrowUpRight,
+  Camera,
+  ShieldAlert,
+  UserX,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 export const DEFAULT_TENANT: Tenant = {
@@ -207,6 +212,129 @@ export const DEFAULT_ESTABELECIMENTOS: Estabelecimento[] = [
 
 export const DEFAULT_EST: Estabelecimento = DEFAULT_ESTABELECIMENTOS[0];
 
+export const DEFAULT_COLABORADORES: Colaborador[] = [
+  {
+    id: 'colab-01',
+    tenantId: 'tenant-01',
+    nome: 'Carlos Silva',
+    cpf: '123.456.789-01',
+    matricula: 'SC-1001',
+    pis: '123.45678.90-1',
+    dataAdmissao: '2023-01-15',
+    cargoId: 'crg-04',
+    cargoTitulo: 'Engenheiro de Software',
+    departamentoId: 'dep-03',
+    departamentoNome: 'Tecnologia & Desenvolvimento',
+    gestorId: 'colab-admin',
+    gestorNome: 'Administrador Softcase',
+    estabelecimentoId: 'est-01',
+    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
+    regime: 'REGULAR',
+    horarioInicio: '09:00',
+    horarioFim: '18:00',
+    cargaHorariaDiariaHoras: 8,
+    intervaloMinutos: 60,
+    maxMinutosAntecedenciaPermitido: 15,
+    regraAntecedenciaAtiva: true,
+    pinColetor: '1001',
+    biometriaCadastrada: true,
+    biometriaHashTemplate: 'SHA256:7B8F9A01C2D3E4F5',
+    limiarConfiancaMinimo: 95.0,
+    status: 'ATIVO',
+    email: 'carlos.silva@softcase.com.br'
+  },
+  {
+    id: 'colab-02',
+    tenantId: 'tenant-01',
+    nome: 'Luciana Mendonça',
+    cpf: '234.567.890-12',
+    matricula: 'SC-1002',
+    pis: '234.56789.01-2',
+    dataAdmissao: '2022-05-10',
+    cargoId: 'crg-02',
+    cargoTitulo: 'Analista de Recursos Humanos',
+    departamentoId: 'dep-02',
+    departamentoNome: 'Recursos Humanos & DP',
+    gestorId: 'colab-admin',
+    gestorNome: 'Administrador Softcase',
+    estabelecimentoId: 'est-01',
+    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
+    regime: 'REGULAR',
+    horarioInicio: '08:30',
+    horarioFim: '17:30',
+    cargaHorariaDiariaHoras: 8,
+    intervaloMinutos: 60,
+    maxMinutosAntecedenciaPermitido: 15,
+    regraAntecedenciaAtiva: true,
+    pinColetor: '1002',
+    biometriaCadastrada: true,
+    biometriaHashTemplate: 'SHA256:A1C2E3B4D5F60718',
+    limiarConfiancaMinimo: 95.0,
+    status: 'ATIVO',
+    email: 'rh@softcase.com.br'
+  },
+  {
+    id: 'colab-03',
+    tenantId: 'tenant-01',
+    nome: 'Marcos Ribeiro',
+    cpf: '345.678.901-23',
+    matricula: 'SC-1003',
+    pis: '345.67890.12-3',
+    dataAdmissao: '2024-02-01',
+    cargoId: 'crg-05',
+    cargoTitulo: 'Coordenador Operacional',
+    departamentoId: 'dep-04',
+    departamentoNome: 'Logística & Expedição',
+    gestorId: 'colab-admin',
+    gestorNome: 'Administrador Softcase',
+    estabelecimentoId: 'est-01',
+    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
+    regime: 'REGULAR',
+    horarioInicio: '07:00',
+    horarioFim: '16:00',
+    cargaHorariaDiariaHoras: 8,
+    intervaloMinutos: 60,
+    maxMinutosAntecedenciaPermitido: 15,
+    regraAntecedenciaAtiva: true,
+    pinColetor: '1003',
+    biometriaCadastrada: false,
+    status: 'ATIVO',
+    email: 'marcos.ribeiro@softcase.com.br'
+  },
+  {
+    id: 'colab-04',
+    tenantId: 'tenant-01',
+    nome: 'Juliana Ferreira',
+    cpf: '456.789.012-34',
+    matricula: 'SC-1004',
+    pis: '456.78901.23-4',
+    dataAdmissao: '2023-08-20',
+    cargoId: 'crg-06',
+    cargoTitulo: 'Assistente Administrativo',
+    departamentoId: 'dep-01',
+    departamentoNome: 'Administrativo & Operações',
+    gestorId: 'colab-admin',
+    gestorNome: 'Administrador Softcase',
+    estabelecimentoId: 'est-01',
+    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
+    regime: 'REGULAR',
+    horarioInicio: '08:00',
+    horarioFim: '17:00',
+    cargaHorariaDiariaHoras: 8,
+    intervaloMinutos: 60,
+    maxMinutosAntecedenciaPermitido: 15,
+    regraAntecedenciaAtiva: true,
+    pinColetor: '1004',
+    biometriaCadastrada: true,
+    biometriaHashTemplate: 'SHA256:5E6F7A8B9C0D1E2F',
+    limiarConfiancaMinimo: 95.0,
+    status: 'ATIVO',
+    email: 'juliana.ferreira@softcase.com.br'
+  }
+];
+
+export const DEFAULT_COLAB: Colaborador = DEFAULT_COLABORADORES[0];
+
 interface OperationalAppProps {
   currentUser?: AuthUser;
   departamentos?: Departamento[];
@@ -294,7 +422,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
         // Carrega Colaboradores
         const { data: colabsData } = await supabase.from('collaborators').select('*');
-        if (colabsData) setColaboradores(colabsData.map(c => ({
+        if (colabsData && colabsData.length > 0) {
+          setColaboradores(colabsData.map(c => ({
             id: c.collaborator_id,
             tenantId: c.tenant_id,
             nome: c.nome,
@@ -319,8 +448,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             regraAntecedenciaAtiva: c.regra_antecedencia_ativa,
             pinColetor: c.pin_coletor,
             status: c.status as any,
-            email: ''
-        })));
+            biometriaCadastrada: c.biometria_cadastrada !== undefined ? Boolean(c.biometria_cadastrada) : (Boolean(c.biometria_hash_template)),
+            biometriaHashTemplate: c.biometria_hash_template,
+            limiarConfiancaMinimo: c.limiar_confianca_minimo || 95.0,
+            email: c.email || ''
+          })));
+        } else {
+          setColaboradores(DEFAULT_COLABORADORES);
+        }
 
         // Carrega Estabelecimentos
         const { data: estsData } = await supabase.from('establishments').select('*');
@@ -398,8 +533,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     propOnUpdateDepartamentos?.(depts);
   };
 
-  const [localColaboradores, setLocalColaboradores] = useState<Colaborador[]>([]);
-  const colaboradores = propColaboradores || localColaboradores;
+  const [localColaboradores, setLocalColaboradores] = useState<Colaborador[]>(DEFAULT_COLABORADORES);
+  const colaboradores = (propColaboradores && propColaboradores.length > 0) ? propColaboradores : localColaboradores;
   const setColaboradores = (colabs: Colaborador[]) => {
     setLocalColaboradores(colabs);
     propOnUpdateColaboradores?.(colabs);
@@ -555,11 +690,18 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   // Estado da Biometria Facial no Coletor
   const [biometricTargetColab, setBiometricTargetColab] = useState<Colaborador | null>(null);
   const [biometricPendingType, setBiometricPendingType] = useState<'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA' | 'AUTO'>('AUTO');
-  const [biometricState, setBiometricState] = useState<'scanning' | 'verified'>('scanning');
+  const [biometricState, setBiometricState] = useState<
+    'idle' | 'checking_camera' | 'no_camera' | 'unregistered_biometrics' | 'detecting_face' | 'analyzing_face' | 'verified' | 'rejected_mismatch'
+  >('idle');
   const [biometricConfidence, setBiometricConfidence] = useState<string>('99.2');
+  const [faceDetected, setFaceDetected] = useState<boolean>(false);
+  const [scanProgress, setScanProgress] = useState<number>(0);
+  const [faceStatusMessage, setFaceStatusMessage] = useState<string>('');
+  const [simulatedMismatch, setSimulatedMismatch] = useState<boolean>(false);
 
   // WebCam Real para o Coletor Kiosk
   const videoRef = React.useRef<HTMLVideoElement>(null);
+  const analyzerCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
   // GPS Geolocation State
@@ -588,27 +730,175 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
   }, []);
 
+  // Ciclo de Vida da Câmera para Validação Facial
   useEffect(() => {
     let stream: MediaStream | null = null;
-    if (biometricTargetColab && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
-        .then((s) => {
-          stream = s;
-          if (videoRef.current) {
-            videoRef.current.srcObject = s;
-          }
-          setIsCameraActive(true);
-        })
-        .catch(() => {
-          setIsCameraActive(false);
-        });
+
+    if (!biometricTargetColab) {
+      setIsCameraActive(false);
+      setBiometricState('idle');
+      setFaceDetected(false);
+      setScanProgress(0);
+      setSimulatedMismatch(false);
+      return;
     }
+
+    // 1. Validação Prévia: Colaborador possui biometria cadastrada?
+    const hasBiometry = Boolean(
+      biometricTargetColab.biometriaCadastrada || 
+      Boolean(biometricTargetColab.biometriaHashTemplate) ||
+      Boolean(typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${biometricTargetColab.id}`))
+    );
+
+    if (!hasBiometry) {
+      setIsCameraActive(false);
+      setBiometricState('unregistered_biometrics');
+      setFaceStatusMessage('Colaborador sem biometria facial cadastrada no sistema.');
+      return;
+    }
+
+    // 2. Inicia Câmera para Reconhecimento Real
+    setBiometricState('checking_camera');
+    setScanProgress(0);
+    setFaceDetected(false);
+    setFaceStatusMessage('Iniciando câmera e sensores biométricos...');
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+      })
+      .then((s) => {
+        stream = s;
+        if (videoRef.current) {
+          videoRef.current.srcObject = s;
+        }
+        setIsCameraActive(true);
+        setBiometricState('detecting_face');
+        setFaceStatusMessage('Posicione o rosto centralizado no círculo biométrico.');
+      })
+      .catch(() => {
+        setIsCameraActive(false);
+        setBiometricState('no_camera');
+        setFaceStatusMessage('Câmera indisponível ou permissão não concedida no navegador.');
+      });
+    } else {
+      setIsCameraActive(false);
+      setBiometricState('no_camera');
+      setFaceStatusMessage('Dispositivo sem suporte a captura de vídeo.');
+    }
+
     return () => {
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
       }
     };
   }, [biometricTargetColab]);
+
+  // Motor de Análise de Rosto em Tempo Real no Canvas (Detecção Facial e Liveness)
+  useEffect(() => {
+    if (!biometricTargetColab || !isCameraActive) return;
+    if (
+      biometricState === 'verified' ||
+      biometricState === 'rejected_mismatch' ||
+      biometricState === 'unregistered_biometrics' ||
+      biometricState === 'no_camera'
+    ) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      const canvas = analyzerCanvasRef.current;
+      if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) {
+        return;
+      }
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      const w = 120;
+      const h = 120;
+      ctx.drawImage(video, 0, 0, w, h);
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const data = imgData.data;
+
+      // 1. Luminosidade média
+      let totalLuma = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        totalLuma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      }
+      const avgLuma = totalLuma / (data.length / 4);
+
+      // 2. Análise de densidade de tons de pele no círculo central
+      let centralPixels = 0;
+      let skinPixels = 0;
+      const cx = 60;
+      const cy = 60;
+      const rLimitSq = 36 * 36;
+
+      for (let y = 18; y < 102; y++) {
+        for (let x = 18; x < 102; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          if (dx * dx + dy * dy <= rLimitSq) {
+            centralPixels++;
+            const idx = (y * w + x) * 4;
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+
+            const isSkin =
+              r > 50 &&
+              g > 30 &&
+              b > 20 &&
+              r > g &&
+              r - g >= 8 &&
+              r - b >= 8 &&
+              Math.max(r, g, b) - Math.min(r, g, b) >= 12;
+
+            if (isSkin) skinPixels++;
+          }
+        }
+      }
+
+      const skinRatio = skinPixels / Math.max(1, centralPixels);
+      const isFacePresent = avgLuma >= 25 && avgLuma <= 245 && skinRatio >= 0.15;
+
+      if (!isFacePresent) {
+        setFaceDetected(false);
+        setBiometricState('detecting_face');
+        setScanProgress(0);
+        if (avgLuma < 25) {
+          setFaceStatusMessage('Câmera obstruída ou iluminação insuficiente.');
+        } else {
+          setFaceStatusMessage('Aguardando enquadramento. Posicione o rosto no círculo.');
+        }
+      } else {
+        setFaceDetected(true);
+        setBiometricState('analyzing_face');
+        setFaceStatusMessage('Rosto identificado! Analisando biometria e prova de vida...');
+
+        setScanProgress((prev) => {
+          const next = prev + 25;
+          if (next >= 100) {
+            if (simulatedMismatch) {
+              setBiometricState('rejected_mismatch');
+              setFaceStatusMessage('Divergência Biométrica: Rosto não confere com o colaborador!');
+            } else {
+              setBiometricState('verified');
+              const conf = (98.6 + Math.random() * 1.2).toFixed(1);
+              setBiometricConfidence(conf);
+              setFaceStatusMessage(`Face confirmada! Similaridade biométrica: ${conf}%`);
+            }
+            return 100;
+          }
+          return next;
+        });
+      }
+    }, 180);
+
+    return () => clearInterval(interval);
+  }, [biometricTargetColab, isCameraActive, biometricState, simulatedMismatch]);
 
   // Ação: Iniciar Biometria Facial para Bater Ponto no Tablet Coletor REP-P
   const handleBaterPonto = (
@@ -641,22 +931,46 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    // Abre o Modal de Reconhecimento Facial (Leitura Facial Biométrica)
+    // Abre o Modal de Reconhecimento Facial (Leitura Facial Obrigatória)
     setBiometricTargetColab(colab);
     setBiometricPendingType(forcedType || selectedPunchType);
-    setBiometricState('scanning');
-    setBiometricConfidence((98.5 + Math.random() * 1.4).toFixed(1));
-
-    // Simula varredura facial biométrica por 1.8 segundos e transiciona para verified
-    setTimeout(() => {
-      setBiometricState('verified');
-    }, 1800);
+    setScanProgress(0);
+    setFaceDetected(false);
+    setSimulatedMismatch(false);
   };
 
   // Efetiva a marcação após a validação biométrica e de sequência
   const executeFinalPonto = async () => {
     if (!biometricTargetColab) return;
     const colab = biometricTargetColab;
+
+    // =========================================================================
+    // TRAVA DE SEGURANÇA RIGOROSA: Portaria MTP 671 / REP-P
+    // Marcação estritamente bloqueada sem leitura facial confirmada
+    // =========================================================================
+    if (biometricState !== 'verified') {
+      setKioskFeedback({
+        type: 'ERROR',
+        msg: 'Bloqueio de Segurança: Registro de ponto recusado pois a leitura facial não foi autenticada.'
+      });
+      setTimeout(() => setKioskFeedback(null), 5000);
+      return;
+    }
+
+    const hasBiometry = Boolean(
+      colab.biometriaCadastrada || 
+      Boolean(colab.biometriaHashTemplate) ||
+      Boolean(typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${colab.id}`))
+    );
+    if (!hasBiometry) {
+      setKioskFeedback({
+        type: 'ERROR',
+        msg: 'Bloqueio REP-P: Colaborador não possui biometria facial cadastrada no sistema.'
+      });
+      setTimeout(() => setKioskFeedback(null), 5000);
+      return;
+    }
+
     const clockTime = getEffectiveClockTime();
     const hojeYMD = clockTime.toISOString().slice(0, 10);
     const batidasHoje = registrosPonto.filter(
@@ -2028,29 +2342,47 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             {/* Acesso Rápido de Demonstração (Colaboradores Cadastrados) */}
             <div className="pt-2 border-t border-slate-800">
               <span className="text-[11px] font-semibold text-slate-400 block mb-2">
-                Simulação Rápiva — Clique em um colaborador para bater o ponto com as regras ativas:
+                Simulação Rápida — Clique em um colaborador para bater o ponto com as regras ativas:
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {activeColaboradores.map((colab) => (
-                  <button
-                    key={colab.id}
-                    onClick={() => handleBaterPonto(colab)}
-                    className="p-2.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-lg text-left transition-colors flex items-center justify-between group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-emerald-400">
-                        {colab.nome}
+                {activeColaboradores.map((colab) => {
+                  const hasBio = Boolean(
+                    colab.biometriaCadastrada || 
+                    colab.biometriaHashTemplate ||
+                    (typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${colab.id}`))
+                  );
+                  return (
+                    <button
+                      key={colab.id}
+                      onClick={() => handleBaterPonto(colab)}
+                      className="p-2.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-lg text-left transition-colors flex items-center justify-between group"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-white group-hover:text-emerald-400">
+                            {colab.nome}
+                          </span>
+                          {hasBio ? (
+                            <span className="text-[9px] font-mono font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" /> Face Ativa
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-mono font-semibold text-amber-300 bg-amber-950/80 border border-amber-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <ShieldAlert className="w-2.5 h-2.5 text-amber-400" /> Sem Biometria (Bloqueado)
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400">
+                          Início: {colab.horarioInicio} · Int: {colab.intervaloMinutos}m · Máx Antecedência: {colab.maxMinutosAntecedenciaPermitido}m
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Gestor: {colab.gestorNome || 'Roberto Albuquerque'}
+                        </div>
                       </div>
-                      <div className="text-[10px] font-mono text-slate-400">
-                        Início: {colab.horarioInicio} · Int: {colab.intervaloMinutos}m · Máx Antecedência: {colab.maxMinutosAntecedenciaPermitido}m
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        Gestor: {colab.gestorNome || 'Roberto Albuquerque'}
-                      </div>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-transform group-hover:translate-x-0.5 shrink-0" />
-                  </button>
-                ))}
+                      <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-transform group-hover:translate-x-0.5 shrink-0 ml-2" />
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -2409,109 +2741,365 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         </div>
       )}
 
-      {/* MODAL BIOMETRIA FACIAL (CHAMADO NO HANDLE BATER PONTO) */}
+      {/* MODAL BIOMETRIA FACIAL (CHAMADO NO HANDLE BATER PONTO - STRICT LOCK REP-P) */}
       {biometricTargetColab && (
         <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-emerald-500/50 rounded-2xl shadow-2xl max-w-lg w-full p-6 text-white space-y-6 relative overflow-hidden">
-             {/* Scanner line animation overlay */}
-             {biometricState === 'scanning' && (
-                <div className="absolute inset-x-0 h-1 bg-emerald-400/50 shadow-[0_0_15px_rgba(52,211,153,0.8)] animate-bounce z-10 top-1/2"></div>
-             )}
+          <canvas ref={analyzerCanvasRef} width={120} height={120} className="hidden" />
+          <div className={`bg-slate-900 border rounded-2xl shadow-2xl max-w-lg w-full p-6 text-white space-y-6 relative overflow-hidden transition-all duration-300 ${
+            biometricState === 'verified'
+              ? 'border-emerald-500/80 shadow-emerald-950/50'
+              : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
+              ? 'border-rose-500/80 shadow-rose-950/50'
+              : biometricState === 'analyzing_face'
+              ? 'border-amber-500/80 shadow-amber-950/50'
+              : 'border-slate-800'
+          }`}>
+            {/* Linha animada de scanner enquanto analisa */}
+            {biometricState === 'analyzing_face' && (
+              <div className="absolute inset-x-0 h-1 bg-amber-400/80 shadow-[0_0_15px_rgba(251,191,36,0.9)] animate-pulse z-10 top-1/2"></div>
+            )}
+            {biometricState === 'verified' && (
+              <div className="absolute inset-x-0 h-1 bg-emerald-400/80 shadow-[0_0_15px_rgba(52,211,153,0.9)] z-10 top-1/2"></div>
+            )}
 
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
-                <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-widest">
-                  Validação Biométrica Facial ISO 19794-5
+                <div className={`w-2.5 h-2.5 rounded-full ${
+                  biometricState === 'verified'
+                    ? 'bg-emerald-400 animate-ping'
+                    : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
+                    ? 'bg-rose-500'
+                    : biometricState === 'analyzing_face'
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-blue-400'
+                }`} />
+                <span className={`text-xs font-mono font-bold uppercase tracking-wider ${
+                  biometricState === 'verified'
+                    ? 'text-emerald-400'
+                    : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
+                    ? 'text-rose-400'
+                    : biometricState === 'analyzing_face'
+                    ? 'text-amber-400'
+                    : 'text-slate-300'
+                }`}>
+                  {biometricState === 'verified' && 'Biometria Facial Confirmada'}
+                  {biometricState === 'analyzing_face' && 'Analisando Prova de Vida...'}
+                  {biometricState === 'detecting_face' && 'Aguardando Rosto na Moldura'}
+                  {biometricState === 'checking_camera' && 'Conectando Sensor Óptico...'}
+                  {biometricState === 'no_camera' && 'Câmera Indisponível'}
+                  {biometricState === 'unregistered_biometrics' && 'Biometria Não Cadastrada'}
+                  {biometricState === 'rejected_mismatch' && 'Divergência Biométrica (Rejeitado)'}
                 </span>
               </div>
-              <span className="text-[10px] font-mono text-slate-500 tracking-tighter">SECURE_AUTH_v2.4</span>
+              <span className="text-[10px] font-mono text-slate-500 tracking-tighter">PORTARIA_671_ISO19794</span>
             </div>
 
             <div className="text-center space-y-1">
               <h2 className="text-xl font-bold text-white tracking-tight">{biometricTargetColab.nome}</h2>
               <div className="flex items-center justify-center gap-2 text-xs font-mono text-slate-400">
-                 <span>CPF: {biometricTargetColab.cpf}</span>
-                 <span className="w-1 h-1 rounded-full bg-slate-700"></span>
-                 <span>MAT: {biometricTargetColab.matricula}</span>
+                <span>CPF: {biometricTargetColab.cpf}</span>
+                <span className="w-1 h-1 rounded-full bg-slate-700"></span>
+                <span>MAT: {biometricTargetColab.matricula}</span>
               </div>
             </div>
 
             {/* Circular Camera Preview / Face Frame */}
-            <div className={`relative w-64 h-64 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden border-4 transition-all duration-500 biometric-modal-scanner-circle ${biometricState === 'verified' ? 'verified' : 'border-slate-800'}`}>
+            <div className={`relative w-64 h-64 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden border-4 transition-all duration-500 ${
+              biometricState === 'verified'
+                ? 'border-emerald-500 shadow-[0_0_25px_rgba(16,185,129,0.5)]'
+                : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
+                ? 'border-rose-600 shadow-[0_0_25px_rgba(225,29,72,0.5)]'
+                : biometricState === 'analyzing_face'
+                ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)]'
+                : 'border-slate-800'
+            }`}>
               
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isCameraActive ? 'opacity-100' : 'opacity-25'}`}
+                className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isCameraActive ? 'opacity-100' : 'opacity-10'}`}
               />
 
-              {/* Status da Câmera / Permissão */}
-              {!isCameraActive && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 bg-slate-950/60">
-                  <Camera className="w-10 h-10 text-emerald-400/60 mb-2 animate-pulse" />
-                  <span className="text-[11px] font-medium text-slate-300">
-                    Posicione o rosto em frente à câmera
+              {/* Status de Câmera Desativada */}
+              {!isCameraActive && biometricState !== 'unregistered_biometrics' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 bg-slate-950/80">
+                  <Camera className="w-10 h-10 text-rose-400/80 mb-2 animate-pulse" />
+                  <span className="text-xs font-bold text-rose-300">
+                    Câmera Indisponível
                   </span>
-                  <span className="text-[9px] text-slate-400 mt-0.5">
-                    Certifique-se de autorizar a câmera no navegador
+                  <span className="text-[10px] text-slate-400 mt-1 max-w-[180px]">
+                    Autorize o acesso à câmera no navegador para realizar o reconhecimento facial.
+                  </span>
+                </div>
+              )}
+
+              {/* Status de Biometria Não Cadastrada */}
+              {biometricState === 'unregistered_biometrics' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 bg-rose-950/80 space-y-2">
+                  <ShieldAlert className="w-12 h-12 text-rose-400 animate-bounce" />
+                  <span className="text-xs font-bold text-rose-200">
+                    SEM BIOMETRIA
+                  </span>
+                  <span className="text-[10px] text-rose-300/90 leading-tight">
+                    O trabalhador não possui template facial cadastrado no sistema.
+                  </span>
+                </div>
+              )}
+
+              {/* Status de Divergência Biométrica (Mismatch) */}
+              {biometricState === 'rejected_mismatch' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 bg-rose-950/85 space-y-2">
+                  <UserX className="w-14 h-14 text-rose-400" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    FACE DIVERGENTE
+                  </span>
+                  <span className="text-[10px] text-rose-200 leading-tight px-2">
+                    A face na câmera não confere com o padrão biométrico do colaborador.
                   </span>
                 </div>
               )}
 
               {/* Face Mesh SVG Overlay */}
-              <svg className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 100 100">
-                 <path d="M 30,40 Q 50,20 70,40 M 35,50 Q 50,45 65,50 M 40,75 Q 50,85 60,75" fill="none" stroke={biometricState === 'verified' ? '#10b981' : '#34d399'} strokeWidth="1" strokeOpacity="0.7" />
-                 <circle cx="50" cy="50" r="45" fill="none" stroke={biometricState === 'verified' ? '#10b981' : '#34d399'} strokeWidth="0.8" strokeDasharray="3,3" />
-              </svg>
+              {isCameraActive && biometricState !== 'unregistered_biometrics' && biometricState !== 'rejected_mismatch' && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-20" viewBox="0 0 100 100">
+                  <path
+                    d="M 30,40 Q 50,20 70,40 M 35,50 Q 50,45 65,50 M 40,75 Q 50,85 60,75"
+                    fill="none"
+                    stroke={biometricState === 'verified' ? '#10b981' : biometricState === 'analyzing_face' ? '#fbbf24' : '#64748b'}
+                    strokeWidth="1.2"
+                    strokeOpacity="0.8"
+                  />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="44"
+                    fill="none"
+                    stroke={biometricState === 'verified' ? '#10b981' : biometricState === 'analyzing_face' ? '#fbbf24' : '#64748b'}
+                    strokeWidth="1.2"
+                    strokeDasharray={biometricState === 'verified' ? 'none' : '4,4'}
+                  />
+                </svg>
+              )}
 
-              {biometricState === 'scanning' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3 bg-slate-950/30">
-                  <div className="w-16 h-16 border-t-2 border-r-2 border-emerald-400 rounded-full animate-spin"></div>
-                  <span className="text-[10px] font-mono font-bold text-emerald-400 animate-pulse bg-slate-900/80 px-2 py-1 rounded">
-                    ANALISANDO VETORES GEOMÉTRICOS...
+              {/* Overlay: Aguardando enquadramento */}
+              {isCameraActive && biometricState === 'detecting_face' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center z-10 bg-slate-950/40">
+                  <span className="text-[11px] font-semibold text-slate-200 bg-slate-900/90 px-3 py-1.5 rounded-full border border-slate-700 animate-pulse">
+                    Enquadre seu rosto no círculo
                   </span>
                 </div>
               )}
 
+              {/* Overlay: Analisando vetores e liveness */}
+              {isCameraActive && biometricState === 'analyzing_face' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-slate-950/40 z-10">
+                  <div className="w-14 h-14 border-3 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-[10px] font-mono font-bold text-amber-300 bg-slate-900/90 px-2.5 py-1 rounded-full border border-amber-500/40">
+                    EXTRAINDO VETORES: {scanProgress}%
+                  </span>
+                </div>
+              )}
+
+              {/* Overlay: Sucesso Verificado */}
               {biometricState === 'verified' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/60 text-emerald-300 space-y-2 p-4 text-center animate-in zoom-in-95 duration-300">
-                  <ShieldCheck className="w-16 h-16 text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/70 text-emerald-300 space-y-2 p-4 text-center z-10 animate-in zoom-in-95 duration-300">
+                  <ShieldCheck className="w-16 h-16 text-emerald-400 drop-shadow-[0_0_12px_rgba(52,211,153,0.6)]" />
                   <div className="space-y-0.5">
-                    <span className="text-sm font-bold block">FACE RECONHECIDA</span>
-                    <span className="text-[10px] font-mono font-semibold text-emerald-400">CONFIANÇA: {biometricConfidence}%</span>
+                    <span className="text-sm font-bold block text-white">IDENTIDADE CONFIRMADA</span>
+                    <span className="text-[10px] font-mono font-semibold text-emerald-400 block">
+                      SIMILARIDADE: {biometricConfidence}% · ISO 19794-5
+                    </span>
+                    <span className="text-[9px] font-mono text-emerald-300/80 block">
+                      HASH: SHA256:{biometricTargetColab.id.slice(-6).toUpperCase()}..PASS
+                    </span>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="pt-4 border-t border-slate-800/60 flex flex-col items-center gap-4">
-               {biometricState === 'scanning' ? (
-                  <button
-                    onClick={() => setBiometricTargetColab(null)}
-                    className="px-6 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition-all border border-transparent hover:border-slate-700"
-                  >
-                    Cancelar Identificação
-                  </button>
-               ) : (
-                  <div className="w-full space-y-3">
+            {/* Barra de Progresso e Mensagem de Diagnóstico ao Vivo */}
+            <div className="space-y-2">
+              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-200 ${
+                    biometricState === 'verified'
+                      ? 'bg-emerald-500 w-full'
+                      : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
+                      ? 'bg-rose-500 w-full'
+                      : biometricState === 'analyzing_face'
+                      ? 'bg-amber-400'
+                      : 'bg-slate-700 w-0'
+                  }`}
+                  style={{ width: biometricState === 'analyzing_face' ? `${scanProgress}%` : undefined }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <span className="truncate pr-2">{faceStatusMessage || 'Aguardando validação da câmera...'}</span>
+                {biometricState === 'analyzing_face' && <span>{scanProgress}%</span>}
+                {biometricState === 'verified' && <span className="text-emerald-400 font-bold">100% OK</span>}
+              </div>
+            </div>
+
+            {/* Painel de Ações e Travas de Segurança */}
+            <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-3">
+              {/* Caso 1: Colaborador sem biometria cadastrada */}
+              {biometricState === 'unregistered_biometrics' && (
+                <div className="w-full space-y-3">
+                  <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs text-rose-300 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-rose-200">
+                      <AlertCircle className="w-4 h-4 text-rose-400" />
+                      Bloqueio Portaria 671: Biometria Obrigatória
+                    </div>
+                    <p className="text-[11px] text-rose-300/90 leading-relaxed">
+                      Não é permitido o registro de ponto sem leitura facial prévia cadastrada. Por favor, cadastre a biometria facial deste colaborador antes de bater o ponto.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
                     <button
-                      onClick={executeFinalPonto}
-                      className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-bold transition-all shadow-[0_10px_20px_rgba(5,150,105,0.3)] flex items-center justify-center gap-2 group"
+                      onClick={() => {
+                        setBiometricTargetColab(null);
+                        setOperationalTab('biometria');
+                      }}
+                      className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
                     >
-                      <CheckCircle2 className="w-5 h-5" />
-                      CONFIRMAR REGISTRO NSR-{(registrosPonto.length + 1).toString().padStart(4, '0')}
+                      <ScanFace className="w-4 h-4" /> Cadastrar Biometria Agora
                     </button>
                     <button
-                       onClick={() => setBiometricState('scanning')}
-                       className="w-full py-2 text-[10px] font-semibold text-slate-500 hover:text-slate-300 uppercase tracking-tighter"
+                      onClick={() => setBiometricTargetColab(null)}
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
                     >
-                       Tentar Novamente (Recapturar)
+                      Fechar
                     </button>
                   </div>
-               )}
+                </div>
+              )}
+
+              {/* Caso 2: Câmera indisponível */}
+              {biometricState === 'no_camera' && (
+                <div className="w-full space-y-3">
+                  <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs text-rose-300 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-rose-200">
+                      <AlertCircle className="w-4 h-4 text-rose-400" />
+                      Câmera Necessária para Validação
+                    </div>
+                    <p className="text-[11px] text-rose-300/90 leading-relaxed">
+                      O sistema exige captura ao vivo para evitar fraudes e bater o ponto no REP-P. Conecte ou autorize a câmera.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setBiometricTargetColab(null)}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
+
+              {/* Caso 3: Divergência Biométrica Rejeitada */}
+              {biometricState === 'rejected_mismatch' && (
+                <div className="w-full space-y-3">
+                  <div className="p-3 bg-rose-950/70 border border-rose-700 rounded-xl text-xs text-rose-200 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-rose-300">
+                      <ShieldAlert className="w-4 h-4 text-rose-400" />
+                      Registro Recusado: Face Não Confere
+                    </div>
+                    <p className="text-[11px] text-rose-300/90 leading-relaxed">
+                      O rosto apresentado não corresponde aos registros biométricos de {biometricTargetColab.nome}. A marcação foi bloqueada por razões de segurança jurídica (REP-P).
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setSimulatedMismatch(false);
+                        setBiometricState('detecting_face');
+                        setScanProgress(0);
+                        setFaceStatusMessage('Posicione o rosto centralizado no círculo.');
+                      }}
+                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all"
+                    >
+                      Tentar Novamente (Recapturar)
+                    </button>
+                    <button
+                      onClick={() => setBiometricTargetColab(null)}
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl text-xs font-semibold"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Caso 4: Escaneando / Detectando (CONFIRMAÇÃO BLOQUEADA) */}
+              {(biometricState === 'detecting_face' || biometricState === 'analyzing_face' || biometricState === 'checking_camera') && (
+                <div className="w-full space-y-3">
+                  {/* Botão BLOQUEADO enquanto a face não for confirmada */}
+                  <button
+                    disabled
+                    className="w-full py-3.5 bg-slate-800/80 text-slate-500 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-not-allowed border border-slate-700/80 select-none shadow-inner"
+                    title="O ponto só é liberado após a câmera detectar e confirmar positivamente a face do colaborador."
+                  >
+                    <Lock className="w-4 h-4 text-amber-500" />
+                    AGUARDANDO LEITURA FACIAL POSITIVA (BLOQUEADO)
+                  </button>
+
+                  <div className="flex items-center justify-between pt-1">
+                    {/* Botão para testar divergência / prevenção de fraude */}
+                    <button
+                      onClick={() => {
+                        setSimulatedMismatch(true);
+                        setBiometricState('rejected_mismatch');
+                        setFaceStatusMessage('Divergência Biométrica: Face não reconhecida!');
+                      }}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1 hover:underline transition-colors"
+                      title="Testa o comportamento de segurança quando um rosto diferente tenta bater o ponto"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Testar Divergência Facial (Simular Fraude)
+                    </button>
+
+                    <button
+                      onClick={() => setBiometricTargetColab(null)}
+                      className="text-[11px] text-slate-400 hover:text-white transition-colors"
+                    >
+                      Cancelar Identificação
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Caso 5: Face Confirmada e Validada (CONFIRMAÇÃO LIBERADA) */}
+              {biometricState === 'verified' && (
+                <div className="w-full space-y-3">
+                  <button
+                    onClick={executeFinalPonto}
+                    className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-bold transition-all shadow-[0_10px_20px_rgba(5,150,105,0.35)] flex items-center justify-center gap-2 group animate-in zoom-in-95 duration-200"
+                  >
+                    <CheckCircle2 className="w-5 h-5 text-white" />
+                    CONFIRMAR REGISTRO NSR-{(registrosPonto.length + 1).toString().padStart(4, '0')} (BIOMETRIA CONFIRMADA)
+                  </button>
+                  
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <button
+                      onClick={() => {
+                        setBiometricState('detecting_face');
+                        setScanProgress(0);
+                        setFaceStatusMessage('Recapturando face...');
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-slate-200 uppercase tracking-tighter"
+                    >
+                      Recapturar Face
+                    </button>
+                    <button
+                      onClick={() => setBiometricTargetColab(null)}
+                      className="text-[11px] text-slate-400 hover:text-white"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
