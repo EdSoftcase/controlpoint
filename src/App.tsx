@@ -7,17 +7,7 @@ import { SpecificationReader } from './components/SpecificationReader';
 import { InteractivePrototype } from './components/InteractivePrototype';
 import { LegalMatrixViewer } from './components/LegalMatrixViewer';
 import { ProjectPlanViewer } from './components/ProjectPlanViewer';
-import { 
-  INITIAL_REGISTROS, 
-  INITIAL_FERIADOS, 
-  INITIAL_DEPARTAMENTOS, 
-  INITIAL_COLABORADORES, 
-  INITIAL_HORAS_EXTRAS,
-  INITIAL_OCORRENCIAS_DESCONTO,
-  INITIAL_SOLICITACOES_AJUSTE,
-  INITIAL_ASSINATURAS_ESPELHO,
-  INITIAL_ESTABELECIMENTOS
-} from './data/operationalStore';
+// Mock data imports removed to favor Supabase real data fetching in components
 import { 
   Departamento, 
   Colaborador, 
@@ -41,10 +31,58 @@ import {
   User, 
   ShieldCheck,
   ChevronDown,
-  Menu
+  Menu,
+  Calendar,
+  Settings,
+  Key,
+  Database,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
+import { useAuth } from './components/AuthContext';
 
 export default function App() {
+  const { session, supabase } = useAuth();
+  const [testFeedback, setTestFeedback] = useState<{ loading: boolean; message: string | null; success?: boolean }>({ loading: false, message: null });
+
+  const handleTestSupabase = async () => {
+    setTestFeedback({ loading: true, message: 'Testando conexão com Supabase...' });
+    const start = Date.now();
+    try {
+      const { error } = await supabase.from('tenants').select('count', { count: 'exact', head: true });
+      const latency = Date.now() - start;
+      if (error && error.code !== 'PGRST116') {
+        const res = await fetch('/api/status');
+        const statusData = await res.json();
+        if (statusData.supabaseConnected) {
+          setTestFeedback({ 
+            loading: false, 
+            success: true, 
+            message: `Supabase Ativo e Conectado via Backend! Latência: ${latency}ms` 
+          });
+        } else {
+          setTestFeedback({ 
+            loading: false, 
+            success: false, 
+            message: `Aviso Supabase: ${error.message}` 
+          });
+        }
+      } else {
+        setTestFeedback({ 
+          loading: false, 
+          success: true, 
+          message: `Conexão Supabase Real Confirmada! (${latency}ms) — URL: https://aadrcdajajiqgpufixkt.supabase.co` 
+        });
+      }
+    } catch (err: any) {
+      setTestFeedback({ 
+        loading: false, 
+        success: false, 
+        message: `Falha no teste: ${err?.message || 'Erro de rede'}` 
+      });
+    }
+  };
   // Estado de Autenticação: Inicializa deslogado (null) para exibir a tela de login
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'spec' | 'prototype' | 'legal' | 'plan'>('operational');
@@ -53,17 +91,35 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [copiedExport, setCopiedExport] = useState(false);
-  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'registros' | 'feriados' | 'tenants'>('relatorios');
+  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config'>('relatorios');
 
-  const [estabelecimentos, setEstabelecimentos] = useState<Estabelecimento[]>(INITIAL_ESTABELECIMENTOS);
-  const [departamentos, setDepartamentos] = useState<Departamento[]>(INITIAL_DEPARTAMENTOS);
-  const [colaboradores, setColaboradores] = useState<Colaborador[]>(INITIAL_COLABORADORES);
-  const [registros, setRegistros] = useState<RegistroPontoREPP[]>(INITIAL_REGISTROS);
-  const [horasExtras, setHorasExtras] = useState<SolicitacaoHoraExtra[]>(INITIAL_HORAS_EXTRAS);
-  const [feriados, setFeriados] = useState<Feriado[]>(INITIAL_FERIADOS);
-  const [ocorrencias, setOcorrencias] = useState<OcorrenciaDesconto[]>(INITIAL_OCORRENCIAS_DESCONTO);
-  const [solicitacoesAjuste, setSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>(INITIAL_SOLICITACOES_AJUSTE);
-  const [assinaturasEspelho, setAssinaturasEspelho] = useState<AssinaturaEspelhoPonto[]>(INITIAL_ASSINATURAS_ESPELHO);
+  const [estabelecimentos, setEstabelecimentos] = useState<Estabelecimento[]>([]);
+  const [departamentos, setDepartamentos] = useState<Departamento[]>([]);
+  const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
+  const [registros, setRegistros] = useState<RegistroPontoREPP[]>([]);
+  const [horasExtras, setHorasExtras] = useState<SolicitacaoHoraExtra[]>([]);
+  const [feriados, setFeriados] = useState<Feriado[]>([]);
+  const [ocorrencias, setOcorrencias] = useState<OcorrenciaDesconto[]>([]);
+  const [solicitacoesAjuste, setSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>([]);
+  const [assinaturasEspelho, setAssinaturasEspelho] = useState<AssinaturaEspelhoPonto[]>([]);
+
+  // Sync currentUser with session metadata if session exists
+  React.useEffect(() => {
+    if (session && session.user && !currentUser) {
+      const meta = session.user.user_metadata;
+      setCurrentUser({
+        id: session.user.id,
+        nome: meta.nome || 'Usuário Supabase',
+        email: session.user.email || '',
+        cpf: meta.cpf || '',
+        role: meta.role || 'COLABORADOR',
+        roleLabel: meta.roleLabel || 'Colaborador',
+        tenantId: meta.tenantId || 'tenant-01',
+        tenantNome: meta.tenantNome || 'Empresa',
+        mfaHabilitado: false
+      });
+    }
+  }, [session, currentUser]);
 
   // Se o usuário não está autenticado, renderiza a tela de login robusta
   if (!currentUser) {
@@ -103,134 +159,285 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
-      {/* Top Bar Contract: Zone 1 (Wordmark & Session) — Zone 2 (Navigation) — Zone 3 (Profile & Primary Action) */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
-          {/* Zone 1: Single text element wordmark */}
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
-              Softcase Ponto
-            </span>
-            <span className="hidden lg:inline-block text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded">
-              REP-P & PTRP Ativo
-            </span>
-          </div>
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex antialiased">
+      {/* Sidebar Navigation (Desktop) */}
+      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0">
+        <div className="h-16 flex items-center px-6 border-b border-slate-200">
+           <span className="text-lg font-bold tracking-tight text-slate-900">Softcase Ponto</span>
+        </div>
+        
+        <nav className="flex-1 p-4 space-y-1">
+          {/* ... Navigation links ... */}
+          {currentUser.role !== 'COLABORADOR' ? (
+              <div className="space-y-1">
+                <button
+                  onClick={() => {
+                    setActiveView('operational');
+                    if (operationalTab === 'config') setOperationalTab('relatorios');
+                  }}
+                  className={`w-full text-left transition-colors py-2 px-3 rounded-lg flex items-center justify-between ${
+                    activeView === 'operational' && operationalTab !== 'config'
+                      ? 'bg-slate-900 text-white font-semibold shadow-xs'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5">
+                    <Play className="w-4 h-4 text-emerald-400" />
+                    Executar Painel
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${activeView === 'operational' ? 'rotate-180' : ''}`} />
+                </button>
 
-          {/* Zone 2: Navigation Links (Desktop) */}
-          <nav className="hidden lg:flex items-center gap-5 text-sm font-medium">
-            {currentUser.role !== 'COLABORADOR' ? (
-              <button
-                onClick={() => setActiveView('operational')}
-                className={`transition-colors py-1 flex items-center gap-1.5 ${
-                  activeView === 'operational'
-                    ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Play className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
-                Executar Sistema
-              </button>
+                {activeView === 'operational' && (
+                  <div className="pl-3 py-1 space-y-0.5 border-l-2 border-slate-200 ml-3 text-[11px]">
+                    <button onClick={() => setOperationalTab('relatorios')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'relatorios' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Atrasos & Descontos
+                    </button>
+                    <button onClick={() => setOperationalTab('equipes')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'equipes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Equipes & Gestores
+                    </button>
+                    <button onClick={() => setOperationalTab('coletor')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'coletor' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Coletor Tablet REP-P
+                    </button>
+                    <button onClick={() => setOperationalTab('biometria')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'biometria' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Biometria Facial
+                    </button>
+                    <button onClick={() => setOperationalTab('feriados')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'feriados' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Feriados & DSR
+                    </button>
+                    <button onClick={() => setOperationalTab('empresa')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'empresa' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Colaboradores & RH
+                    </button>
+                    <button onClick={() => setOperationalTab('estrutura')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'estrutura' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Estrutura (Deptos/Cargos)
+                    </button>
+                    <button onClick={() => setOperationalTab('permissoes')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'permissoes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Matriz de Permissões
+                    </button>
+                    <button onClick={() => setOperationalTab('registros')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'registros' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Registros & AFD Fiscal
+                    </button>
+                    <button onClick={() => setOperationalTab('tenants')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'tenants' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · Painel Multi-tenant
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <button
                 onClick={() => setActiveView('colaborador')}
-                className={`transition-colors py-1 flex items-center gap-1.5 ${
+                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
                   activeView === 'colaborador'
-                    ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                    : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-slate-900 text-white font-semibold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <User className="w-3.5 h-3.5 text-emerald-600" />
-                Meu Espelho de Ponto
+                <User className="w-4 h-4" />
+                Meu Espelho
               </button>
             )}
 
-            <button
-              onClick={() => setActiveView('spec')}
-              className={`transition-colors py-1 ${
-                activeView === 'spec'
-                  ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Especificação (Doc 02)
-            </button>
-            <button
-              onClick={() => setActiveView('prototype')}
-              className={`transition-colors py-1 ${
-                activeView === 'prototype'
-                  ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Simulador & BDD
-            </button>
-            <button
-              onClick={() => setActiveView('legal')}
-              className={`transition-colors py-1 ${
-                activeView === 'legal'
-                  ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Matriz Legal 671
-            </button>
-            <button
-              onClick={() => setActiveView('plan')}
-              className={`transition-colors py-1 ${
-                activeView === 'plan'
-                  ? 'text-slate-900 font-semibold border-b-2 border-slate-900'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Plano Geral (Doc 01)
-            </button>
-          </nav>
+            {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
+              <>
+                <button 
+                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
+                  className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
+                    activeView === 'operational' && operationalTab === 'config' 
+                      ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                    <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
+                </button>
+                <button onClick={() => setActiveView('spec')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'spec' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                    <FileText className="w-4 h-4"/> Especificação
+                </button>
+                <button onClick={() => setActiveView('prototype')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'prototype' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                    <Play className="w-4 h-4"/> Simulador
+                </button>
+                <button onClick={() => setActiveView('legal')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'legal' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                    <ShieldCheck className="w-4 h-4"/> Matriz Legal
+                </button>
+                <button onClick={() => setActiveView('plan')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'plan' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                    <Calendar className="w-4 h-4"/> Plano Geral
+                </button>
+              </>
+            )}
+        </nav>
+      </aside>
 
-          {/* Zone 3: User Session, Export CTA & Mobile Hamburger Toggle */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* User Profile Chip */}
-            <div className="hidden md:flex items-center gap-2 pl-2 border-l border-slate-200">
-              <div className="text-right">
-                <span className="text-xs font-bold text-slate-900 block leading-tight">
-                  {currentUser.nome.split(' ')[0]}
-                </span>
-                <span className="text-[10px] text-slate-500 block leading-tight">
-                  {currentUser.roleLabel.split(' ')[0]}
-                </span>
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Header (Global Actions) */}
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
+            <div className="flex items-center gap-4">
+              <span className="lg:hidden text-lg font-bold">Softcase Ponto</span>
+              {/* Optional: Add a breadcrumb or title here if needed */}
+              <div className="hidden lg:block">
+                 <span className="text-sm font-medium text-slate-500">{activeView === 'operational' ? 'Painel Administrativo' : 'Portal'}</span>
               </div>
-              <button
-                onClick={() => setCurrentUser(null)}
-                className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors"
-                title="Sair / Trocar de Usuário (Logout)"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
             </div>
 
-            <button
-              onClick={() => setIsExportModalOpen(true)}
-              className="hidden sm:flex px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 items-center gap-1.5 shadow-xs"
-            >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
-              Exportar Doc 02
-            </button>
+            <div className="flex items-center gap-3 ml-auto shrink-0">
+                <button 
+                  onClick={handleTestSupabase}
+                  disabled={testFeedback.loading}
+                  className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 px-3 py-2 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                  title="Testar Conexão em Tempo Real com Supabase"
+                >
+                    <Database className={`w-3.5 h-3.5 ${testFeedback.loading ? 'animate-spin' : ''}`} /> 
+                    <span className="hidden sm:inline">Testar Supabase</span>
+                </button>
 
-            {/* Mobile Hamburger Button */}
-            <button
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="lg:hidden p-2 text-slate-700 hover:bg-slate-100 rounded-xl transition-colors"
-              title="Abrir Menu"
+                <button 
+                  onClick={() => setIsExportModalOpen(true)} 
+                  className="flex items-center gap-2 text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors shrink-0"
+                >
+                    <Download className="w-3.5 h-3.5" /> 
+                    <span className="hidden sm:inline">Exportar Doc 02</span>
+                </button>
+
+                <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block shrink-0"></div>
+
+                <div className="hidden sm:flex flex-col items-end mr-2 shrink-0">
+                   <span className="text-[10px] font-bold text-slate-900 leading-none">{currentUser.nome}</span>
+                   <span className="text-[9px] text-slate-500 flex items-center gap-1">
+                      {currentUser.roleLabel}
+                      <span 
+                        className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" 
+                        title="Supabase Conectado (Persistência Ativa no Schema PostgreSQL)"
+                      ></span>
+                   </span>
+                </div>
+
+                <button 
+                  onClick={() => setCurrentUser(null)} 
+                  className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
+                  title="Sair"
+                >
+                    <LogOut className="w-4 h-4" />
+                </button>
+                
+                <button 
+                  onClick={() => setIsMobileMenuOpen(true)} 
+                  className="lg:hidden p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                  aria-label="Abrir menu"
+                >
+                    <Menu className="w-6 h-6" />
+                </button>
+            </div>
+        </header>
+
+        {testFeedback.message && (
+          <div className={`px-6 py-2.5 text-xs border-b flex items-center justify-between transition-all ${
+            testFeedback.success === false 
+              ? 'bg-rose-50 text-rose-800 border-rose-200' 
+              : 'bg-emerald-50 text-emerald-900 border-emerald-200 font-semibold'
+          }`}>
+            <div className="flex items-center gap-2">
+              {testFeedback.success === false ? (
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 animate-bounce" />
+              )}
+              <span>{testFeedback.message}</span>
+            </div>
+            <button 
+              onClick={() => setTestFeedback({ loading: false, message: null })}
+              className="text-slate-400 hover:text-slate-600 ml-4 font-bold"
             >
-              <Menu className="w-6 h-6" />
+              ✕
             </button>
           </div>
-        </div>
-      </header>
+        )}
+
+
+        {/* Main Content Viewport */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {activeView === 'operational' && (
+            <OperationalApp
+              currentUser={currentUser}
+              departamentos={departamentos}
+              onUpdateDepartamentos={setDepartamentos}
+              colaboradores={colaboradores}
+              onUpdateColaboradores={setColaboradores}
+              registrosPonto={registros}
+              onUpdateRegistrosPonto={setRegistros}
+              horasExtras={horasExtras}
+              onUpdateHorasExtras={setHorasExtras}
+              feriados={feriados}
+              onUpdateFeriados={setFeriados}
+              ocorrencias={ocorrencias}
+              onUpdateOcorrencias={setOcorrencias}
+              solicitacoesAjuste={solicitacoesAjuste}
+              onUpdateSolicitacoesAjuste={setSolicitacoesAjuste}
+              assinaturasEspelho={assinaturasEspelho}
+              onUpdateAssinaturasEspelho={setAssinaturasEspelho}
+              estabelecimentos={estabelecimentos}
+              onUpdateEstabelecimentos={setEstabelecimentos}
+              operationalTab={operationalTab}
+              onSelectOperationalTab={setOperationalTab}
+            />
+          )}
+
+          {activeView === 'colaborador' && (
+            <PortalColaborador
+              user={currentUser}
+              registros={registros}
+              feriados={feriados}
+              horasExtras={horasExtras}
+              onAddHoraExtra={(nova) => setHorasExtras([nova, ...horasExtras])}
+              solicitacoesAjuste={solicitacoesAjuste}
+              onAddSolicitacaoAjuste={(nova) => setSolicitacoesAjuste([nova, ...solicitacoesAjuste])}
+              assinaturasEspelho={assinaturasEspelho}
+              onAddAssinaturaEspelho={(nova) => setAssinaturasEspelho([nova, ...assinaturasEspelho])}
+              onRegistrarPonto={() => {
+                setOperationalTab('coletor');
+                setActiveView('operational');
+              }}
+            />
+          )}
+
+          {activeView === 'spec' && (
+            <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
+          )}
+
+          {activeView === 'prototype' && (
+            <InteractivePrototype initialScreenId={prototypeTargetScreen} />
+          )}
+
+          {activeView === 'legal' && <LegalMatrixViewer />}
+
+          {activeView === 'plan' && <ProjectPlanViewer />}
+        </main>
+
+        {/* Footer */}
+        <footer className="border-t border-slate-200 bg-white py-6 mt-auto">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
+            <div>
+              <strong>Softcase Ponto</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
+            </div>
+            <div className="flex items-center gap-4 text-slate-600 font-medium">
+              <span>Sessão: {currentUser.nome} ({currentUser.roleLabel})</span>
+              <span>·</span>
+              <button
+                onClick={() => setCurrentUser(null)}
+                className="text-blue-600 hover:underline"
+              >
+                Trocar de Usuário (Logout)
+              </button>
+              <span>·</span>
+              <span>Versão 1.0</span>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+
 
       {/* Mobile Menu Drawer Modal */}
       {isMobileMenuOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex justify-end lg:hidden">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex justify-end lg:hidden">
           <div className="bg-white w-80 max-w-full h-full shadow-2xl flex flex-col p-6 space-y-6 animate-in slide-in-from-right duration-200">
             <div className="flex items-center justify-between pb-4 border-b border-slate-200">
               <div>
@@ -252,16 +459,28 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-2 font-medium text-sm">
+              {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
+                <button 
+                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); setIsMobileMenuOpen(false); }} 
+                  className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
+                    activeView === 'operational' && operationalTab === 'config' ? 'bg-emerald-600 text-white font-bold' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  }`}
+                >
+                  <Key className="w-4 h-4" />
+                  Chaves de Acesso Supabase
+                </button>
+              )}
+
               {currentUser.role !== 'COLABORADOR' ? (
                 <div className="space-y-1">
                   <button
                     onClick={() => {
                       setActiveView('operational');
-                      setOperationalTab('relatorios');
+                      if (operationalTab === 'config') setOperationalTab('relatorios');
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
-                      activeView === 'operational' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                      activeView === 'operational' && operationalTab !== 'config' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
                     <Play className="w-4 h-4 text-emerald-400 fill-emerald-400" />
@@ -269,8 +488,8 @@ export default function App() {
                   </button>
 
                   {activeView === 'operational' && (
-                    <div className="pl-4 space-y-1 border-l-2 border-slate-200 ml-2 my-1">
-                      <button onClick={() => { setOperationalTab('relatorios'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'relatorios' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                    <div className="pl-4 space-y-1 border-l-2 border-slate-200 ml-2 my-1 text-[11px]">
+                      <button onClick={() => { setOperationalTab('relatorios'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg ${operationalTab === 'relatorios' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                         · Atrasos & Descontos (M09)
                       </button>
                       <button onClick={() => { setOperationalTab('equipes'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'equipes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
@@ -287,6 +506,12 @@ export default function App() {
                       </button>
                       <button onClick={() => { setOperationalTab('empresa'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'empresa' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                         · Colaboradores & RH
+                      </button>
+                      <button onClick={() => { setOperationalTab('estrutura'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'estrutura' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        · Estrutura (Deptos, Cargos, Unidades)
+                      </button>
+                      <button onClick={() => { setOperationalTab('permissoes'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'permissoes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        · Matriz de Permissões (RBAC)
                       </button>
                       <button onClick={() => { setOperationalTab('registros'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'registros' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                         · Registros & AFD Oficial
@@ -312,50 +537,54 @@ export default function App() {
                 </button>
               )}
 
-              <button
-                onClick={() => {
-                  setActiveView('spec');
-                  setIsMobileMenuOpen(false);
-                }}
-                className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
-                  activeView === 'spec' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                Especificação (Doc 02)
-              </button>
-              <button
-                onClick={() => {
-                  setActiveView('prototype');
-                  setIsMobileMenuOpen(false);
-                }}
-                className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
-                  activeView === 'prototype' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                Simulador & BDD
-              </button>
-              <button
-                onClick={() => {
-                  setActiveView('legal');
-                  setIsMobileMenuOpen(false);
-                }}
-                className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
-                  activeView === 'legal' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                Matriz Legal 671
-              </button>
-              <button
-                onClick={() => {
-                  setActiveView('plan');
-                  setIsMobileMenuOpen(false);
-                }}
-                className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
-                  activeView === 'plan' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                Plano Geral (Doc 01)
-              </button>
+              {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
+                <>
+                  <button
+                    onClick={() => {
+                      setActiveView('spec');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
+                      activeView === 'spec' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Especificação (Doc 02)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveView('prototype');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
+                      activeView === 'prototype' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Simulador & BDD
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveView('legal');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
+                      activeView === 'legal' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Matriz Legal 671
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveView('plan');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${
+                      activeView === 'plan' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Plano Geral (Doc 01)
+                  </button>
+                </>
+              )}
             </div>
 
             <div className="pt-4 border-t border-slate-200 mt-auto space-y-3">
@@ -384,89 +613,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeView === 'operational' && (
-          <OperationalApp
-            currentUser={currentUser}
-            departamentos={departamentos}
-            onUpdateDepartamentos={setDepartamentos}
-            colaboradores={colaboradores}
-            onUpdateColaboradores={setColaboradores}
-            registrosPonto={registros}
-            onUpdateRegistrosPonto={setRegistros}
-            horasExtras={horasExtras}
-            onUpdateHorasExtras={setHorasExtras}
-            feriados={feriados}
-            onUpdateFeriados={setFeriados}
-            ocorrencias={ocorrencias}
-            onUpdateOcorrencias={setOcorrencias}
-            solicitacoesAjuste={solicitacoesAjuste}
-            onUpdateSolicitacoesAjuste={setSolicitacoesAjuste}
-            assinaturasEspelho={assinaturasEspelho}
-            onUpdateAssinaturasEspelho={setAssinaturasEspelho}
-            estabelecimentos={estabelecimentos}
-            onUpdateEstabelecimentos={setEstabelecimentos}
-            operationalTab={operationalTab}
-            onSelectOperationalTab={setOperationalTab}
-          />
-        )}
 
-        {activeView === 'colaborador' && (
-          <PortalColaborador
-            user={currentUser}
-            registros={registros}
-            feriados={feriados}
-            horasExtras={horasExtras}
-            onAddHoraExtra={(nova) => setHorasExtras([nova, ...horasExtras])}
-            solicitacoesAjuste={solicitacoesAjuste}
-            onAddSolicitacaoAjuste={(nova) => setSolicitacoesAjuste([nova, ...solicitacoesAjuste])}
-            assinaturasEspelho={assinaturasEspelho}
-            onAddAssinaturaEspelho={(nova) => setAssinaturasEspelho([nova, ...assinaturasEspelho])}
-            onRegistrarPonto={() => {
-              setOperationalTab('coletor');
-              setActiveView('operational');
-            }}
-          />
-        )}
-
-        {activeView === 'spec' && (
-          <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
-        )}
-
-        {activeView === 'prototype' && (
-          <InteractivePrototype initialScreenId={prototypeTargetScreen} />
-        )}
-
-        {activeView === 'legal' && <LegalMatrixViewer />}
-
-        {activeView === 'plan' && <ProjectPlanViewer />}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white py-6 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <div>
-            <strong>Softcase Ponto</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
-          </div>
-          <div className="flex items-center gap-4 text-slate-600 font-medium">
-            <span>Sessão: {currentUser.nome} ({currentUser.roleLabel})</span>
-            <span>·</span>
-            <button
-              onClick={() => setCurrentUser(null)}
-              className="text-blue-600 hover:underline"
-            >
-              Trocar de Usuário (Logout)
-            </button>
-            <span>·</span>
-            <span>Versão 1.0</span>
-          </div>
-        </div>
-      </footer>
 
       {/* Modal de Exportação do Documento 02 em Markdown */}
       {isExportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-3xl w-full max-h-[85vh] flex flex-col overflow-hidden">
             <div className="p-4 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2">

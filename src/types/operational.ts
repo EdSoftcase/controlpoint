@@ -75,6 +75,7 @@ export interface Cargo {
   id: string;
   tenantId: string;
   titulo: string;
+  codigo?: string;
   cbo: string;
   cboDescricao: string;
   cargaHorariaSemanal: number;
@@ -125,6 +126,8 @@ export interface Colaborador {
   limiarConfiancaMinimo?: number;
   dataUltimaAtualizacaoBiometria?: string;
   status: 'ATIVO' | 'DESLIGADO';
+  email?: string;
+  senhaTemporaria?: string;
 }
 
 export interface SolicitacaoHoraExtra {
