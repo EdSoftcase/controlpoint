@@ -203,19 +203,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           }, { onConflict: 'collaborator_id' });
 
           // Tentar registrar no GoTrue em background se ainda não existir
-          supabase.auth.signUp({
-            email: targetEmail,
-            password: senha,
-            options: {
-              data: {
-                nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
-                role: 'SUPER_ADMIN',
-                roleLabel: 'Super Administrador Softcase',
-                tenantId: 'tenant-01',
-                tenantNome: 'Softcase Tecnologia'
-              }
-            }
-          }).catch(() => {});
+          // supabase.auth.signUp({
+          //   email: targetEmail,
+          //   password: senha,
+          //   options: {
+          //     data: {
+          //       nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
+          //       role: 'SUPER_ADMIN',
+          //       roleLabel: 'Super Administrador Softcase',
+          //       tenantId: 'tenant-01',
+          //       tenantNome: 'Softcase Tecnologia'
+          //     }
+          //   }
+          // }).catch(() => {});
         } catch (syncErr) {
           console.warn('Sync aviso:', syncErr);
         }

@@ -304,10 +304,12 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
       type: 'SUCCESS',
       text: `Selfie de Contingência de ${selectedColabForEnroll.nome} enviada para auditoria! Biometria liberada no banco local para registro de ponto.`
     });
-    setSelectedColabForEnroll(null);
-    setEnrollmentStep('idle');
-    setShowSelfieContingency(false);
-    setFailedAttempts(0);
+    setTimeout(() => {
+      setSelectedColabForEnroll(null);
+      setEnrollmentStep('idle');
+      setShowSelfieContingency(false);
+      setFailedAttempts(0);
+    }, 2000);
   };
 
   const handleSaveEnrollment = async () => {
@@ -359,8 +361,10 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
       type: 'SUCCESS',
       text: `Biometria facial ISO 19794-5 cadastrada e ativada com sucesso para ${selectedColabForEnroll.nome}!`
     });
-    setSelectedColabForEnroll(null);
-    setEnrollmentStep('idle');
+    setTimeout(() => {
+      setSelectedColabForEnroll(null);
+      setEnrollmentStep('idle');
+    }, 2000);
   };
 
   const handleRemoveBiometry = (colabId: string, nome: string) => {

@@ -565,8 +565,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
     onAddRegistroPonto?.(novo);
     setIsSubmittingPunch(false);
-    setIsBaterPontoModalOpen(false);
-    setComprovanteModal(novo);
+    setTimeout(() => {
+      setIsBaterPontoModalOpen(false);
+      setComprovanteModal(novo);
+    }, 2000);
     setPontoSucessoMsg(`Ponto registrado com sucesso! NSR ${String(nextNsr).padStart(9, '0')} gerado conforme Portaria MTP 671.`);
     setTimeout(() => setPontoSucessoMsg(null), 8000);
   };
