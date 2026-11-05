@@ -124,12 +124,23 @@ ALTER TABLE public.establishments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.biometric_audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Políticas de Acesso
+-- Políticas de Acesso Idempotentes (permite reexecução sem erro 42710)
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.logs;
 CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.collaborators;
 CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_registrations;
 CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.establishments;
 CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.tenants;
 CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.biometric_audit_logs;
 CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (true);
 
 -- Índices

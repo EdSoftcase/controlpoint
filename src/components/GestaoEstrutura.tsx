@@ -88,6 +88,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     uf: 'SP',
     municipio: 'São Paulo',
     enderecoCompleto: '',
+    cep: '',
     bloquearForaDoRaio: true
   });
 
@@ -294,6 +295,33 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
   // ==========================================
   // HANDLERS: ESTABELECIMENTOS
   // ==========================================
+  const handleBuscaCep = async () => {
+    const clean = (estForm.cep || '').replace(/\D/g, '');
+    if (clean.length !== 8) {
+      showNotification('Digite um CEP válido com 8 dígitos para consulta.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await res.json();
+      if (data.erro) {
+        showNotification('CEP não encontrado na base dos Correios (ViaCEP).', 'error');
+        return;
+      }
+      const enderecoCompleto = `${data.logradouro || ''}, ${data.bairro || ''} - ${data.localidade}/${data.uf}`;
+      setEstForm(prev => ({
+        ...prev,
+        enderecoCompleto,
+        municipio: data.localidade || prev.municipio,
+        uf: data.uf || prev.uf
+      }));
+      showNotification(`Endereço carregado via CEP ${clean}!`, 'success');
+    } catch (err) {
+      console.warn('Erro ao consultar ViaCEP:', err);
+      showNotification('Falha ao consultar serviço de CEP.', 'error');
+    }
+  };
+
   const handleOpenEstModal = (est?: Estabelecimento) => {
     if (est) {
       setEditingEst(est);
@@ -309,6 +337,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         uf: est.uf || 'SP',
         municipio: est.municipio || 'São Paulo',
         enderecoCompleto: est.enderecoCompleto || '',
+        cep: est.cep || '',
         bloquearForaDoRaio: est.bloquearForaDoRaio ?? true
       });
     } else {
@@ -325,6 +354,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         uf: 'SP',
         municipio: 'São Paulo',
         enderecoCompleto: '',
+        cep: '',
         bloquearForaDoRaio: true
       });
     }
@@ -380,6 +410,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
       uf: estForm.uf.toUpperCase(),
       municipio: estForm.municipio.trim(),
       enderecoCompleto: estForm.enderecoCompleto.trim(),
+      cep: estForm.cep.trim(),
       bloquearForaDoRaio: estForm.bloquearForaDoRaio
     };
 
@@ -1138,6 +1169,26 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
                     onChange={(e) => setEstForm({ ...estForm, uf: e.target.value.toUpperCase() })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono font-bold uppercase text-center"
                   />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">CEP (Consulta Automática ViaCEP)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="01310100"
+                    value={estForm.cep}
+                    onChange={(e) => setEstForm({ ...estForm, cep: e.target.value })}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBuscaCep}
+                    className="px-3 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition-colors shadow-2xs whitespace-nowrap"
+                  >
+                    Buscar CEP
+                  </button>
                 </div>
               </div>
 

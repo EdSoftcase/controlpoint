@@ -26,6 +26,7 @@ export interface Estabelecimento {
   uf: string;
   municipio: string;
   enderecoCompleto?: string;
+  cep?: string;
   bloquearForaDoRaio?: boolean;
 }
 

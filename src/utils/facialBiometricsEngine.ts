@@ -550,3 +550,37 @@ function generateDeterministicSeedVector(colaboradorId: string): number[] {
   norm = Math.sqrt(norm) || 1;
   return anchor.map((v) => Number((v / norm).toFixed(5)));
 }
+
+export interface LivenessChallenge {
+  id: 'PISCAR' | 'VIRAR_DIREITA' | 'VIRAR_ESQUERDA' | 'INCLINAR_CABECA';
+  instruction: string;
+  actionPrompt: string;
+}
+
+const LIVENESS_CHALLENGES: LivenessChallenge[] = [
+  {
+    id: 'PISCAR',
+    instruction: 'Prova de Vida Ativa: Por favor, pise os olhos duas vezes para confirmar vivacidade.',
+    actionPrompt: 'Piscar os olhos duas vezes'
+  },
+  {
+    id: 'VIRAR_DIREITA',
+    instruction: 'Prova de Vida Ativa: Por favor, vire o rosto levemente para a direita.',
+    actionPrompt: 'Virar o rosto para a direita'
+  },
+  {
+    id: 'VIRAR_ESQUERDA',
+    instruction: 'Prova de Vida Ativa: Por favor, vire o rosto levemente para a esquerda.',
+    actionPrompt: 'Virar o rosto para a esquerda'
+  },
+  {
+    id: 'INCLINAR_CABECA',
+    instruction: 'Prova de Vida Ativa: Por favor, incline a cabeça levemente para frente.',
+    actionPrompt: 'Inclinar a cabeça'
+  }
+];
+
+export function getRandomLivenessChallenge(): LivenessChallenge {
+  const index = Math.floor(Math.random() * LIVENESS_CHALLENGES.length);
+  return LIVENESS_CHALLENGES[index];
+}

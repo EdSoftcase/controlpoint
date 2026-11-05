@@ -91,7 +91,7 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [copiedExport, setCopiedExport] = useState(false);
-  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config'>('relatorios');
+  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa'>('relatorios');
 
   const [estabelecimentos, setEstabelecimentos] = useState<Estabelecimento[]>([]);
   const [departamentos, setDepartamentos] = useState<Departamento[]>([]);
@@ -209,6 +209,9 @@ export default function App() {
                     </button>
                     <button onClick={() => setOperationalTab('biometria')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'biometria' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                       · Biometria Facial
+                    </button>
+                    <button onClick={() => setOperationalTab('ipa')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'ipa' ? 'bg-amber-100 text-amber-900 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                      · IPA & Premiações (Scoring)
                     </button>
                     <button onClick={() => setOperationalTab('feriados')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'feriados' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                       · Feriados & DSR
@@ -403,6 +406,9 @@ export default function App() {
                 setOperationalTab('coletor');
                 setActiveView('operational');
               }}
+              onAddRegistroPonto={(novo) => setRegistros([novo, ...registros])}
+              estabelecimentos={estabelecimentos}
+              colaboradores={colaboradores}
             />
           )}
 
@@ -508,6 +514,9 @@ export default function App() {
                       </button>
                       <button onClick={() => { setOperationalTab('biometria'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'biometria' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                         · Biometria Facial (M02)
+                      </button>
+                      <button onClick={() => { setOperationalTab('ipa'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'ipa' ? 'bg-amber-100 text-amber-900 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        · IPA & Premiações (Scoring)
                       </button>
                       <button onClick={() => { setOperationalTab('feriados'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'feriados' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
                         · Feriados & DSR (M03)
