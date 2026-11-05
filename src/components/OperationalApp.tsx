@@ -772,6 +772,22 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const analyzerCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [biometricCountdown, setBiometricCountdown] = useState<number | null>(null);
+
+  // Efeito de Contador para Prova de Vida Ativa
+  useEffect(() => {
+    let timer: any;
+    if (biometricCountdown !== null && biometricCountdown > 0) {
+      timer = setTimeout(() => setBiometricCountdown(biometricCountdown - 1), 1000);
+    } else if (biometricCountdown === 0) {
+      // Quando o contador chega a 0, sorteamos um desafio se não houver um
+      if (!currentLivenessChallenge) {
+        setCurrentLivenessChallenge(getRandomLivenessChallenge());
+      }
+      setBiometricCountdown(null);
+    }
+    return () => clearTimeout(timer);
+  }, [biometricCountdown, currentLivenessChallenge]);
 
   // GPS Geolocation State
   const [gpsData, setGpsData] = useState<{ lat: number; lng: number; address: string; inGeofence: boolean } | null>({
@@ -811,11 +827,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       setSimulatedMismatch(false);
       setDetectedLandmarks(null);
       setDetectedFaceBox(null);
+      setBiometricCountdown(null);
+      setCurrentLivenessChallenge(null);
+      setLivenessConfirmed(false);
       resetLivenessState();
       return;
     }
 
     resetLivenessState();
+    setLivenessConfirmed(false);
+    setBiometricCountdown(null);
     setDetectedLandmarks(null);
     setDetectedFaceBox(null);
 
@@ -905,6 +926,12 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           setFaceStatusMessage(result.statusMessage);
         } else {
           setFaceDetected(true);
+          
+          // Inicia contagem regressiva para prova de vida se detectar rosto pela primeira vez
+          if (biometricCountdown === null && !currentLivenessChallenge && !livenessConfirmed && biometricState === 'detecting_face') {
+            setBiometricCountdown(3);
+          }
+
           setDetectedFaceBox(result.faceBox || null);
           setDetectedLandmarks(result.landmarks || null);
           setBiometricEngineName(
@@ -1262,7 +1289,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     // 1. REGRA AUTOMÁTICA DE ANTECEDÊNCIA MÁXIMA (CLT Art. 58 § 1º e Art. 4º)
     // =========================================================================
     if (tipo === 'ENTRADA' && colab.regraAntecedenciaAtiva !== false) {
-      const [hInicio, mInicio] = colab.horarioInicio.split(':').map(Number);
+      const [hInicio, mInicio] = (colab.horarioInicio || '08:00').split(':').map(Number);
       const minutosInicioContratado = hInicio * 60 + mInicio;
       const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
 
@@ -3215,11 +3242,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 ? 'border-emerald-500 shadow-[0_0_25px_rgba(16,185,129,0.5)]'
                 : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
                 ? 'border-rose-600 shadow-[0_0_25px_rgba(225,29,72,0.5)]'
-                : biometricState === 'analyzing_face'
+                : biometricState === 'analyzing_face' || biometricCountdown !== null
                 ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)]'
                 : 'border-slate-800'
             }`}>
               
+              {/* Círculo de Scanner Animado (Solicitado via CSS) */}
+              <div className={`absolute inset-0 rounded-full z-10 pointer-events-none biometric-modal-scanner-circle ${biometricState === 'verified' ? 'verified' : ''}`}></div>
+
               <video
                 ref={videoRef}
                 autoPlay
@@ -3227,6 +3257,34 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 muted
                 className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isCameraActive ? 'opacity-100' : 'opacity-10'}`}
               />
+
+              {/* Contador Regressivo Centralizado */}
+              {biometricCountdown !== null && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/20 backdrop-blur-[2px]">
+                  <div className="flex flex-col items-center">
+                    <span className="text-7xl font-black text-white animate-ping drop-shadow-[0_0_15px_rgba(255,255,255,0.6)]">
+                      {biometricCountdown}
+                    </span>
+                    <span className="text-[10px] font-bold text-white uppercase tracking-widest mt-2 bg-amber-600 px-2 py-0.5 rounded shadow-lg">
+                      Prepare-se
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Instrução Dinâmica de Liveness após o Contador */}
+              {currentLivenessChallenge && !livenessConfirmed && biometricCountdown === null && (
+                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-amber-950/40 backdrop-blur-[1px] p-4 text-center animate-in fade-in zoom-in-95 duration-300">
+                  <div className="bg-amber-500 text-slate-950 px-4 py-2 rounded-2xl shadow-2xl border-2 border-white/20 animate-bounce">
+                    <span className="text-sm font-black uppercase tracking-tight">
+                      {currentLivenessChallenge.actionPrompt}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-amber-100 font-bold mt-3 max-w-[180px] drop-shadow-md">
+                    {currentLivenessChallenge.instruction}
+                  </span>
+                </div>
+              )}
 
               {/* Status de Câmera Desativada */}
               {!isCameraActive && biometricState !== 'unregistered_biometrics' && (

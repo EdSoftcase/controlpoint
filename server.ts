@@ -48,13 +48,18 @@ export function encryptBiometricTemplate(text: string): string {
 
 // Logging utility
 async function logEvent(tenantId: string, event: string) {
-  if (!supabase) return;
+  console.log(`logEvent called: tenant=${tenantId}, event=${event}`);
+  if (!supabase) {
+    console.error('logEvent failed: Supabase client is not initialized.');
+    return;
+  }
   const { error } = await supabase.from('logs').insert({
     tenant_id: tenantId,
     event,
     timestamp: new Date().toISOString()
   });
   if (error) console.error('Error logging event:', error);
+  else console.log('Log event inserted successfully');
 }
 
 // Helper: Calculate distance
@@ -445,6 +450,7 @@ app.post('/api/save-tenant', async (req, res) => {
 
 // Save Point Registration
 app.post('/api/save-point', async (req, res) => {
+  console.log('Received POST request at /api/save-point');
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
   
