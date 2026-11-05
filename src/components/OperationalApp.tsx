@@ -543,9 +543,23 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [selectedTenantId, setSelectedTenantId] = useState<string>('tenant-01');
   const [localEstabelecimentos, setLocalEstabelecimentos] = useState<Estabelecimento[]>(DEFAULT_ESTABELECIMENTOS);
   const estabelecimentos = (propEstabelecimentos && propEstabelecimentos.length > 0) ? propEstabelecimentos : (localEstabelecimentos.length > 0 ? localEstabelecimentos : DEFAULT_ESTABELECIMENTOS);
-  const setEstabelecimentos = (ests: Estabelecimento[]) => {
+  const setEstabelecimentos = async (ests: Estabelecimento[]) => {
     setLocalEstabelecimentos(ests.length > 0 ? ests : DEFAULT_ESTABELECIMENTOS);
     propOnUpdateEstabelecimentos?.(ests);
+
+    if (supabase) {
+      const dbEsts = ests.map(e => ({
+        establishment_id: e.id,
+        tenant_id: e.tenantId,
+        nome: e.nome,
+        cnpj: e.cnpj,
+        latitude: e.latitude,
+        longitude: e.longitude,
+        cerca_raio_metros: e.cercaRaioMetros,
+        bloquear_fora_do_raio: e.bloquearForaDoRaio
+      }));
+      await supabase.from('establishments').upsert(dbEsts);
+    }
   };
 
   const [coletores, setColetores] = useState<ColetorTablet[]>([]);

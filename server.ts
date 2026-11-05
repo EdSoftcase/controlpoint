@@ -557,7 +557,10 @@ async function startServer() {
     server: { middlewareMode: true },
     appType: 'spa'
   });
-  app.use(vite.middlewares);
+  
   app.listen(3000, () => console.log('Server running on port 3000'));
+  
+  // O middleware do Vite DEVE vir DEPOIS das rotas de API
+  app.use(vite.middlewares);
 }
 startServer();
