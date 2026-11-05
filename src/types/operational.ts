@@ -154,6 +154,7 @@ export interface SolicitacaoHoraExtra {
 }
 
 export interface RegistroPontoREPP {
+  id?: string;
   nsr: number;
   tenantId: string;
   empregadorRazaoSocial: string;

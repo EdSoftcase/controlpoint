@@ -104,7 +104,8 @@ import {
   UserX,
   Eye,
   EyeOff,
-  Award
+  Award,
+  Sparkles
 } from 'lucide-react';
 
 export const DEFAULT_TENANT: Tenant = {

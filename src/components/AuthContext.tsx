@@ -7,8 +7,24 @@ const STORAGE_KEY_KEY = 'sc_supabase_anon';
 const FALLBACK_URL = 'https://aadrcdajajiqgpufixkt.supabase.co';
 const FALLBACK_KEY = 'sb_publishable_a4i82ZX8uVCVN1rEhjV0Eg_E1QeOMnu';
 
-const INITIAL_URL = localStorage.getItem(STORAGE_KEY_URL) || import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
-const INITIAL_KEY = localStorage.getItem(STORAGE_KEY_KEY) || import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_KEY;
+export function safeGetStorage(key: string): string | null {
+  try {
+    return typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function safeSetStorage(key: string, val: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) window.localStorage.setItem(key, val);
+  } catch {
+    // ignore
+  }
+}
+
+const INITIAL_URL = safeGetStorage(STORAGE_KEY_URL) || import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
+const INITIAL_KEY = safeGetStorage(STORAGE_KEY_KEY) || import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_KEY;
 
 function createSupabaseClient(url: string, key: string) {
   if (url && key) {
@@ -57,8 +73,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [supabaseInstance, setSupabaseInstance] = useState<SupabaseClient>(globalSupabase);
 
   const updateSupabaseConfig = (url: string, key: string) => {
-    localStorage.setItem(STORAGE_KEY_URL, url);
-    localStorage.setItem(STORAGE_KEY_KEY, key);
+    safeSetStorage(STORAGE_KEY_URL, url);
+    safeSetStorage(STORAGE_KEY_KEY, key);
     const next = createSupabaseClient(url, key);
     globalSupabase = next;
     setSupabaseInstance(next);
@@ -66,8 +82,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     // Synchronize backend if we have saved config
-    const savedUrl = localStorage.getItem(STORAGE_KEY_URL);
-    const savedService = localStorage.getItem('sc_supabase_service');
+    const savedUrl = safeGetStorage(STORAGE_KEY_URL);
+    const savedService = safeGetStorage('sc_supabase_service');
     if (savedUrl && savedService) {
       fetch('/api/update-config', {
         method: 'POST',

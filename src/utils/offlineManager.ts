@@ -31,7 +31,7 @@ export function enqueueOfflineRecord(registro: RegistroPontoREPP, driftMs: numbe
   try {
     const queue = getOfflineQueue();
     const newItem: OfflineQueueItem = {
-      id: registro.id || `offline-${Date.now()}`,
+      id: registro.id || (registro.nsr ? `nsr-${registro.nsr}` : `offline-${Date.now()}`),
       registro,
       timestampLocal: new Date().toISOString(),
       deviceTimeOffsetMs: driftMs,
