@@ -297,20 +297,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 antialiased">
-      {/* Brand Header */}
+      {/* Brand Header & Modern Logo */}
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-slate-900 text-white shadow-xs mb-3">
-          <Clock className="w-6 h-6 text-emerald-400" />
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-blue-600 to-emerald-500 text-white shadow-xl shadow-blue-500/20 mb-3">
+          <ShieldCheck className="w-7 h-7" />
         </div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Softcase Ponto
+        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+          Point Control
         </h1>
         <p className="mt-1 text-xs text-slate-500 font-medium">
-          Sistema de Controle de Jornada & Registro Eletrônico REP-P / PTRP
+          Sistema de Controle de Jornada & Registro Eletrônico REP-P
         </p>
-        <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+        <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>Supabase Conectado · aadrcdajajiqgpufixkt</span>
+          <span>Conectado ao Servidor Cloud Seguro</span>
         </div>
       </div>
 

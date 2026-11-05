@@ -1,6 +1,6 @@
 {
-  "name": "Softcase Ponto - Especificação Funcional",
-  "description": "Especificação Funcional Detalhada (Documento 02), Matriz de Conformidade Portaria 671/2021 e Protótipo Interativo dos Módulos 01 e 02.",
+  "name": "Point Control - Sistema de Ponto REP-P",
+  "description": "Sistema de Controle de Jornada & Registro Eletrônico REP-P / PTRP com Biometria e Conformidade Portaria 671.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -72,7 +72,7 @@ export default function App() {
         setTestFeedback({ 
           loading: false, 
           success: true, 
-          message: `Conexão Supabase Real Confirmada! (${latency}ms) — URL: https://aadrcdajajiqgpufixkt.supabase.co` 
+          message: `Conexão Cloud Segura Confirmada! (${latency}ms) — Servidor Ativo` 
         });
       }
     } catch (err: any) {
@@ -163,7 +163,15 @@ export default function App() {
       {/* Sidebar Navigation (Desktop) */}
       <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0">
         <div className="h-16 flex items-center px-6 border-b border-slate-200">
-           <span className="text-lg font-bold tracking-tight text-slate-900">Softcase Ponto</span>
+           <div className="flex items-center gap-3">
+             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-blue-600 to-emerald-500 flex items-center justify-center text-white shadow-md shadow-blue-500/25">
+               <ShieldCheck className="w-4 h-4" />
+             </div>
+             <div>
+               <h1 className="text-sm font-extrabold tracking-tight text-slate-900 leading-none">Point Control</h1>
+               <span className="text-[9px] font-semibold text-emerald-600 tracking-wider uppercase">REP-P Secure</span>
+             </div>
+           </div>
         </div>
         
         <nav className="flex-1 p-4 space-y-1">

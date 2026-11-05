@@ -435,7 +435,7 @@ export function matchBiometricFace(
       matched: false,
       similarity: 42.3,
       distance: 0.88,
-      threshold: 85.0,
+      threshold: 88.0,
       verdict: 'DIVERGENCIA_FACIAL',
       details: 'Divergência Biométrica: Rosto capturado não confere com o titular cadastrado.'
     };
@@ -446,7 +446,7 @@ export function matchBiometricFace(
       matched: false,
       similarity: 0,
       distance: 1.0,
-      threshold: 85.0,
+      threshold: 88.0,
       verdict: 'QUALIDADE_INSUFICIENTE',
       details: 'Não foi possível extrair o vetor descritor com qualidade suficiente.'
     };
@@ -468,10 +468,10 @@ export function matchBiometricFace(
     // Ignora quota local
   }
 
-  // Se o colaborador já foi previamente homologado (ex: Carlos Silva no seed),
-  // e ainda não salvou o vetor bruto, geramos a âncora canônica baseada no ID e salvamos.
+  // Se não houver template salvo, geramos um vetor determinístico único e exclusivo para este colaborador.
+  // IMPORTANTE: Nunca geramos o template a partir da varredura ao vivo para evitar que qualquer pessoa bata o ponto.
   if (!targetVector) {
-    targetVector = generateCanonicalAnchorVector(colaboradorId, liveVector);
+    targetVector = generateDeterministicSeedVector(colaboradorId);
     try {
       localStorage.setItem(storageKey, JSON.stringify(targetVector));
     } catch (e) {
@@ -479,7 +479,7 @@ export function matchBiometricFace(
     }
   }
 
-  // Cálculo da Similaridade de Cosseno: sum(A_i * B_i) para vetores normalizados
+  // Cálculo rigoroso da Similaridade de Cosseno (Produto Escalar L2 de vetores normalizados)
   let dotProduct = 0;
   let eucDistSq = 0;
   for (let i = 0; i < 64; i++) {
@@ -488,14 +488,10 @@ export function matchBiometricFace(
     eucDistSq += diff * diff;
   }
 
-  // Similaridade de Cosseno varia de -1 a 1. Normaliza para 0% a 100%
-  // Rosto humano sob a mesma câmera atinge tipicamente 0.92 a 0.99
-  const rawSimilarity = Math.max(0, dotProduct);
-  const similarityPercent = Number(
-    Math.min(99.6, Math.max(92.4, rawSimilarity * 98.5 + (Math.random() * 0.8))).toFixed(1)
-  );
+  // Similaridade de Cosseno real sem pisos artificiais (0% a 100%)
+  const similarityPercent = Number((Math.max(0, dotProduct) * 100).toFixed(1));
   const distance = Number(Math.sqrt(eucDistSq).toFixed(4));
-  const threshold = 85.0;
+  const threshold = 88.0; // Limiar corporativo rigoroso REP-P
 
   const matched = similarityPercent >= threshold;
 
@@ -507,12 +503,12 @@ export function matchBiometricFace(
     verdict: matched ? 'APROVADO' : 'DIVERGENCIA_FACIAL',
     details: matched
       ? `Face confirmada! Similaridade biométrica: ${similarityPercent}% (Limiar Mínimo: ${threshold}%)`
-      : `Divergência Biométrica: Similaridade ${similarityPercent}% abaixo do limiar de ${threshold}%`
+      : `Divergência Biométrica: Similaridade ${similarityPercent}% abaixo do limiar estrito de ${threshold}%. Acesso negado para impedir fraude de identidade.`
   };
 }
 
 /**
- * Salva o vetor biométrico após captura no módulo de cadastro/configuração
+ * Salva o vetor biométrico exclusivo após captura no módulo de cadastro/configuração
  */
 export function saveBiometricTemplate(colaboradorId: string, vector: number[]): string {
   const hash = `ISO19794-5:SHA256:${Date.now().toString(16).toUpperCase()}`;
@@ -535,9 +531,9 @@ export function saveBiometricTemplate(colaboradorId: string, vector: number[]): 
 }
 
 /**
- * Gera vetor canônico consistente baseado no ID do colaborador para persistência transparente
+ * Gera um vetor determinístico único e distinto para cada colaborador com base em seu ID
  */
-function generateCanonicalAnchorVector(colaboradorId: string, seedVector: number[]): number[] {
+function generateDeterministicSeedVector(colaboradorId: string): number[] {
   let hashVal = 0;
   for (let i = 0; i < colaboradorId.length; i++) {
     hashVal = (hashVal << 5) - hashVal + colaboradorId.charCodeAt(i);
@@ -547,9 +543,9 @@ function generateCanonicalAnchorVector(colaboradorId: string, seedVector: number
   const anchor = new Array(64);
   let norm = 0;
   for (let i = 0; i < 64; i++) {
-    const perturbation = Math.sin((hashVal + i) * 12.9898) * 0.05;
-    anchor[i] = seedVector[i] * 0.95 + perturbation * 0.05;
-    norm += anchor[i] * anchor[i];
+    const val = Math.abs(Math.sin((hashVal + 1) * (i + 1) * 12.9898));
+    anchor[i] = val;
+    norm += val * val;
   }
   norm = Math.sqrt(norm) || 1;
   return anchor.map((v) => Number((v / norm).toFixed(5)));
