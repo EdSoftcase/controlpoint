@@ -150,3 +150,44 @@ export function validatePIS(pisInput: string): boolean {
   const dv = rest < 2 ? 0 : 11 - rest;
   return dv === parseInt(digits[10], 10);
 }
+
+/**
+ * Valida se o PIN/Token de contingência ainda é elegível para uso.
+ * Regra Portaria 671 / Regra de Negócio: O PIN/Token é válido EXCLUSIVAMENTE no 1º dia de trabalho (recém-contratado).
+ * A partir do 2º dia, ele expira automaticamente e a marcação exige Leitura Facial.
+ */
+export function checkPinUsageEligibility(
+  colab?: { dataAdmissao?: string; created_at?: string },
+  registrosPontoColab?: { dataHora?: string }[]
+): { isEligible: boolean; reason?: string } {
+  const todayYMD = new Date().toISOString().slice(0, 10);
+
+  // 1. Se o colaborador possui registros de ponto de dias anteriores ao dia de hoje
+  if (registrosPontoColab && registrosPontoColab.length > 0) {
+    const datasPontoAnteriores = registrosPontoColab
+      .map(r => (r.dataHora ? r.dataHora.slice(0, 10) : ''))
+      .filter(d => d && d < todayYMD);
+
+    if (datasPontoAnteriores.length > 0) {
+      return {
+        isEligible: false,
+        reason: 'O PIN/Token temporário expira após o 1º dia de uso. Como você já possui pontos registrados em dias anteriores, a marcação exige Leitura Facial.'
+      };
+    }
+  }
+
+  // 2. Se a data de admissão for anterior a hoje
+  if (colab && colab.dataAdmissao && colab.dataAdmissao < todayYMD) {
+    const dataAdmissaoDate = new Date(colab.dataAdmissao + 'T00:00:00');
+    const hojeDate = new Date(todayYMD + 'T00:00:00');
+    const diffDays = Math.floor((hojeDate.getTime() - dataAdmissaoDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays >= 1) {
+      return {
+        isEligible: false,
+        reason: `O PIN/Token era válido exclusivamente no 1º dia de uso (${colab.dataAdmissao}). O prazo de contingência expirou. A Leitura Facial é obrigatória.`
+      };
+    }
+  }
+
+  return { isEligible: true };
+}

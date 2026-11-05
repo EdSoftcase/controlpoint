@@ -40,7 +40,8 @@ import {
   validateCNPJ,
   formatCNPJ,
   validateCPF,
-  formatCPF
+  formatCPF,
+  checkPinUsageEligibility
 } from '../utils/brazilianValidators';
 import {
   detectFaceAndBiometrics,
@@ -3415,11 +3416,17 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                         />
                         <button
                           onClick={() => {
+                            const colabRegistros = registrosPonto.filter(r => r.colaboradorId === biometricTargetColab?.id);
+                            const eligibility = checkPinUsageEligibility(biometricTargetColab || undefined, colabRegistros);
+                            if (!eligibility.isEligible) {
+                              alert(`Bloqueio de Segurança: ${eligibility.reason}`);
+                              return;
+                            }
                             const expectedPin = biometricTargetColab?.pinColetor || '123456';
                             if (kioskPinInput === expectedPin || kioskPinInput === '123456') {
                               setBiometricState('verified');
                               setLivenessConfirmed(true);
-                              setFaceStatusMessage('Identificação confirmada via PIN de Contingência (Portaria 671)');
+                              setFaceStatusMessage('Identificação confirmada via PIN de Contingência (1º Dia)');
                               setShowPinFallback(false);
                             } else {
                               alert(`PIN incorreto. O PIN cadastrado é "${expectedPin}".`);

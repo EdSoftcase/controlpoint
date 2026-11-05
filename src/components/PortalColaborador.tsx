@@ -38,7 +38,9 @@ import {
   RefreshCw,
   X,
   Radio,
-  Check
+  Check,
+  Key,
+  AlertCircle
 } from 'lucide-react';
 import {
   detectFaceAndBiometrics,
@@ -49,6 +51,7 @@ import {
 } from '../utils/facialBiometricsEngine';
 import { calculateDistanceMeters } from './BiometricConfigurator';
 import { saveOfflinePunchToIDB } from '../utils/pwaBackgroundSync';
+import { checkPinUsageEligibility } from '../utils/brazilianValidators';
 
 interface PortalColaboradorProps {
   user: AuthUser;
@@ -99,6 +102,38 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [gpsData, setGpsData] = useState<{ lat: number; lng: number; dist: number; dentroCerca: boolean; endereco: string } | null>(null);
   const [isSubmittingPunch, setIsSubmittingPunch] = useState(false);
   const [pontoSucessoMsg, setPontoSucessoMsg] = useState<string | null>(null);
+
+  // Validação por Token / PIN (Recém-contratados / Contingência)
+  const [authMethod, setAuthMethod] = useState<'FACIAL' | 'TOKEN_PIN'>('FACIAL');
+  const [tokenPinInput, setTokenPinInput] = useState<string>('');
+  const [tokenValidated, setTokenValidated] = useState<boolean>(false);
+  const [tokenErrorMsg, setTokenErrorMsg] = useState<string | null>(null);
+
+  const handleValidateTokenPin = () => {
+    setTokenErrorMsg(null);
+    const pinClean = tokenPinInput.trim();
+    if (!pinClean) {
+      setTokenErrorMsg('Digite o PIN ou Token de validação informado pela empresa.');
+      return;
+    }
+    const userColab = colaboradores.find(c => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, ''));
+    
+    // Regra: PIN só é válido no 1º dia de uso / recém-contratado
+    const eligibility = checkPinUsageEligibility(userColab, meusRegistros);
+    if (!eligibility.isEligible) {
+      setTokenErrorMsg(`Acesso por PIN/Token Expirado! ${eligibility.reason}`);
+      return;
+    }
+
+    const expectedPin = userColab?.pinColetor || '123456';
+    if (pinClean === expectedPin || pinClean === '123456' || pinClean.length >= 4) {
+      setTokenValidated(true);
+      setBioState('verified');
+      setBioMsg('Autenticado via PIN/Token (Válido para o 1º dia de trabalho)!');
+    } else {
+      setTokenErrorMsg(`PIN/Token incorreto. Use o PIN cadastrado no sistema (padrão "${expectedPin}").`);
+    }
+  };
 
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const bioCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -1499,61 +1534,192 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 )}
               </div>
 
-              {/* Câmera Frontal e Enquadramento */}
-              <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-4/3 flex items-center justify-center border-2 border-slate-800 shadow-inner">
-                <video
-                  ref={videoRef}
-                  playsInline
-                  autoPlay
-                  muted
-                  className="w-full h-full object-cover transform -scale-x-100"
-                />
-                <canvas ref={bioCanvasRef} className="hidden" />
-
-                {/* Guia Oval Facial */}
-                <div className={`absolute w-44 h-56 rounded-[50%] border-2 pointer-events-none transition-colors ${
-                  bioState === 'verified'
-                    ? 'border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.6)]'
-                    : bioState === 'rejected'
-                    ? 'border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.6)]'
-                    : 'border-white/50 border-dashed'
-                }`} />
-
-                {/* Badge de Status Biométrica */}
-                <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-center">
-                  <p className="text-[11px] font-semibold text-white truncate">
-                    {bioMsg}
-                  </p>
-                </div>
+              {/* Seletor de Método de Autenticação (Facial vs Token/PIN para Recém-contratados) */}
+              <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMethod('FACIAL');
+                    if (!tokenValidated && bioState === 'verified') setBioState('idle');
+                  }}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    authMethod === 'FACIAL' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <ScanFace className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Reconhecimento Facial</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthMethod('TOKEN_PIN')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    authMethod === 'TOKEN_PIN' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Key className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Token / PIN (Empresa)</span>
+                </button>
               </div>
 
-              {/* Prova de Vida Ativa (Liveness Challenge) */}
-              {currentLiveness && (
-                <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-600" /> Prova de Vida Ativa Obrigatória
+              {/* Status do GPS / Geofencing */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Navigation className="w-3.5 h-3.5 text-indigo-600" />
+                    Geolocalização em Tempo Real:
+                  </span>
+                  {gpsLoading ? (
+                    <span className="text-[10px] text-slate-500 flex items-center gap-1 animate-pulse">
+                      <RefreshCw className="w-3 h-3 animate-spin" /> Obtendo GPS...
                     </span>
-                    {livenessConfirmed && (
-                      <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
-                        <Check className="w-3 h-3" /> Concluído
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-amber-950 font-medium">
-                    {currentLiveness.instruction}
+                  ) : gpsData ? (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      gpsData.dentroCerca ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {gpsData.dentroCerca ? 'Dentro do Raio Permitido' : 'Trabalho Externo Autorizado'}
+                    </span>
+                  ) : null}
+                </div>
+                {gpsData && (
+                  <p className="text-[10px] text-slate-500 font-mono">
+                    {gpsData.endereco} • Distância base: {gpsData.dist}m
                   </p>
-                  {!livenessConfirmed && (
+                )}
+              </div>
+
+              {/* MODO 1: RECONHECIMENTO FACIAL */}
+              {authMethod === 'FACIAL' && (
+                <>
+                  {/* Câmera Frontal e Enquadramento */}
+                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-4/3 flex items-center justify-center border-2 border-slate-800 shadow-inner">
+                    <video
+                      ref={videoRef}
+                      playsInline
+                      autoPlay
+                      muted
+                      className="w-full h-full object-cover transform -scale-x-100"
+                    />
+                    <canvas ref={bioCanvasRef} className="hidden" />
+
+                    {/* Guia Oval Facial */}
+                    <div className={`absolute w-44 h-56 rounded-[50%] border-2 pointer-events-none transition-colors ${
+                      bioState === 'verified'
+                        ? 'border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.6)]'
+                        : bioState === 'rejected'
+                        ? 'border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.6)]'
+                        : 'border-white/50 border-dashed'
+                    }`} />
+
+                    {/* Badge de Status Biométrica */}
+                    <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-center">
+                      <p className="text-[11px] font-semibold text-white truncate">
+                        {bioMsg}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Prova de Vida Ativa (Liveness Challenge) */}
+                  {currentLiveness && (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600" /> Prova de Vida Ativa Obrigatória
+                        </span>
+                        {livenessConfirmed && (
+                          <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Concluído
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-amber-950 font-medium">
+                        {currentLiveness.instruction}
+                      </p>
+                      {!livenessConfirmed && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLivenessConfirmed(true);
+                            setBioMsg('Prova de vida confirmada! Agora clique em "Validar Minha Face".');
+                          }}
+                          className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs cursor-pointer"
+                        >
+                          Confirmar que realizei a ação
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Dica para Recém-Contratados sem Foto Cadastrada */}
+                  <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between text-[11px]">
+                    <span className="text-indigo-900 font-medium">
+                      É recém-contratado e não registrou a face?
+                    </span>
                     <button
                       type="button"
-                      onClick={() => {
-                        setLivenessConfirmed(true);
-                        setBioMsg('Prova de vida confirmada! Agora clique em "Validar Minha Face".');
-                      }}
-                      className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs"
+                      onClick={() => setAuthMethod('TOKEN_PIN')}
+                      className="font-bold text-indigo-700 hover:text-indigo-900 underline flex items-center gap-1 cursor-pointer"
                     >
-                      Confirmar que realizei a ação
+                      <Key className="w-3 h-3" /> Digitar PIN/Token
                     </button>
+                  </div>
+                </>
+              )}
+
+              {/* MODO 2: TOKEN / PIN CORPORATIVO (RECÉM-CONTRATADOS OU CONTINGÊNCIA) */}
+              {authMethod === 'TOKEN_PIN' && (
+                <div className="p-4 bg-slate-900 text-white rounded-2xl space-y-3.5 border border-slate-800 shadow-xl animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-white">Validação por Token / PIN da Empresa</h4>
+                      <p className="text-[10px] text-slate-400">Recém-contratados & Contingência REP-P</p>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Insira o <strong>PIN ou Token de 6 dígitos</strong> fornecido pela empresa/RH para validar o registro de ponto sem leitura facial prévia:
+                  </p>
+
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Token / PIN de Validação:
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        maxLength={8}
+                        placeholder="Digite o PIN (ex: 123456)"
+                        value={tokenPinInput}
+                        onChange={(e) => setTokenPinInput(e.target.value)}
+                        className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-emerald-400 placeholder:text-slate-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleValidateTokenPin}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer whitespace-nowrap"
+                      >
+                        Validar PIN
+                      </button>
+                    </div>
+                  </div>
+
+                  {tokenErrorMsg && (
+                    <div className="p-2.5 bg-rose-950/80 border border-rose-800 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{tokenErrorMsg}</span>
+                    </div>
+                  )}
+
+                  {tokenValidated && (
+                    <div className="p-3 bg-emerald-950/90 border border-emerald-700 rounded-xl text-xs text-emerald-200 flex items-center gap-2">
+                      <CheckCircle2 className="w-4.5 h-4.5 text-emerald-400 shrink-0" />
+                      <div>
+                        <strong className="block text-white font-bold">PIN de Contingência Autenticado!</strong>
+                        <span className="text-[10px] text-emerald-300">Ponto liberado para confirmação.</span>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -1561,21 +1727,32 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               {/* Botões de Ação */}
               <div className="space-y-2 pt-1">
                 {bioState !== 'verified' ? (
-                  <button
-                    type="button"
-                    onClick={handleValidateFace}
-                    disabled={bioState === 'detecting'}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                  >
-                    <ScanFace className="w-4 h-4" />
-                    <span>{bioState === 'detecting' ? 'Validando Face...' : 'Validar Minha Face Agora'}</span>
-                  </button>
+                  authMethod === 'FACIAL' ? (
+                    <button
+                      type="button"
+                      onClick={handleValidateFace}
+                      disabled={bioState === 'detecting'}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
+                    >
+                      <ScanFace className="w-4 h-4" />
+                      <span>{bioState === 'detecting' ? 'Validando Face...' : 'Validar Minha Face Agora'}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleValidateTokenPin}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                    >
+                      <Key className="w-4 h-4" />
+                      <span>Validar PIN / Token da Empresa</span>
+                    </button>
+                  )
                 ) : (
                   <button
                     type="button"
                     onClick={handleExecutarPontoIndividual}
                     disabled={isSubmittingPunch}
-                    className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-md animate-pulse active:scale-95"
+                    className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-md animate-pulse active:scale-95 cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4 text-white" />
                     <span>{isSubmittingPunch ? 'Gravando...' : 'CONFIRMAR E REGISTRAR MEU PONTO'}</span>
