@@ -85,8 +85,15 @@ export default function App() {
   };
   // Estado de Autenticação: Inicializa deslogado (null) para exibir a tela de login
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'spec' | 'prototype' | 'legal' | 'plan'>('operational');
+  const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'spec' | 'prototype' | 'legal' | 'plan'>('colaborador');
   const [prototypeTargetScreen, setPrototypeTargetScreen] = useState<string>('adm-02');
+
+  // Enforce colaborador view for non-super-admins
+  React.useEffect(() => {
+    if (currentUser && currentUser.role !== 'SUPER_ADMIN') {
+      setActiveView('colaborador');
+    }
+  }, [currentUser]);
   // Estado do Menu Hambúrguer Responsivo (Mobile & Tablet)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -195,13 +202,14 @@ export default function App() {
   React.useEffect(() => {
     if (session && session.user && !currentUser) {
       const meta = session.user.user_metadata;
+      const isSuper = session.user.email === 'admin@softcase.com.br' || session.user.email === 'edsonfreire.santos@hotmail.com';
       setCurrentUser({
         id: session.user.id,
         nome: meta.nome || 'Usuário Supabase',
         email: session.user.email || '',
         cpf: meta.cpf || '',
-        role: meta.role || 'COLABORADOR',
-        roleLabel: meta.roleLabel || 'Colaborador',
+        role: isSuper ? 'SUPER_ADMIN' : 'COLABORADOR',
+        roleLabel: isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT',
         tenantId: meta.tenantId || 'tenant-01',
         tenantNome: meta.tenantNome || 'Empresa',
         mfaHabilitado: false

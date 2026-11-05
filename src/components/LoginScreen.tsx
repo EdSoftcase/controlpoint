@@ -158,14 +158,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       });
 
       if (data?.user && !sbError) {
-        // Mapear Supabase User para AuthUser
+        const isSuper = (data.user.email === 'admin@softcase.com.br' || data.user.email === 'edsonfreire.santos@hotmail.com');
         const authUser: AuthUser = {
           id: data.user.id,
           nome: data.user.user_metadata?.nome || data.user.email?.split('@')[0] || 'Usuário',
           email: data.user.email || targetEmail,
           cpf: data.user.user_metadata?.cpf || '000.000.000-00',
-          role: data.user.user_metadata?.role || 'SUPER_ADMIN',
-          roleLabel: data.user.user_metadata?.roleLabel || 'Super Administrador Softcase',
+          role: isSuper ? 'SUPER_ADMIN' : 'COLABORADOR',
+          roleLabel: isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT',
           tenantId: data.user.user_metadata?.tenantId || 'tenant-01',
           tenantNome: data.user.user_metadata?.tenantNome || 'Softcase Tecnologia',
           mfaHabilitado: !!data.user.user_metadata?.mfaHabilitado

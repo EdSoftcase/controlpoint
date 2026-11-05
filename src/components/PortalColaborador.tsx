@@ -682,7 +682,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Solicitar H.E.</span>
           </button>
-          {user.role === 'SUPER_ADMIN' && onRegistrarPonto && (
+          {user.role === 'SUPER_ADMIN' && (user.email === 'admin@softcase.com.br' || user.email === 'edsonfreire.santos@hotmail.com') && onRegistrarPonto && (
             <button
               onClick={onRegistrarPonto}
               className="px-2.5 py-2 text-slate-400 hover:text-slate-700 text-[11px] font-medium transition-colors flex items-center gap-1 shrink-0"
