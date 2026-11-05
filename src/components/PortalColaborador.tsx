@@ -88,6 +88,63 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
 
   // =========================================================================
+  // RELÓGIO EM TEMPO REAL & CONTAGEM REGRESSIVA DE ANTECEDÊNCIA (15 MIN)
+  // =========================================================================
+  const [nowClock, setNowClock] = useState<Date>(new Date());
+  React.useEffect(() => {
+    const timer = setInterval(() => setNowClock(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const userColab = colaboradores.find(
+    (c) => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, '')
+  );
+  const horarioInicioStr = userColab?.horarioInicio || '08:00';
+  const maxAntecedenciaMin = userColab?.maxMinutosAntecedenciaPermitido ?? 15;
+  const regraAntecedenciaAtiva = userColab?.regraAntecedenciaAtiva ?? true;
+
+  // Registros do colaborador logado (Garantia de isolamento de dados)
+  const userCpfDigits = user.cpf.replace(/\D/g, '');
+  const meusRegistros = registros.filter(
+    (r) => r.colaboradorCpf.replace(/\D/g, '') === userCpfDigits
+  );
+
+  const hojeStr = nowClock.toISOString().slice(0, 10);
+  const batidasHoje = meusRegistros.filter((r) => r.dataHora.startsWith(hojeStr));
+  const isFirstPunchToday = batidasHoje.length === 0;
+
+  // Cálculo de permissão de batida e contagem regressiva
+  const [startH, startM] = horarioInicioStr.split(':').map(Number);
+  const shiftStartTotalSeconds = (startH * 60 + startM) * 60;
+  const allowedStartTotalSeconds = shiftStartTotalSeconds - (maxAntecedenciaMin * 60);
+  const currentTotalSeconds = nowClock.getHours() * 3600 + nowClock.getMinutes() * 60 + nowClock.getSeconds();
+
+  const allowedStartMinutesDay = (startH * 60 + startM) - maxAntecedenciaMin;
+  const allowedH = Math.floor(((allowedStartMinutesDay + 1440) % 1440) / 60);
+  const allowedM = (allowedStartMinutesDay + 1440) % 60;
+  const allowedTimeFormatted = `${String(allowedH).padStart(2, '0')}:${String(allowedM).padStart(2, '0')}`;
+
+  let isPunchAllowed = true;
+  let secondsRemaining = 0;
+
+  if (isFirstPunchToday && regraAntecedenciaAtiva) {
+    if (currentTotalSeconds < allowedStartTotalSeconds) {
+      isPunchAllowed = false;
+      secondsRemaining = allowedStartTotalSeconds - currentTotalSeconds;
+    }
+  }
+
+  const formatCountdown = (totalSecs: number) => {
+    if (totalSecs <= 0) return '00:00:00';
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const formattedLiveClock = nowClock.toLocaleTimeString('pt-BR');
+
+  // =========================================================================
   // ESTADOS DO REGISTRO DE PONTO INDIVIDUAL (MOBILE / TRABALHO EXTERNO)
   // =========================================================================
   const [isBaterPontoModalOpen, setIsBaterPontoModalOpen] = useState(false);
@@ -159,12 +216,6 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [signatureSuccessMsg, setSignatureSuccessMsg] = useState<string | null>(null);
-
-  // Registros do colaborador logado
-  const userCpfDigits = user.cpf.replace(/\D/g, '');
-  const meusRegistros = registros.filter(
-    (r) => r.colaboradorCpf.replace(/\D/g, '') === userCpfDigits
-  );
 
   // Solicitações de H.E. do colaborador logado
   const minhasHorasExtras = horasExtras.filter(
@@ -522,6 +573,77 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Relógio Digital em Tempo Real & Status de Liberação de Ponto com Contagem Regressiva */}
+      <div className={`p-5 rounded-2xl border transition-all shadow-md ${
+        isPunchAllowed 
+          ? 'bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-emerald-500/40 text-white' 
+          : 'bg-gradient-to-r from-amber-950 via-slate-900 to-amber-950 border-amber-500/50 text-white'
+      }`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
+          {/* Mostrador do Relógio Digital */}
+          <div className="flex items-center gap-4">
+            <div className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center font-mono font-bold shrink-0 border ${
+              isPunchAllowed 
+                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]' 
+                : 'bg-amber-950/80 border-amber-500/50 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.3)]'
+            }`}>
+              <Clock className="w-5 h-5 mb-0.5 animate-pulse" />
+              <span className="text-[10px] uppercase font-sans">Ao Vivo</span>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-extrabold font-mono tracking-wider text-white">
+                  {formattedLiveClock}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${
+                  isPunchAllowed 
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                }`}>
+                  {isPunchAllowed ? '🟢 LIBERADO PARA PONTO' : '⏳ ENTRADA BLOQUEADA'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-1">
+                Jornada Contratada: <strong>{horarioInicioStr} às 17:00</strong> · Antecedência Máxima: <strong>{maxAntecedenciaMin} min</strong> (Liberado a partir das <strong>{allowedTimeFormatted}</strong>)
+              </p>
+            </div>
+          </div>
+
+          {/* Contagem Regressiva / Indicador de Liberação */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            {!isPunchAllowed && (
+              <div className="bg-amber-950/90 border border-amber-500/60 p-3 rounded-xl text-center space-y-0.5">
+                <span className="text-[9px] font-mono uppercase text-amber-300 tracking-wider block">
+                  Tempo Restante para Liberar Entrada
+                </span>
+                <div className="text-xl font-bold font-mono text-amber-400 tracking-widest animate-pulse">
+                  {formatCountdown(secondsRemaining)}
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                if (!isPunchAllowed) {
+                  alert(`Bloqueio de Antecedência: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} minutos antes da jornada de ${horarioInicioStr}). Faltam ${formatCountdown(secondsRemaining)}.`);
+                } else {
+                  handleOpenPersonalPunch();
+                }
+              }}
+              className={`px-5 py-3 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${
+                isPunchAllowed
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-900/50 cursor-pointer active:scale-95'
+                  : 'bg-amber-800/80 hover:bg-amber-700/80 text-amber-100 border border-amber-500/50 cursor-pointer'
+              }`}
+            >
+              <Camera className="w-4 h-4" />
+              {isPunchAllowed ? 'Bater Meu Ponto Agora (Facial)' : `Entrada Liberada em ${formatCountdown(secondsRemaining)}`}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Banner de Boas-vindas do Colaborador com Gestor Imediato */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -560,14 +682,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Solicitar H.E.</span>
           </button>
-          <button
-            onClick={handleOpenPersonalPunch}
-            className="flex-1 lg:flex-none justify-center px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 shadow-sm whitespace-nowrap active:scale-95"
-          >
-            <Camera className="w-4 h-4 text-emerald-200 shrink-0" />
-            <span>Bater Meu Ponto (Mobile / Facial)</span>
-          </button>
-          {onRegistrarPonto && (
+          {user.role === 'SUPER_ADMIN' && onRegistrarPonto && (
             <button
               onClick={onRegistrarPonto}
               className="px-2.5 py-2 text-slate-400 hover:text-slate-700 text-[11px] font-medium transition-colors flex items-center gap-1 shrink-0"

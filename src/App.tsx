@@ -263,8 +263,8 @@ export default function App() {
         </div>
         
         <nav className="flex-1 p-4 space-y-1">
-          {/* ... Navigation links ... */}
-          {currentUser.role !== 'COLABORADOR' ? (
+          {currentUser.role === 'SUPER_ADMIN' ? (
+            <>
               <div className="space-y-1">
                 <button
                   onClick={() => {
@@ -322,46 +322,39 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ) : (
-              <button
-                onClick={() => setActiveView('colaborador')}
+
+              <button 
+                onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
                 className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
-                  activeView === 'colaborador'
-                    ? 'bg-slate-900 text-white font-semibold'
+                  activeView === 'operational' && operationalTab === 'config' 
+                    ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <User className="w-4 h-4" />
-                Meu Espelho
+                  <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
               </button>
-            )}
-
-            {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
-              <>
-                <button 
-                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
-                  className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
-                    activeView === 'operational' && operationalTab === 'config' 
-                      ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
-                >
-                    <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
-                </button>
-                <button onClick={() => setActiveView('spec')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'spec' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                    <FileText className="w-4 h-4"/> Especificação
-                </button>
-                <button onClick={() => setActiveView('prototype')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'prototype' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                    <Play className="w-4 h-4"/> Simulador
-                </button>
-                <button onClick={() => setActiveView('legal')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'legal' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                    <ShieldCheck className="w-4 h-4"/> Matriz Legal
-                </button>
-                <button onClick={() => setActiveView('plan')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'plan' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                    <Calendar className="w-4 h-4"/> Plano Geral
-                </button>
-              </>
-            )}
+              <button onClick={() => setActiveView('spec')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'spec' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                  <FileText className="w-4 h-4"/> Especificação
+              </button>
+              <button onClick={() => setActiveView('prototype')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'prototype' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                  <Play className="w-4 h-4"/> Simulador
+              </button>
+              <button onClick={() => setActiveView('legal')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'legal' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                  <ShieldCheck className="w-4 h-4"/> Matriz Legal
+              </button>
+              <button onClick={() => setActiveView('plan')} className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${activeView === 'plan' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
+                  <Calendar className="w-4 h-4"/> Plano Geral
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setActiveView('colaborador')}
+              className="w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 bg-slate-900 text-white font-semibold"
+            >
+              <User className="w-4 h-4 text-emerald-400" />
+              Meu Espelho de Ponto
+            </button>
+          )}
         </nav>
       </aside>
 
@@ -371,30 +364,37 @@ export default function App() {
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
             <div className="flex items-center gap-4">
               <span className="lg:hidden text-lg font-bold">Softcase Ponto</span>
-              {/* Optional: Add a breadcrumb or title here if needed */}
               <div className="hidden lg:block">
-                 <span className="text-sm font-medium text-slate-500">{activeView === 'operational' ? 'Painel Administrativo' : 'Portal'}</span>
+                 <span className="text-sm font-medium text-slate-500">
+                   {currentUser.role === 'SUPER_ADMIN' 
+                     ? (activeView === 'operational' ? 'Painel Administrativo' : 'Portal Colaborador') 
+                     : 'Portal do Colaborador (Meu Espelho)'}
+                 </span>
               </div>
             </div>
 
             <div className="flex items-center gap-3 ml-auto shrink-0">
-                <button 
-                  onClick={handleTestSupabase}
-                  disabled={testFeedback.loading}
-                  className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 px-3 py-2 rounded-lg transition-colors shrink-0 disabled:opacity-50"
-                  title="Testar Conexão em Tempo Real com Supabase"
-                >
-                    <Database className={`w-3.5 h-3.5 ${testFeedback.loading ? 'animate-spin' : ''}`} /> 
-                    <span className="hidden sm:inline">Testar Supabase</span>
-                </button>
+                {currentUser.role === 'SUPER_ADMIN' && (
+                  <>
+                    <button 
+                      onClick={handleTestSupabase}
+                      disabled={testFeedback.loading}
+                      className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 px-3 py-2 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                      title="Testar Conexão em Tempo Real com Supabase"
+                    >
+                        <Database className={`w-3.5 h-3.5 ${testFeedback.loading ? 'animate-spin' : ''}`} /> 
+                        <span className="hidden sm:inline">Testar Supabase</span>
+                    </button>
 
-                <button 
-                  onClick={() => setIsExportModalOpen(true)} 
-                  className="flex items-center gap-2 text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors shrink-0"
-                >
-                    <Download className="w-3.5 h-3.5" /> 
-                    <span className="hidden sm:inline">Exportar Doc 02</span>
-                </button>
+                    <button 
+                      onClick={() => setIsExportModalOpen(true)} 
+                      className="flex items-center gap-2 text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors shrink-0"
+                    >
+                        <Download className="w-3.5 h-3.5" /> 
+                        <span className="hidden sm:inline">Exportar Doc 02</span>
+                    </button>
+                  </>
+                )}
 
                 <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block shrink-0"></div>
 
@@ -453,7 +453,7 @@ export default function App() {
 
         {/* Main Content Viewport */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {activeView === 'operational' && (
+          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'operational') && (
             <OperationalApp
               currentUser={currentUser}
               departamentos={departamentos}
@@ -479,7 +479,7 @@ export default function App() {
             />
           )}
 
-          {activeView === 'colaborador' && (
+          {(currentUser.role !== 'SUPER_ADMIN' || activeView === 'colaborador') && (
             <PortalColaborador
               user={currentUser}
               registros={registros}
@@ -491,8 +491,10 @@ export default function App() {
               assinaturasEspelho={assinaturasEspelho}
               onAddAssinaturaEspelho={(nova) => setAssinaturasEspelho([nova, ...assinaturasEspelho])}
               onRegistrarPonto={() => {
-                setOperationalTab('coletor');
-                setActiveView('operational');
+                if (currentUser.role === 'SUPER_ADMIN') {
+                  setOperationalTab('coletor');
+                  setActiveView('operational');
+                }
               }}
               onAddRegistroPonto={(novo) => setRegistros([novo, ...registros])}
               estabelecimentos={estabelecimentos}
@@ -500,17 +502,17 @@ export default function App() {
             />
           )}
 
-          {activeView === 'spec' && (
+          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'spec') && (
             <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
           )}
 
-          {activeView === 'prototype' && (
+          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'prototype') && (
             <InteractivePrototype initialScreenId={prototypeTargetScreen} />
           )}
 
-          {activeView === 'legal' && <LegalMatrixViewer />}
+          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'legal') && <LegalMatrixViewer />}
 
-          {activeView === 'plan' && <ProjectPlanViewer />}
+          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'plan') && <ProjectPlanViewer />}
         </main>
 
         {/* Footer */}
@@ -524,18 +526,14 @@ export default function App() {
               <span>·</span>
               <button
                 onClick={() => setCurrentUser(null)}
-                className="text-blue-600 hover:underline"
+                className="text-blue-600 hover:underline font-bold"
               >
-                Trocar de Usuário (Logout)
+                Sair (Logout)
               </button>
-              <span>·</span>
-              <span>Versão 1.0</span>
             </div>
           </div>
         </footer>
       </div>
-
-
 
       {/* Mobile Menu Drawer Modal */}
       {isMobileMenuOpen && (
@@ -561,20 +559,18 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-2 font-medium text-sm">
-              {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
-                <button 
-                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); setIsMobileMenuOpen(false); }} 
-                  className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
-                    activeView === 'operational' && operationalTab === 'config' ? 'bg-emerald-600 text-white font-bold' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                  }`}
-                >
-                  <Key className="w-4 h-4" />
-                  Chaves de Acesso Supabase
-                </button>
-              )}
+              {currentUser.role === 'SUPER_ADMIN' ? (
+                <>
+                  <button 
+                    onClick={() => { setActiveView('operational'); setOperationalTab('config'); setIsMobileMenuOpen(false); }} 
+                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
+                      activeView === 'operational' && operationalTab === 'config' ? 'bg-emerald-600 text-white font-bold' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <Key className="w-4 h-4" />
+                    Chaves de Acesso Supabase
+                  </button>
 
-              {currentUser.role !== 'COLABORADOR' ? (
-                <div className="space-y-1">
                   <button
                     onClick={() => {
                       setActiveView('operational');
@@ -589,61 +585,6 @@ export default function App() {
                     Executar Sistema (Painel)
                   </button>
 
-                  {activeView === 'operational' && (
-                    <div className="pl-4 space-y-1 border-l-2 border-slate-200 ml-2 my-1 text-[11px]">
-                      <button onClick={() => { setOperationalTab('relatorios'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg ${operationalTab === 'relatorios' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Atrasos & Descontos (M09)
-                      </button>
-                      <button onClick={() => { setOperationalTab('equipes'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'equipes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Equipes & Gestores (H.E.)
-                      </button>
-                      <button onClick={() => { setOperationalTab('coletor'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'coletor' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Coletor Tablet REP-P
-                      </button>
-                      <button onClick={() => { setOperationalTab('biometria'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'biometria' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Biometria Facial (M02)
-                      </button>
-                      <button onClick={() => { setOperationalTab('ipa'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'ipa' ? 'bg-amber-100 text-amber-900 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · IPA & Premiações (Scoring)
-                      </button>
-                      <button onClick={() => { setOperationalTab('feriados'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'feriados' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Feriados & DSR (M03)
-                      </button>
-                      <button onClick={() => { setOperationalTab('empresa'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'empresa' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Colaboradores & RH
-                      </button>
-                      <button onClick={() => { setOperationalTab('estrutura'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'estrutura' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Estrutura (Deptos, Cargos, Unidades)
-                      </button>
-                      <button onClick={() => { setOperationalTab('permissoes'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'permissoes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Matriz de Permissões (RBAC)
-                      </button>
-                      <button onClick={() => { setOperationalTab('registros'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'registros' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Registros & AFD Oficial
-                      </button>
-                      <button onClick={() => { setOperationalTab('tenants'); setIsMobileMenuOpen(false); }} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs ${operationalTab === 'tenants' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        · Painel Multi-tenant
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <button
-                  onClick={() => {
-                    setActiveView('colaborador');
-                    setIsMobileMenuOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
-                    activeView === 'colaborador' ? 'bg-slate-900 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  <User className="w-4 h-4 text-emerald-400" />
-                  Meu Espelho de Ponto
-                </button>
-              )}
-
-              {(currentUser.role === 'RH_ADMIN' || currentUser.role === 'SUPER_ADMIN') && (
-                <>
                   <button
                     onClick={() => {
                       setActiveView('spec');
@@ -689,29 +630,42 @@ export default function App() {
                     Plano Geral (Doc 01)
                   </button>
                 </>
+              ) : (
+                <button
+                  onClick={() => {
+                    setActiveView('colaborador');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center gap-2 bg-slate-900 text-white font-semibold"
+                >
+                  <User className="w-4 h-4 text-emerald-400" />
+                  Meu Espelho de Ponto
+                </button>
               )}
             </div>
 
             <div className="pt-4 border-t border-slate-200 mt-auto space-y-3">
-              <button
-                onClick={() => {
-                  setIsExportModalOpen(true);
-                  setIsMobileMenuOpen(false);
-                }}
-                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
-              >
-                <Download className="w-4 h-4 text-emerald-600" />
-                Exportar Doc 02 (Markdown)
-              </button>
+              {currentUser.role === 'SUPER_ADMIN' && (
+                <button
+                  onClick={() => {
+                    setIsExportModalOpen(true);
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Download className="w-4 h-4 text-emerald-600" />
+                  Exportar Doc 02 (Markdown)
+                </button>
+              )}
               <button
                 onClick={() => {
                   setCurrentUser(null);
                   setIsMobileMenuOpen(false);
                 }}
-                className="w-full py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
+                className="w-full py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors font-bold"
               >
                 <LogOut className="w-4 h-4" />
-                Sair / Trocar de Usuário
+                Sair (Logout)
               </button>
             </div>
           </div>

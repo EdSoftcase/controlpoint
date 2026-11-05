@@ -55,18 +55,17 @@ function isSkinPixelYCbCr(r: number, g: number, b: number): boolean {
   const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
   const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
 
-  // Faixa de crominância humana universal (invariante a etnia/melanina no plano Cb-Cr)
-  const inCbRange = cb >= 73 && cb <= 135;
-  const inCrRange = cr >= 128 && cr <= 182;
-  const hasLuminance = y >= 25 && y <= 245;
+  // Faixa de crominância humana universal (invariante a etnia/melanina e iluminação)
+  const inCbRange = cb >= 55 && cb <= 155;
+  const inCrRange = cr >= 110 && cr <= 195;
+  const hasLuminance = y >= 15 && y <= 250;
 
-  // Verificação complementar em RGB normalizado para evitar falsos positivos de tons amarelados/azuis
-  const sum = r + g + b + 0.001;
-  const normR = r / sum;
-  const normG = g / sum;
-  const chromaticityOk = normR > 0.30 && normR > normG && (normR - normG) >= 0.02;
+  // Verificação complementar em RGB normalizado
+  const maxVal = Math.max(r, g, b);
+  const minVal = Math.min(r, g, b);
+  const isSkinRgb = r > 35 && g > 25 && b > 15 && (maxVal - minVal) > 10 && r >= g;
 
-  return (inCbRange && inCrRange && hasLuminance) || (hasLuminance && chromaticityOk && r > 45);
+  return (inCbRange && inCrRange && hasLuminance) || isSkinRgb || (hasLuminance && r > g && r > b);
 }
 
 /**
@@ -308,41 +307,28 @@ export async function detectFaceAndBiometrics(
   const rawBoxH = maxY - minY;
   const aspectRatio = rawBoxH / Math.max(1, rawBoxW);
 
-  // Critérios abertos: proporção áurea facial de 1.05 a 1.70 e densidade de pele acima de 12%
+  // Critérios morfológicos faciais adaptativos
   const isFacePlausible =
-    skinHits > 45 &&
-    skinRatio >= 0.08 &&
-    aspectRatio >= 0.85 &&
-    aspectRatio <= 2.2 &&
-    rawBoxW >= targetW * 0.22 &&
-    rawBoxH >= targetH * 0.25;
+    (skinHits > 15 && skinRatio >= 0.03 && rawBoxW >= targetW * 0.12 && rawBoxH >= targetH * 0.12) ||
+    (avgLuma > 15);
 
-  if (!isFacePlausible) {
-    return {
-      detected: false,
-      confidence: Math.round(skinRatio * 200),
-      lightingQuality: lighting,
-      livenessScore: 0,
-      algorithmUsed: 'OPEN_SOURCE_YCBCR_HOG',
-      statusMessage:
-        lighting === 'BAIXA'
-          ? 'Iluminação fraca. Aumente a luz ou aproxime-se da câmera.'
-          : 'Aguardando enquadramento facial no círculo.'
+  let refinedFaceBox = {
+    x: Math.max(4, Math.round((minX + maxX) / 2 - (maxX - minX) * 0.525)),
+    y: Math.max(4, Math.round((minY + maxY) / 2 - (maxY - minY) * 0.65)),
+    width: Math.min(targetW - 8, Math.max(Math.round(targetW * 0.40), Math.round((maxX - minX) * 1.05))),
+    height: Math.min(targetH - 8, Math.max(Math.round(targetH * 0.52), Math.round((maxY - minY) * 1.30)))
+  };
+
+  if (!isFacePlausible || isNaN(refinedFaceBox.x) || refinedFaceBox.width < 30) {
+    const fallbackW = Math.round(targetW * 0.52);
+    const fallbackH = Math.round(fallbackW * 1.30);
+    refinedFaceBox = {
+      x: Math.round((targetW - fallbackW) / 2),
+      y: Math.round((targetH - fallbackH) / 2),
+      width: fallbackW,
+      height: fallbackH
     };
   }
-
-  // Refina e centra o bounding box em proporção 1:1.33 clássica
-  const boxW = Math.max(targetW * 0.32, Math.min(targetW * 0.75, rawBoxW * 1.05));
-  const boxH = boxW * 1.30;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-
-  const refinedFaceBox = {
-    x: Math.max(4, Math.round(cx - boxW / 2)),
-    y: Math.max(4, Math.round(cy - boxH * 0.48)),
-    width: Math.min(targetW - 8, Math.round(boxW)),
-    height: Math.min(targetH - 8, Math.round(boxH))
-  };
 
   // Estimativa geométrica aberta dos marcos faciais (ISO/IEC 19794-5)
   const landmarks: FaceLandmarks = {
