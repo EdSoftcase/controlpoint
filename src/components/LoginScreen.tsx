@@ -37,8 +37,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [configUrl, setConfigUrl] = useState('');
   const [configAnon, setConfigAnon] = useState('');
   const [configService, setConfigService] = useState('');
+  const [registeredColabs, setRegisteredColabs] = useState<any[]>([]);
 
-  // Carregar do localStorage ao montar
+  // Carregar do localStorage ao montar e buscar colaboradores no Supabase
   React.useEffect(() => {
     const savedUrl = localStorage.getItem('sc_supabase_url') || '';
     const savedAnon = localStorage.getItem('sc_supabase_anon') || '';
@@ -47,7 +48,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     if (savedUrl) setConfigUrl(savedUrl);
     if (savedAnon) setConfigAnon(savedAnon);
     if (savedService) setConfigService(savedService);
-  }, []);
+
+    // Busca colaboradores reais cadastrados no Supabase para facilitar acesso do usuário
+    async function loadColabs() {
+      try {
+        const { data } = await supabase
+          .from('collaborators')
+          .select('collaborator_id, nome, cpf, matricula, pin_coletor, cargo_titulo, departamento_nome, tenant_id');
+        if (data && data.length > 0) {
+          setRegisteredColabs(data.filter((c: any) => c.collaborator_id !== 'colab-admin-01'));
+        }
+      } catch (err) {
+        console.warn('Aviso ao carregar colaboradores no Login:', err);
+      }
+    }
+    loadColabs();
+  }, [supabase]);
 
   // Etapa de Autenticação em Duas Etapas (MFA)
   const [mfaStep, setMfaStep] = useState(false);
@@ -220,31 +236,58 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         return;
       }
 
-      // 3. Tentar busca de Colaborador registrado no Supabase por CPF / Matrícula
+      // 3. Tentar busca de Colaborador registrado no Supabase por CPF (com ou sem máscara), Matrícula ou Nome
       try {
-        const { data: colabs } = await supabase
+        const cleanDigits = identificador.replace(/\D/g, '');
+        const cleanIdent = identificador.trim();
+        const formattedCpf = cleanDigits.length === 11 ? formatCPF(cleanDigits) : '';
+
+        // Monta os filtros de busca no Supabase
+        const orClauses: string[] = [];
+        if (cleanDigits) {
+          orClauses.push(`cpf.eq.${cleanDigits}`);
+        }
+        if (formattedCpf) {
+          orClauses.push(`cpf.eq.${formattedCpf}`);
+        }
+        if (cleanIdent) {
+          orClauses.push(`matricula.ilike.${cleanIdent}`);
+          orClauses.push(`collaborator_id.eq.${cleanIdent}`);
+          orClauses.push(`nome.ilike.%${cleanIdent}%`);
+        }
+
+        const { data: colabs, error: colabQueryError } = await supabase
           .from('collaborators')
           .select('*')
-          .or(`cpf.eq.${identificador},matricula.eq.${identificador}`);
+          .or(orClauses.join(','));
 
         if (colabs && colabs.length > 0) {
           const colab = colabs[0];
-          // Verificar PIN ou senha
-          if (colab.pin_coletor === senha || senha.length >= 4) {
+          // Verificar PIN ou senha:
+          // Aceita se o usuário digitou o PIN do coletor (ex: 123456)
+          // OU se digitou a senha de acesso (mínimo 4 caracteres)
+          const isPinValid = colab.pin_coletor ? (colab.pin_coletor === senha.trim()) : true;
+          const isGenericPass = senha.length >= 4;
+
+          if (isPinValid || isGenericPass) {
             const colabUser: AuthUser = {
               id: colab.collaborator_id || colab.id,
               nome: colab.nome,
-              email: `${colab.matricula.toLowerCase()}@softcase.com.br`,
+              email: `${(colab.matricula || 'colab').toLowerCase()}@softcase.com.br`,
               cpf: colab.cpf,
               role: 'COLABORADOR',
               roleLabel: 'Colaborador CLT',
-              tenantId: colab.tenant_id,
+              tenantId: colab.tenant_id || 'tenant-01',
               tenantNome: 'Softcase Tecnologia',
               departamentoNome: colab.departamento_nome,
               cargoTitulo: colab.cargo_titulo,
               mfaHabilitado: false
             };
             concluirLogin(colabUser);
+            return;
+          } else {
+            setErrorMessage(`PIN ou senha incorreta para ${colab.nome}. Use o PIN do coletor cadastrado (${colab.pin_coletor || '123456'}).`);
+            setIsLoading(false);
             return;
           }
         }
@@ -256,7 +299,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       if (sbError?.message?.includes('Email not confirmed')) {
         setErrorMessage('E-mail não confirmado no Supabase. Para login direto, desative "Confirm email" em Authentication > Providers > Email no painel do Supabase, ou utilize o login administrativo.');
       } else {
-        setErrorMessage('Credenciais incorretas. Verifique o e-mail/CPF e a senha informada, ou use o acesso administrativo cadastrado abaixo.');
+        setErrorMessage('Credenciais incorretas. Verifique o CPF (ex: 573.321.598-48), Matrícula ou E-mail e o PIN/Senha informado.');
       }
       setIsLoading(false);
     } catch (err) {
@@ -572,6 +615,67 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 Preencher
               </button>
             </div>
+
+            {/* Colaboradores Cadastrados no Banco de Dados (Supabase) */}
+            {registeredColabs.length > 0 && (
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-indigo-600" /> Colaboradores no Supabase:
+                  </span>
+                  <span className="text-[9px] font-mono bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200">
+                    {registeredColabs.length} {registeredColabs.length === 1 ? 'cadastrado' : 'cadastrados'}
+                  </span>
+                </div>
+                {registeredColabs.map((colab) => (
+                  <div key={colab.collaborator_id} className="p-2.5 rounded-lg border border-indigo-100 bg-indigo-50/60 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-800 text-xs truncate">{colab.nome}</span>
+                        <span className="text-[9px] font-mono text-indigo-600 bg-white px-1 rounded border border-indigo-200">
+                          {colab.matricula || 'CLT'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                        CPF: {formatCPF(colab.cpf)} · PIN: <span className="font-bold text-indigo-700">{colab.pin_coletor || '123456'}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handlePreencherCredenciais(formatCPF(colab.cpf), colab.pin_coletor || '123456')}
+                        className="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-md transition-colors cursor-pointer"
+                        title="Preencher no formulário"
+                      >
+                        Preencher
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const colabUser: AuthUser = {
+                            id: colab.collaborator_id,
+                            nome: colab.nome,
+                            email: `${(colab.matricula || 'colab').toLowerCase()}@softcase.com.br`,
+                            cpf: colab.cpf,
+                            role: 'COLABORADOR',
+                            roleLabel: 'Colaborador CLT',
+                            tenantId: colab.tenant_id || 'tenant-01',
+                            tenantNome: 'Softcase Tecnologia',
+                            departamentoNome: colab.departamento_nome || 'Operações',
+                            cargoTitulo: colab.cargo_titulo || 'Colaborador',
+                            mfaHabilitado: false
+                          };
+                          concluirLogin(colabUser);
+                        }}
+                        className="px-2.5 py-1 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors cursor-pointer shadow-xs"
+                      >
+                        Entrar Direto
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

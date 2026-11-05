@@ -103,6 +103,94 @@ export default function App() {
   const [solicitacoesAjuste, setSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>([]);
   const [assinaturasEspelho, setAssinaturasEspelho] = useState<AssinaturaEspelhoPonto[]>([]);
 
+  // Carregar dados iniciais do Supabase de forma resiliente
+  React.useEffect(() => {
+    async function fetchGlobalData() {
+      try {
+        const { data: colabs } = await supabase.from('collaborators').select('*');
+        if (colabs && colabs.length > 0) {
+          setColaboradores(colabs.map(c => ({
+            id: c.collaborator_id || c.id,
+            tenantId: c.tenant_id || 'tenant-01',
+            nome: c.nome,
+            cpf: c.cpf,
+            matricula: c.matricula || 'MAT-001',
+            pis: c.pis || '000.00000.00-0',
+            dataAdmissao: c.data_admissao || '2024-01-01',
+            cargoId: c.cargo_id || 'crg-01',
+            cargoTitulo: c.cargo_titulo || 'Colaborador',
+            departamentoId: c.departamento_id || 'dep-01',
+            departamentoNome: c.departamento_nome || 'Geral',
+            gestorId: c.gestor_id || 'colab-admin',
+            gestorNome: c.gestor_nome || 'Administrador',
+            estabelecimentoId: c.estabelecimento_id || 'est-01',
+            estabelecimentoNome: c.estabelecimento_nome || 'Matriz',
+            regime: (c.regime as any) || 'REGULAR',
+            horarioInicio: c.horario_inicio || '08:00',
+            horarioFim: c.horario_fim || '17:00',
+            cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria) || 8,
+            intervaloMinutos: Number(c.intervalo_minutos) || 60,
+            maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia) || 15,
+            regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
+            pinColetor: c.pin_coletor || '123456',
+            status: (c.status as any) || 'ATIVO',
+            biometriaCadastrada: Boolean(c.biometric_template || c.biometria_cadastrada || c.biometria_hash_template || (typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${c.collaborator_id}`))),
+            biometriaHashTemplate: c.biometric_template || c.biometria_hash_template || 'ISO19794-5:AES-256',
+            limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 95.0,
+            email: c.email || ''
+          })));
+        }
+
+        const { data: ests } = await supabase.from('establishments').select('*');
+        if (ests && ests.length > 0) {
+          setEstabelecimentos(ests.map(e => ({
+            id: e.establishment_id || e.id,
+            tenantId: e.tenant_id,
+            nome: e.nome,
+            cnpj: e.cnpj,
+            codigo: (e.establishment_id || '').split('-')[0] || 'EST',
+            tipo: 'MATRIZ',
+            fusoHorario: e.fuso_horario || '-0300',
+            cidade: e.cidade || 'São Paulo',
+            uf: e.uf || 'SP',
+            municipio: e.municipio || e.cidade || 'São Paulo',
+            enderecoCompleto: e.endereco_completo || 'Av. Paulista, 1000 - Bela Vista',
+            latitude: Number(e.latitude) || -23.5615,
+            longitude: Number(e.longitude) || -46.6559,
+            cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
+            bloquearForaDoRaio: Boolean(e.bloquear_fora_do_raio)
+          })));
+        }
+
+        const { data: pontos } = await supabase.from('point_registrations').select('*').order('created_at', { ascending: false });
+        if (pontos && pontos.length > 0) {
+          setRegistros(pontos.map(p => {
+            const parsed = p.detalhes ? (typeof p.detalhes === 'string' ? JSON.parse(p.detalhes) : p.detalhes) : {};
+            return {
+              nsr: p.nsr,
+              tenantId: p.tenant_id,
+              empregadorRazaoSocial: parsed.empregadorRazaoSocial || 'Softcase Tecnologia',
+              empregadorCnpj: parsed.empregadorCnpj || '00.000.000/0001-91',
+              colaboradorId: p.collaborator_id,
+              colaboradorNome: parsed.colaboradorNome || 'Colaborador',
+              colaboradorCpf: parsed.colaboradorCpf || '',
+              colaboradorMatricula: parsed.colaboradorMatricula || '',
+              dataHora: p.data_hora,
+              dataHoraFormatada: parsed.dataHoraFormatada || new Date(p.data_hora).toLocaleString('pt-BR'),
+              fusoHorario: '-0300',
+              coletorId: parsed.coletorId || 'COL-MOBILE',
+              tipoMarcacao: p.tipo_marcacao,
+              hashSha256: p.hash_sha256 || 'HASH_DEFAULT'
+            };
+          }));
+        }
+      } catch (e) {
+        console.warn('Carregamento inicial Supabase aviso:', e);
+      }
+    }
+    fetchGlobalData();
+  }, [supabase]);
+
   // Sync currentUser with session metadata if session exists
   React.useEffect(() => {
     if (session && session.user && !currentUser) {

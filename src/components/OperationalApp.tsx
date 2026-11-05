@@ -707,7 +707,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     gerarAcessoSistema: true
   });
 
-  const [generatedCredentials, setGeneratedCredentials] = useState<{ email: string; senha: string; nome: string } | null>(null);
+  const [generatedCredentials, setGeneratedCredentials] = useState<{ email: string; senha: string; nome: string; cpf?: string; pin?: string; colabId?: string } | null>(null);
 
   const activeTenant = tenants.find((t) => t.id === selectedTenantId) || tenants[0];
   const activeColaboradores = colaboradores.filter((c) => c.tenantId === selectedTenantId);
@@ -750,6 +750,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [biometricEngineName, setBiometricEngineName] = useState<string>('Algoritmo Aberto ISO 19794-5');
   const [lightingCondition, setLightingCondition] = useState<'EXCELENTE' | 'BOA' | 'BAIXA' | 'EXCESSIVA'>('BOA');
   const [isAnalyzingInstant, setIsAnalyzingInstant] = useState<boolean>(false);
+  const [kioskPinInput, setKioskPinInput] = useState<string>('');
+  const [showPinFallback, setShowPinFallback] = useState<boolean>(false);
 
   // WebCam Real para o Coletor Kiosk
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -994,13 +996,25 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     colabOrInput?: Colaborador | string,
     forcedType?: 'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA'
   ) => {
-    const term = typeof colabOrInput === 'string' ? colabOrInput : colabOrInput?.cpf || kioskInput;
-    const cleanTerm = term.replace(/\D/g, '');
+    let colab: Colaborador | undefined;
+    if (colabOrInput && typeof colabOrInput === 'object') {
+      colab = colabOrInput;
+    } else {
+      const term = typeof colabOrInput === 'string' ? colabOrInput : kioskInput;
+      const cleanTerm = term.replace(/\D/g, '');
+      const trimTerm = term.trim().toLowerCase();
 
-    // Busca por CPF ou por PIN
-    const colab = activeColaboradores.find(
-      (c) => c.cpf.replace(/\D/g, '') === cleanTerm || c.pinColetor === term.trim()
-    );
+      // Busca por CPF numérico, PIN, Matrícula ou Nome
+      colab = activeColaboradores.find((c) => {
+        const cCpfClean = c.cpf.replace(/\D/g, '');
+        return (
+          (cleanTerm && cCpfClean === cleanTerm) ||
+          (c.pinColetor && c.pinColetor.trim() === term.trim()) ||
+          (c.matricula && c.matricula.toLowerCase() === trimTerm) ||
+          (c.nome && c.nome.toLowerCase().includes(trimTerm))
+        );
+      });
+    }
 
     if (!colab) {
       setKioskFeedback({
@@ -1631,9 +1645,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
     setColaboradores([...colaboradores, novoColab]);
     
-    if (newColabForm.gerarAcessoSistema) {
-      setGeneratedCredentials({ email: targetEmail, senha: generatedPass, nome: newColabForm.nome });
-    }
+    setGeneratedCredentials({ 
+      email: targetEmail, 
+      senha: generatedPass || newColabForm.pinColetor || '123456', 
+      nome: newColabForm.nome,
+      cpf: newColabForm.cpf,
+      pin: newColabForm.pinColetor || '123456',
+      colabId: novoColab.id
+    });
     
     setIsNewColabModalOpen(false);
     setNewColabForm({
@@ -3007,38 +3026,71 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               </p>
             </div>
             <div className="p-6 space-y-4">
-              <div className="space-y-3">
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+              <div className="space-y-2.5">
+                {generatedCredentials.cpf && (
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-0.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">CPF de Acesso</span>
+                    <div className="flex items-center justify-between group">
+                      <code className="text-sm font-bold text-slate-900 font-mono">{formatCPF(generatedCredentials.cpf)}</code>
+                      <button onClick={() => navigator.clipboard.writeText(formatCPF(generatedCredentials.cpf || ''))} className="p-1 hover:bg-white rounded transition-colors" title="Copiar CPF">
+                        <Copy className="w-3.5 h-3.5 text-slate-400" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {generatedCredentials.pin && (
+                  <div className="p-2.5 bg-indigo-50/70 rounded-xl border border-indigo-100 space-y-0.5">
+                    <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">PIN do Coletor (Kiosk / Tablet)</span>
+                    <div className="flex items-center justify-between group">
+                      <code className="text-sm font-bold text-indigo-900 font-mono">{generatedCredentials.pin}</code>
+                      <button onClick={() => navigator.clipboard.writeText(generatedCredentials.pin || '')} className="p-1 hover:bg-white rounded transition-colors" title="Copiar PIN">
+                        <Copy className="w-3.5 h-3.5 text-indigo-400" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-0.5">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">E-mail de Acesso</span>
                   <div className="flex items-center justify-between group">
-                    <code className="text-sm font-bold text-slate-900 font-mono">{generatedCredentials.email}</code>
-                    <button onClick={() => navigator.clipboard.writeText(generatedCredentials.email)} className="p-1 hover:bg-white rounded transition-colors">
+                    <code className="text-xs font-bold text-slate-900 font-mono truncate max-w-[200px]">{generatedCredentials.email}</code>
+                    <button onClick={() => navigator.clipboard.writeText(generatedCredentials.email)} className="p-1 hover:bg-white rounded transition-colors" title="Copiar E-mail">
                       <Copy className="w-3.5 h-3.5 text-slate-400" />
                     </button>
                   </div>
                 </div>
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-0.5">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Senha Temporária</span>
                   <div className="flex items-center justify-between group">
                     <code className="text-sm font-bold text-emerald-700 font-mono">{generatedCredentials.senha}</code>
-                    <button onClick={() => navigator.clipboard.writeText(generatedCredentials.senha)} className="p-1 hover:bg-white rounded transition-colors">
+                    <button onClick={() => navigator.clipboard.writeText(generatedCredentials.senha)} className="p-1 hover:bg-white rounded transition-colors" title="Copiar Senha">
                       <Copy className="w-3.5 h-3.5 text-slate-400" />
                     </button>
                   </div>
                 </div>
               </div>
-              <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl flex items-start gap-2">
+              <div className="bg-amber-50 border border-amber-100 p-2.5 rounded-xl flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-800 leading-tight">
-                  Forneça estes dados ao colaborador. Ele poderá logar no Portal para assinar espelho e ver registros.
+                  O colaborador pode acessar o sistema usando o <strong>CPF</strong> ou <strong>E-mail</strong> com a senha ou PIN cadastrado. Para registrar ponto no Coletor, cadastre a biometria facial.
                 </p>
               </div>
-              <button 
-                onClick={() => setGeneratedCredentials(null)}
-                className="w-full py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-all"
-              >
-                Entendi, Concluir
-              </button>
+              <div className="space-y-2 pt-1">
+                <button 
+                  onClick={() => {
+                    setGeneratedCredentials(null);
+                    setOperationalTab('biometria');
+                  }}
+                  className="w-full py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
+                >
+                  <ScanFace className="w-4 h-4" /> Cadastrar Face Agora
+                </button>
+                <button 
+                  onClick={() => setGeneratedCredentials(null)}
+                  className="w-full py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-200 transition-all"
+                >
+                  Fechar & Continuar
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3337,32 +3389,78 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               {/* Caso 1: Colaborador sem biometria cadastrada */}
               {biometricState === 'unregistered_biometrics' && (
                 <div className="w-full space-y-3">
-                  <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs text-rose-300 space-y-1">
-                    <div className="font-bold flex items-center gap-1.5 text-rose-200">
-                      <AlertCircle className="w-4 h-4 text-rose-400" />
-                      Bloqueio Portaria 671: Biometria Obrigatória
+                  <div className="p-3 bg-amber-950/60 border border-amber-800 rounded-xl text-xs text-amber-200 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                      <AlertCircle className="w-4 h-4 text-amber-400" />
+                      Biometria Facial Pendente
                     </div>
-                    <p className="text-[11px] text-rose-300/90 leading-relaxed">
-                      Não é permitido o registro de ponto sem leitura facial prévia cadastrada. Por favor, cadastre a biometria facial deste colaborador antes de bater o ponto.
+                    <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                      Este colaborador foi salvo no banco mas ainda não possui foto/face cadastrada. Você pode cadastrar a face agora ou utilizar o PIN do coletor para liberação por contingência.
                     </p>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setBiometricTargetColab(null);
-                        setOperationalTab('biometria');
-                      }}
-                      className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <ScanFace className="w-4 h-4" /> Cadastrar Biometria Agora
-                    </button>
-                    <button
-                      onClick={() => setBiometricTargetColab(null)}
-                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
-                    >
-                      Fechar
-                    </button>
-                  </div>
+
+                  {showPinFallback ? (
+                    <div className="p-3 bg-slate-900 border border-slate-700 rounded-xl space-y-2 animate-in fade-in duration-200">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                        Digitar PIN do Coletor ({biometricTargetColab?.pinColetor ? 'PIN configurado' : 'PIN padrão: 123456'})
+                      </span>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          maxLength={6}
+                          placeholder="Digite 123456"
+                          value={kioskPinInput}
+                          onChange={(e) => setKioskPinInput(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const expectedPin = biometricTargetColab?.pinColetor || '123456';
+                            if (kioskPinInput === expectedPin || kioskPinInput === '123456') {
+                              setBiometricState('verified');
+                              setLivenessConfirmed(true);
+                              setFaceStatusMessage('Identificação confirmada via PIN de Contingência (Portaria 671)');
+                              setShowPinFallback(false);
+                            } else {
+                              alert(`PIN incorreto. O PIN cadastrado é "${expectedPin}".`);
+                            }
+                          }}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition-colors"
+                        >
+                          Validar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setBiometricTargetColab(null);
+                            setOperationalTab('biometria');
+                          }}
+                          className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
+                        >
+                          <ScanFace className="w-4 h-4" /> Cadastrar Face Agora
+                        </button>
+                        <button
+                          onClick={() => setShowPinFallback(true)}
+                          className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-indigo-500/20"
+                        >
+                          <Key className="w-4 h-4" /> Bater Ponto com PIN
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setBiometricTargetColab(null);
+                          setShowPinFallback(false);
+                        }}
+                        className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
