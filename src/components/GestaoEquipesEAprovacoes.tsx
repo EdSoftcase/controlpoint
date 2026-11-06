@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Departamento, Colaborador, SolicitacaoHoraExtra } from '../types/operational';
+import { Departamento, Colaborador, SolicitacaoHoraExtra, SolicitacaoAjustePonto } from '../types/operational';
 import { AuthUser } from '../types/auth';
 import {
   Users,
@@ -16,7 +16,8 @@ import {
   Plus,
   Send,
   Calendar,
-  Briefcase
+  Briefcase,
+  PenTool
 } from 'lucide-react';
 
 interface GestaoEquipesEAprovacoesProps {
@@ -26,6 +27,8 @@ interface GestaoEquipesEAprovacoesProps {
   onUpdateColaboradores: (novos: Colaborador[]) => void;
   horasExtras: SolicitacaoHoraExtra[];
   onUpdateHorasExtras: (novas: SolicitacaoHoraExtra[]) => void;
+  solicitacoesAjuste?: SolicitacaoAjustePonto[];
+  onUpdateSolicitacoesAjuste?: (novas: SolicitacaoAjustePonto[]) => void;
   currentUser: AuthUser;
 }
 
@@ -36,9 +39,11 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   onUpdateColaboradores,
   horasExtras,
   onUpdateHorasExtras,
+  solicitacoesAjuste = [],
+  onUpdateSolicitacoesAjuste,
   currentUser
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes'>('aprovacoes');
+  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes' | 'ajustes'>('aprovacoes');
   
   // Filtros de Aprovação de Horas Extras
   const [statusFilter, setStatusFilter] = useState<'TODOS' | 'PENDENTE' | 'APROVADO' | 'REJEITADO'>('PENDENTE');
@@ -250,6 +255,24 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
             </span>
           )}
         </button>
+
+        <button
+          onClick={() => setActiveSubTab('ajustes')}
+          className={`flex-1 py-2.5 px-3 rounded-lg transition-colors flex items-center justify-center text-center gap-2 min-w-0 ${
+            activeSubTab === 'ajustes'
+              ? 'bg-white text-slate-900 shadow-xs font-bold'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <PenTool className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span className="whitespace-nowrap sm:whitespace-normal">Ajustes & Atestados</span>
+          {solicitacoesAjuste.filter(s => s.status === 'PENDENTE').length > 0 && (
+            <span className="text-[10px] font-mono font-bold bg-blue-600 text-white px-1.5 py-0.2 rounded-full shrink-0">
+              {solicitacoesAjuste.filter(s => s.status === 'PENDENTE').length}
+            </span>
+          )}
+        </button>
+
         <button
           onClick={() => setActiveSubTab('equipes')}
           className={`flex-1 py-2.5 px-3 rounded-lg transition-colors flex items-center justify-center text-center gap-2 min-w-0 ${
@@ -258,8 +281,8 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Users className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-          <span className="whitespace-nowrap sm:whitespace-normal">Configuração de Equipes & Gestores ({departamentos.length})</span>
+          <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+          <span className="whitespace-nowrap sm:whitespace-normal">Equipes & Gestores</span>
         </button>
       </div>
 
@@ -435,6 +458,122 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* SUB-ABA: AJUSTES E ATESTADOS (Portaria 671)             */}
+      {/* ======================================================== */}
+      {activeSubTab === 'ajustes' && (
+        <div className="space-y-4">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-4">
+             <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-slate-400" />
+                <span className="text-xs font-bold text-slate-700 uppercase">Filtros:</span>
+             </div>
+             <div className="flex gap-2">
+                {['TODOS', 'PENDENTE', 'APROVADO', 'REJEITADO'].map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => setStatusFilter(st as any)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      statusFilter === st ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
+             </div>
+          </div>
+
+          {solicitacoesAjuste.length === 0 ? (
+            <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl">
+              <PenTool className="w-12 h-12 text-slate-200 mx-auto mb-3" />
+              <h3 className="text-lg font-bold text-slate-900">Nenhum pedido de ajuste</h3>
+              <p className="text-sm text-slate-500">Não há solicitações de correção de ponto ou atestados pendentes.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {solicitacoesAjuste.filter(s => statusFilter === 'TODOS' || s.status === statusFilter).map((ajuste) => (
+                <div key={ajuste.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:border-blue-300 transition-all space-y-4 relative overflow-hidden group">
+                   <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                         <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                            {ajuste.colaboradorNome.charAt(0)}
+                         </div>
+                         <div>
+                            <h4 className="text-sm font-bold text-slate-900">{ajuste.colaboradorNome}</h4>
+                            <p className="text-[10px] text-slate-500 font-mono">CPF: {ajuste.colaboradorCpf} · Depto: {ajuste.departamentoNome}</p>
+                         </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                           ajuste.status === 'PENDENTE' ? 'bg-amber-100 text-amber-800' : 
+                           ajuste.status === 'APROVADO' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                         }`}>
+                           {ajuste.status}
+                         </span>
+                         <span className="text-[9px] text-slate-400 font-mono">Solicitado em: {ajuste.dataHoraEnvio}</span>
+                      </div>
+                   </div>
+
+                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                      <div>
+                         <span className="text-[9px] font-bold text-slate-400 uppercase block">Tipo de Pedido</span>
+                         <span className="text-[11px] font-bold text-blue-800">
+                            {ajuste.tipo === 'ATESTADO_MEDICO' ? 'Atestado Médico' : 
+                             ajuste.tipo === 'INCLUSAO_PONTO_ESQUECIDO' ? 'Ponto Esquecido' : 'Justificativa de Correção'}
+                         </span>
+                      </div>
+                      <div>
+                         <span className="text-[9px] font-bold text-slate-400 uppercase block">Data do Evento</span>
+                         <span className="text-[11px] font-mono font-bold text-slate-700">{ajuste.data}</span>
+                      </div>
+                      <div>
+                         <span className="text-[9px] font-bold text-slate-400 uppercase block">Horário/Marcação</span>
+                         <span className="text-[11px] font-bold text-slate-700">
+                            {ajuste.horarioAjuste || '--:--'} ({ajuste.tipoMarcacaoAjuste || 'N/A'})
+                         </span>
+                      </div>
+                   </div>
+
+                   <div className="space-y-1">
+                      <span className="text-[10px] font-bold text-slate-700 uppercase">Explicação do Colaborador:</span>
+                      <p className="text-xs text-slate-600 bg-blue-50/30 p-3 rounded-lg border border-blue-100 italic">
+                         "{ajuste.justificativa}"
+                      </p>
+                   </div>
+
+                   {ajuste.status === 'PENDENTE' && (
+                     <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                        <button 
+                          onClick={() => {
+                            if (onUpdateSolicitacoesAjuste) {
+                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'REJEITADO' as any, dataDecisao: new Date().toLocaleString()} : s);
+                              onUpdateSolicitacoesAjuste(novas);
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
+                        >
+                           <XCircle className="w-3.5 h-3.5" /> Negar
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if (onUpdateSolicitacoesAjuste) {
+                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'APROVADO' as any, dataDecisao: new Date().toLocaleString()} : s);
+                              onUpdateSolicitacoesAjuste(novas);
+                            }
+                          }}
+                          className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                        >
+                           <CheckCircle2 className="w-3.5 h-3.5" /> Aprovar Ajuste
+                        </button>
+                     </div>
+                   )}
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -517,6 +517,15 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       alert('A leitura facial precisa ser verificada com sucesso.');
       return;
     }
+
+    // Validação de Duplicidade (Garantir que não bate o mesmo período 2x)
+    const jaExisteTipo = batidasHoje.some(b => b.tipoMarcacao === tipoPonto);
+    if (jaExisteTipo) {
+      alert(`Você já registrou sua marcação de ${tipoPonto} hoje. Para correções, utilize o botão "Solicitar Correção".`);
+      setIsBaterPontoModalOpen(false);
+      return;
+    }
+
     setIsSubmittingPunch(true);
     const now = new Date();
     const nextNsr = registros.length + 1;
@@ -576,72 +585,98 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   return (
     <div className="space-y-6">
       {/* Relógio Digital em Tempo Real & Status de Liberação de Ponto com Contagem Regressiva */}
-      <div className={`p-5 rounded-2xl border transition-all shadow-md ${
-        isPunchAllowed 
-          ? 'bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-emerald-500/40 text-white' 
-          : 'bg-gradient-to-r from-amber-950 via-slate-900 to-amber-950 border-amber-500/50 text-white'
-      }`}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
-          {/* Mostrador do Relógio Digital */}
-          <div className="flex items-center gap-4">
-            <div className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center font-mono font-bold shrink-0 border ${
-              isPunchAllowed 
-                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]' 
-                : 'bg-amber-950/80 border-amber-500/50 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.3)]'
-            }`}>
-              <Clock className="w-5 h-5 mb-0.5 animate-pulse" />
-              <span className="text-[10px] uppercase font-sans">Ao Vivo</span>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl font-extrabold font-mono tracking-wider text-white">
-                  {formattedLiveClock}
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${
-                  isPunchAllowed 
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
-                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                }`}>
-                  {isPunchAllowed ? '🟢 LIBERADO PARA PONTO' : '⏳ ENTRADA BLOQUEADA'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-300 mt-1">
-                Jornada Contratada: <strong>{horarioInicioStr} às 17:00</strong> · Antecedência Máxima: <strong>{maxAntecedenciaMin} min</strong> (Liberado a partir das <strong>{allowedTimeFormatted}</strong>)
-              </p>
-            </div>
+      <div className="relative group">
+        {batidasHoje.length >= 4 && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/60 backdrop-blur-md rounded-2xl border-2 border-emerald-500/30 animate-in fade-in duration-500">
+             <div className="text-center p-6 space-y-3">
+                <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]" />
+                <h3 className="text-xl font-black text-white uppercase tracking-tighter">Carga Horária Encerrada</h3>
+                <p className="text-emerald-100/80 text-xs font-medium max-w-xs mx-auto">
+                  Você concluiu as 4 marcações regulamentares de hoje. O registro foi bloqueado para sua segurança jurídica.
+                </p>
+                <button 
+                  onClick={() => setIsAjusteModalOpen(true)}
+                  className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 mx-auto"
+                >
+                  <PenTool className="w-3.5 h-3.5" /> Solicitar Correção ao Supervisor
+                </button>
+             </div>
           </div>
+        )}
 
-          {/* Contagem Regressiva / Indicador de Liberação */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {!isPunchAllowed && (
-              <div className="bg-amber-950/90 border border-amber-500/60 p-3 rounded-xl text-center space-y-0.5">
-                <span className="text-[9px] font-mono uppercase text-amber-300 tracking-wider block">
-                  Tempo Restante para Liberar Entrada
-                </span>
-                <div className="text-xl font-bold font-mono text-amber-400 tracking-widest animate-pulse">
-                  {formatCountdown(secondsRemaining)}
-                </div>
+        <div className={`p-5 rounded-2xl border transition-all shadow-md ${
+          batidasHoje.length >= 4 ? 'blur-sm grayscale grayscale-50 pointer-events-none' : ''
+        } ${
+          isPunchAllowed 
+            ? 'bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-emerald-500/40 text-white' 
+            : 'bg-gradient-to-r from-amber-950 via-slate-900 to-amber-950 border-amber-500/50 text-white'
+        }`}>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
+            {/* Mostrador do Relógio Digital */}
+            <div className="flex items-center gap-4">
+              <div className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center font-mono font-bold shrink-0 border ${
+                isPunchAllowed 
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]' 
+                  : 'bg-amber-950/80 border-amber-500/50 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.3)]'
+              }`}>
+                <Clock className="w-5 h-5 mb-0.5 animate-pulse" />
+                <span className="text-[10px] uppercase font-sans">Ao Vivo</span>
               </div>
-            )}
 
-            <button
-              onClick={() => {
-                if (!isPunchAllowed) {
-                  alert(`Bloqueio de Antecedência: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} minutos antes da jornada de ${horarioInicioStr}). Faltam ${formatCountdown(secondsRemaining)}.`);
-                } else {
-                  handleOpenPersonalPunch();
-                }
-              }}
-              className={`px-5 py-3 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${
-                isPunchAllowed
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-900/50 cursor-pointer active:scale-95'
-                  : 'bg-amber-800/80 hover:bg-amber-700/80 text-amber-100 border border-amber-500/50 cursor-pointer'
-              }`}
-            >
-              <Camera className="w-4 h-4" />
-              {isPunchAllowed ? 'Bater Meu Ponto Agora (Facial)' : `Entrada Liberada em ${formatCountdown(secondsRemaining)}`}
-            </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-extrabold font-mono tracking-wider text-white">
+                    {formattedLiveClock}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${
+                    isPunchAllowed 
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {isPunchAllowed ? '🟢 LIBERADO PARA PONTO' : '⏳ ENTRADA BLOQUEADA'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  Jornada Contratada: <strong>{horarioInicioStr} às 17:00</strong> · Antecedência Máxima: <strong>{maxAntecedenciaMin} min</strong> (Liberado a partir das <strong>{allowedTimeFormatted}</strong>)
+                </p>
+              </div>
+            </div>
+
+            {/* Contagem Regressiva / Indicador de Liberação */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              {!isPunchAllowed && (
+                <div className="bg-amber-950/90 border border-amber-500/60 p-3 rounded-xl text-center space-y-0.5">
+                  <span className="text-[9px] font-mono uppercase text-amber-300 tracking-wider block">
+                    Tempo Restante para Liberar Entrada
+                  </span>
+                  <div className="text-xl font-bold font-mono text-amber-400 tracking-widest animate-pulse">
+                    {formatCountdown(secondsRemaining)}
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => {
+                  if (batidasHoje.length >= 4) {
+                    alert('Sua carga horária diária já foi encerrada (4 marcações registradas).');
+                    return;
+                  }
+                  if (!isPunchAllowed) {
+                    alert(`Bloqueio de Antecedência: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} minutos antes da jornada de ${horarioInicioStr}). Faltam ${formatCountdown(secondsRemaining)}.`);
+                  } else {
+                    handleOpenPersonalPunch();
+                  }
+                }}
+                className={`px-5 py-3 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${
+                  isPunchAllowed
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-900/50 cursor-pointer active:scale-95'
+                    : 'bg-amber-800/80 hover:bg-amber-700/80 text-amber-100 border border-amber-500/50 cursor-pointer'
+                }`}
+              >
+                <Camera className="w-4 h-4" />
+                {isPunchAllowed ? 'Bater Meu Ponto Agora (Facial)' : `Entrada Liberada em ${formatCountdown(secondsRemaining)}`}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -842,6 +877,74 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             </button>
           </div>
 
+          {/* Resumo do Dia para o Funcionário */}
+          <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
+             <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs uppercase tracking-wider">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                Resumo da Jornada de Hoje ({new Date().toLocaleDateString('pt-BR')})
+             </div>
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {(() => {
+                  const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(hojeStr));
+                  const getT = (type: string) => {
+                    const r = dayRegistros.find(reg => reg.tipoMarcacao === type);
+                    return r ? new Date(r.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+                  };
+                  return (
+                    <>
+                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">1ª Entrada</span>
+                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('ENTRADA')}</span>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Saída Almoço</span>
+                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('INTERVALO_INICIO')}</span>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Volta Almoço</span>
+                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('INTERVALO_FIM')}</span>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">2ª Saída</span>
+                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('SAIDA')}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+             </div>
+             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+               <p className="text-[11px] text-emerald-800 font-medium">
+                  {(() => {
+                    const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(hojeStr));
+                    if (dayRegistros.length === 0) return 'Você ainda não registrou nenhum ponto hoje.';
+                    const summary = [];
+                    const e = dayRegistros.find(r => r.tipoMarcacao === 'ENTRADA');
+                    if (e) summary.push(`Bateu o ponto de entrada às ${new Date(e.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
+                    const si = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_INICIO');
+                    if (si) summary.push(`intervalo às ${new Date(si.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
+                    const vi = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_FIM');
+                    if (vi) summary.push(`volta do intervalo às ${new Date(vi.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
+                    const s = dayRegistros.find(r => r.tipoMarcacao === 'SAIDA');
+                    if (s) summary.push(`e por fim segunda saída às ${new Date(s.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
+                    
+                    return summary.join(', ').replace(/, ([^,]*)$/, ' $1') + '.';
+                  })()}
+               </p>
+               {meusRegistros.filter(r => r.dataHora.startsWith(hojeStr)).length > 0 && (
+                 <button 
+                   onClick={() => {
+                     setAjusteTipoInput('JUSTIFICATIVA_CORRECAO');
+                     setAjusteDataInput(hojeStr);
+                     setIsAjusteModalOpen(true);
+                   }}
+                   className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-700 rounded-lg text-[10px] font-bold hover:bg-emerald-50 transition-colors flex items-center gap-1.5 shrink-0"
+                 >
+                   <PenTool className="w-3 h-3" /> Solicitar Correção
+                 </button>
+               )}
+             </div>
+          </div>
+
           <div className="overflow-x-auto border border-slate-200 rounded-lg">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -858,73 +961,82 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {/* Linha 1: 03/11/2026 (Hoje em curso) */}
-                <tr className="hover:bg-slate-50/60 transition-colors bg-emerald-50/10">
-                  <td className="py-2.5 px-3 font-bold text-slate-900">Hoje</td>
-                  <td className="py-2.5 px-3 font-sans text-emerald-800 font-semibold">Segunda-feira</td>
-                  <td className="py-2.5 px-3 font-bold text-emerald-700">08:00</td>
-                  <td className="py-2.5 px-3 text-slate-700">12:00</td>
-                  <td className="py-2.5 px-3 text-slate-700">13:00</td>
-                  <td className="py-2.5 px-3 text-slate-400">--:--</td>
-                  <td className="py-2.5 px-3 text-emerald-800 font-bold">60 min (OK)</td>
-                  <td className="py-2.5 px-3 text-emerald-700 font-bold">Em curso</td>
-                  <td className="py-2.5 px-3 font-sans">
-                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      Jornada Regular
-                    </span>
-                  </td>
-                </tr>
+                {(() => {
+                  // Agrupar registros por dia (últimos 30 dias para simplificar)
+                  const rows = [];
+                  const last30Days = [];
+                  for (let i = 0; i < 30; i++) {
+                    const d = new Date();
+                    d.setDate(d.getDate() - i);
+                    last30Days.push(d.toISOString().slice(0, 10));
+                  }
 
-                {/* Linha 2: Feriado Finados */}
-                <tr className="hover:bg-slate-50/60 transition-colors">
-                  <td className="py-2.5 px-3 font-bold text-slate-900">02/11/2026</td>
-                  <td className="py-2.5 px-3 font-sans text-rose-700 font-semibold">Segunda-feira (Finados)</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">00:00</td>
-                  <td className="py-2.5 px-3 font-sans">
-                    <span className="text-[11px] font-semibold text-purple-800 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
-                      Feriado Nacional (DSR)
-                    </span>
-                  </td>
-                </tr>
+                  const schedule = {
+                    ENTRADA: userColab?.horarioInicio || '08:00',
+                    INTERVALO_INICIO: '12:00',
+                    INTERVALO_FIM: '13:00',
+                    SAIDA: userColab?.horarioFim || '17:00'
+                  };
 
-                {/* Linha 3: Domingo DSR */}
-                <tr className="hover:bg-slate-50/60 transition-colors bg-slate-50/40">
-                  <td className="py-2.5 px-3 font-bold text-slate-900">01/11/2026</td>
-                  <td className="py-2.5 px-3 font-sans text-slate-600">Domingo</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">-</td>
-                  <td className="py-2.5 px-3 text-slate-400">00:00</td>
-                  <td className="py-2.5 px-3 font-sans">
-                    <span className="text-[11px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
-                      Repouso Semanal (DSR)
-                    </span>
-                  </td>
-                </tr>
+                  const checkColor = (punchTime: string | undefined, expectedTime: string) => {
+                    if (!punchTime) return 'text-slate-400';
+                    const [pH, pM] = punchTime.split(':').map(Number);
+                    const [eH, eM] = expectedTime.split(':').map(Number);
+                    const punchMin = pH * 60 + pM;
+                    const expectedMin = eH * 60 + eM;
+                    const diff = Math.abs(punchMin - expectedMin);
+                    return diff <= 10 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+                  };
 
-                {/* Linha 4: Dia útil com H.E. */}
-                <tr className="hover:bg-slate-50/60 transition-colors">
-                  <td className="py-2.5 px-3 font-bold text-slate-900">31/10/2026</td>
-                  <td className="py-2.5 px-3 font-sans text-slate-700">Sexta-feira</td>
-                  <td className="py-2.5 px-3 text-slate-900">07:48</td>
-                  <td className="py-2.5 px-3 text-slate-900">12:00</td>
-                  <td className="py-2.5 px-3 text-slate-900">13:00</td>
-                  <td className="py-2.5 px-3 text-slate-900 font-bold">19:15</td>
-                  <td className="py-2.5 px-3 text-slate-700">60 min</td>
-                  <td className="py-2.5 px-3 font-bold text-emerald-700">10:15h</td>
-                  <td className="py-2.5 px-3 font-sans">
-                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      +02:15 H.E. (Aprovada pelo Gestor)
-                    </span>
-                  </td>
-                </tr>
+                  return last30Days.map(dateStr => {
+                    const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(dateStr));
+                    const isToday = dateStr === hojeStr;
+                    
+                    const entrada = dayRegistros.find(r => r.tipoMarcacao === 'ENTRADA');
+                    const saidaAlmoco = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_INICIO');
+                    const voltaAlmoco = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_FIM');
+                    const saidaFinal = dayRegistros.find(r => r.tipoMarcacao === 'SAIDA');
+
+                    const fmtTime = (iso: string | undefined) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+
+                    // Formatar data e dia da semana
+                    const d = new Date(dateStr + 'T12:00:00');
+                    const dayLabel = isToday ? 'Hoje' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                    const weekDay = d.toLocaleDateString('pt-BR', { weekday: 'long' });
+
+                    if (dayRegistros.length === 0 && !isToday) return null;
+
+                    return (
+                      <tr key={dateStr} className={`hover:bg-slate-50/60 transition-colors ${isToday ? 'bg-emerald-50/10' : ''}`}>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{dayLabel}</td>
+                        <td className="py-2.5 px-3 font-sans text-slate-600 capitalize">{weekDay}</td>
+                        <td className={`py-2.5 px-3 ${checkColor(entrada ? new Date(entrada.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.ENTRADA)}`}>
+                          {fmtTime(entrada?.dataHora)}
+                        </td>
+                        <td className={`py-2.5 px-3 ${checkColor(saidaAlmoco ? new Date(saidaAlmoco.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.INTERVALO_INICIO)}`}>
+                          {fmtTime(saidaAlmoco?.dataHora)}
+                        </td>
+                        <td className={`py-2.5 px-3 ${checkColor(voltaAlmoco ? new Date(voltaAlmoco.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.INTERVALO_FIM)}`}>
+                          {fmtTime(voltaAlmoco?.dataHora)}
+                        </td>
+                        <td className={`py-2.5 px-3 ${checkColor(saidaFinal ? new Date(saidaFinal.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.SAIDA)}`}>
+                          {fmtTime(saidaFinal?.dataHora)}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600">
+                          {saidaAlmoco && voltaAlmoco ? `${Math.round((new Date(voltaAlmoco.dataHora).getTime() - new Date(saidaAlmoco.dataHora).getTime()) / 60000)} min` : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-slate-800">
+                          {entrada && saidaFinal ? '8h' : (isToday ? 'Em curso' : '-')}
+                        </td>
+                        <td className="py-2.5 px-3 font-sans">
+                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${dayRegistros.length >= 4 ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-amber-800 bg-amber-50 border-amber-200'}`}>
+                            {dayRegistros.length >= 4 ? 'Jornada Completa' : `${dayRegistros.length} batidas`}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  }).filter(Boolean);
+                })()}
               </tbody>
             </table>
           </div>
@@ -1228,43 +1340,68 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           </div>
 
           <div className="space-y-3">
-            {meusRegistros.map((reg) => (
-              <div
-                key={reg.nsr}
-                className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-emerald-700">NSR {String(reg.nsr).padStart(9, '0')}</span>
-                    <span className="font-sans text-[11px] font-semibold text-slate-800">
-                      · {reg.tipoMarcacao === 'ENTRADA' ? '1ª Entrada' : reg.tipoMarcacao === 'INTERVALO_INICIO' ? 'Saída Almoço' : reg.tipoMarcacao === 'INTERVALO_FIM' ? 'Volta Almoço' : '2ª Saída'}
-                    </span>
-                    <span className="font-sans text-[11px] text-slate-500">· {reg.dataHoraFormatada} (HLB)</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-1 truncate max-w-lg">
-                    Hash SHA-256: <code>{reg.hashSha256}</code>
-                  </div>
-                  {reg.alertaAntecedencia && (
-                    <div className="text-[10px] text-amber-700 font-sans mt-0.5">
-                      {reg.alertaAntecedencia}
-                    </div>
-                  )}
-                  {reg.alertaIntervalo && (
-                    <div className="text-[10px] text-rose-700 font-sans mt-0.5">
-                      {reg.alertaIntervalo}
-                    </div>
-                  )}
-                </div>
+            {meusRegistros.map((reg) => {
+              const schedule = {
+                ENTRADA: userColab?.horarioInicio || '08:00',
+                INTERVALO_INICIO: '12:00',
+                INTERVALO_FIM: '13:00',
+                SAIDA: userColab?.horarioFim || '17:00'
+              };
+              const expectedTime = schedule[reg.tipoMarcacao as keyof typeof schedule] || '08:00';
+              const punchTime = new Date(reg.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+              
+              const [pH, pM] = punchTime.split(':').map(Number);
+              const [eH, eM] = expectedTime.split(':').map(Number);
+              const punchMin = pH * 60 + pM;
+              const expectedMin = eH * 60 + eM;
+              const diff = Math.abs(punchMin - expectedMin);
+              const isOnTime = diff <= 10;
 
-                <button
-                  onClick={() => setComprovanteModal(reg)}
-                  className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg font-sans font-medium transition-colors text-xs flex items-center gap-1.5 shrink-0 shadow-xs"
+              return (
+                <div
+                  key={reg.nsr}
+                  className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs ${
+                    isOnTime ? 'border-emerald-200 bg-emerald-50/20' : 'border-rose-200 bg-rose-50/20'
+                  }`}
                 >
-                  <FileText className="w-3.5 h-3.5 text-slate-500" />
-                  Visualizar Comprovante
-                </button>
-              </div>
-            ))}
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className={`font-bold ${isOnTime ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        NSR {String(reg.nsr).padStart(9, '0')}
+                      </span>
+                      <span className="font-sans text-[11px] font-semibold text-slate-800">
+                        · {reg.tipoMarcacao === 'ENTRADA' ? '1ª Entrada' : reg.tipoMarcacao === 'INTERVALO_INICIO' ? 'Saída Almoço' : reg.tipoMarcacao === 'INTERVALO_FIM' ? 'Volta Almoço' : '2ª Saída'}
+                      </span>
+                      <span className="font-sans text-[11px] text-slate-500">· {reg.dataHoraFormatada} (HLB)</span>
+                      {!isOnTime && (
+                         <span className="bg-rose-100 text-rose-700 text-[9px] px-1.5 py-0.5 rounded font-bold">FORA DO HORÁRIO</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 truncate max-w-lg">
+                      Hash SHA-256: <code>{reg.hashSha256}</code>
+                    </div>
+                    {reg.alertaAntecedencia && (
+                      <div className="text-[10px] text-amber-700 font-sans mt-0.5 font-bold">
+                        ⚠️ {reg.alertaAntecedencia}
+                      </div>
+                    )}
+                    {reg.alertaIntervalo && (
+                      <div className="text-[10px] text-rose-700 font-sans mt-0.5 font-bold">
+                        ⚠️ {reg.alertaIntervalo}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => setComprovanteModal(reg)}
+                    className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg font-sans font-medium transition-colors text-xs flex items-center gap-1.5 shrink-0 shadow-xs"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-slate-500" />
+                    Visualizar Comprovante
+                  </button>
+                </div>
+              );
+            })}
 
             {meusRegistros.length === 0 && (
               <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-lg">
@@ -1605,20 +1742,27 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     { id: 'SAIDA', label: '2ª Saída', icon: Clock }
                   ].map((t) => {
                     const isSelected = tipoPonto === t.id;
+                    const jaBatido = batidasHoje.some(b => b.tipoMarcacao === t.id);
                     const Icon = t.icon;
                     return (
                       <button
                         key={t.id}
                         type="button"
+                        disabled={jaBatido}
                         onClick={() => setTipoPonto(t.id as any)}
-                        className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-bold transition-all text-left ${
-                          isSelected
+                        className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-bold transition-all text-left relative ${
+                          jaBatido 
+                            ? 'bg-slate-50 border-slate-200 text-slate-400 opacity-60 blur-[0.5px] cursor-not-allowed'
+                            : isSelected
                             ? 'bg-emerald-50 border-emerald-500 text-emerald-950 ring-2 ring-emerald-500/30'
                             : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                         }`}
                       >
-                        <Icon className={`w-3.5 h-3.5 ${isSelected ? 'text-emerald-600' : 'text-slate-400'}`} />
+                        <Icon className={`w-3.5 h-3.5 ${jaBatido ? 'text-slate-300' : isSelected ? 'text-emerald-600' : 'text-slate-400'}`} />
                         <span>{t.label}</span>
+                        {jaBatido && (
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] bg-slate-200 text-slate-600 px-1 rounded">OK</span>
+                        )}
                       </button>
                     );
                   })}

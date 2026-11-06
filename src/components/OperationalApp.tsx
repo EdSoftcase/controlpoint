@@ -610,6 +610,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     propOnUpdateOcorrencias?.(occs);
   };
 
+  const [localSolicitacoesAjuste, setLocalSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>([]);
+  const solicitacoesAjuste = propSolicitacoesAjuste || localSolicitacoesAjuste;
+  const setSolicitacoesAjuste = (ajustes: SolicitacaoAjustePonto[]) => {
+    setLocalSolicitacoesAjuste(ajustes);
+    propOnUpdateSolicitacoesAjuste?.(ajustes);
+  };
+
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
 
   // Sub-abas do Ambiente Operacional (sincronizada com App.tsx ou local)
@@ -1141,7 +1148,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       if (batidasHoje.length === 0) tipo = 'ENTRADA';
       else if (batidasHoje.length === 1) tipo = 'INTERVALO_INICIO';
       else if (batidasHoje.length === 2) tipo = 'INTERVALO_FIM';
-      else tipo = 'SAIDA';
+      else if (batidasHoje.length === 3) tipo = 'SAIDA';
+      else {
+        setBiometricTargetColab(null);
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: `Limite Atingido: ${colab.nome} já possui as 4 marcações regulamentares de hoje. Para marcações extras (H.E.), selecione o tipo manualmente.`
+        });
+        setTimeout(() => setKioskFeedback(null), 5000);
+        return;
+      }
     }
 
     // =========================================================================
@@ -1151,6 +1167,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const temSaidaAlmocoHoje = batidasHoje.some(b => b.tipoMarcacao === 'INTERVALO_INICIO');
     const temVoltaAlmocoHoje = batidasHoje.some(b => b.tipoMarcacao === 'INTERVALO_FIM');
     const temSaidaFinalHoje = batidasHoje.some(b => b.tipoMarcacao === 'SAIDA');
+
+    // Validação de Duplicidade (Prevenir clique duplo ou erro de sistema)
+    const jaExisteTipo = batidasHoje.some(b => b.tipoMarcacao === tipo);
+    if (jaExisteTipo && biometricPendingType === 'AUTO') {
+       // Se for AUTO e já existe esse tipo, tentamos o próximo
+       if (tipo === 'ENTRADA') tipo = 'INTERVALO_INICIO';
+       else if (tipo === 'INTERVALO_INICIO') tipo = 'INTERVALO_FIM';
+       else if (tipo === 'INTERVALO_FIM') tipo = 'SAIDA';
+    }
 
     if (tipo === 'INTERVALO_INICIO') {
       if (!temEntradaHoje) {
@@ -2331,6 +2356,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           onUpdateColaboradores={setColaboradores}
           horasExtras={horasExtras}
           onUpdateHorasExtras={setHorasExtras}
+          solicitacoesAjuste={solicitacoesAjuste}
+          onUpdateSolicitacoesAjuste={setSolicitacoesAjuste}
           currentUser={currentUser}
         />
       )}
