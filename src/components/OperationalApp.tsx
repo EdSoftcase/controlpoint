@@ -556,7 +556,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         latitude: e.latitude,
         longitude: e.longitude,
         cerca_raio_metros: e.cercaRaioMetros,
-        bloquear_fora_do_raio: e.bloquearForaDoRaio
+        bloquear_fora_do_raio: e.bloquearForaDoRaio,
+        endereco_completo: e.enderecoCompleto,
+        municipio: e.municipio,
+        uf: e.uf,
+        fuso_horario: e.fusoHorario
       }));
       await supabase.from('establishments').upsert(dbEsts);
     }

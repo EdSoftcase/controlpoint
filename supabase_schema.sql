@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS public.establishments (
     longitude NUMERIC(11, 8) NOT NULL,
     cerca_raio_metros INTEGER NOT NULL DEFAULT 100,
     bloquear_fora_do_raio BOOLEAN DEFAULT TRUE,
+    endereco_completo TEXT,
+    municipio TEXT,
+    uf TEXT,
+    fuso_horario TEXT DEFAULT 'America/Sao_Paulo',
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -116,6 +120,44 @@ CREATE TABLE IF NOT EXISTS public.biometric_audit_logs (
     CONSTRAINT fk_biometric_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
 );
 
+-- 7. TABELA DE ASSINATURAS DE ESPELHO (Portaria 671 / PTRP)
+CREATE TABLE IF NOT EXISTS public.point_signatures (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    collaborator_id TEXT NOT NULL,
+    mes_ano TEXT NOT NULL, -- ex: "2026-10"
+    data_hora_assinatura TIMESTAMPTZ DEFAULT now(),
+    hash_assinatura_sha256 TEXT NOT NULL,
+    ip_address TEXT,
+    dispositivo_info TEXT,
+    rubrica_data_url TEXT, -- Base64 da rubrica
+    status TEXT NOT NULL DEFAULT 'ASSINADO',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT fk_signature_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
+);
+
+-- 8. TABELA DE SOLICITAÇÕES DE AJUSTE E ATESTADOS
+CREATE TABLE IF NOT EXISTS public.adjustment_requests (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    request_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    collaborator_id TEXT NOT NULL,
+    data DATE NOT NULL,
+    tipo TEXT NOT NULL,
+    horario_ajuste TEXT,
+    tipo_marcacao_ajuste TEXT,
+    cid10 TEXT,
+    nome_documento_anexo TEXT,
+    data_hora_envio TIMESTAMPTZ DEFAULT now(),
+    justificativa TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDENTE',
+    resposta_gestor TEXT,
+    data_decisao TIMESTAMPTZ,
+    detalhes JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT fk_adjustment_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
+);
+
 -- Habilitar RLS
 ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.collaborators ENABLE ROW LEVEL SECURITY;
@@ -123,8 +165,10 @@ ALTER TABLE public.point_registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.establishments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.biometric_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.point_signatures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.adjustment_requests ENABLE ROW LEVEL SECURITY;
 
--- Políticas de Acesso Idempotentes (permite reexecução sem erro 42710)
+-- Políticas de Acesso Idempotentes
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.logs;
 CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (true);
 
@@ -143,6 +187,12 @@ CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (true);
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.biometric_audit_logs;
 CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_signatures;
+CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.adjustment_requests;
+CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (true);
+
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_colab_tenant ON public.collaborators(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_tenant ON public.point_registrations(tenant_id);
@@ -150,6 +200,8 @@ CREATE INDEX IF NOT EXISTS idx_point_colab ON public.point_registrations(collabo
 CREATE INDEX IF NOT EXISTS idx_tenant_cnpj ON public.tenants(cnpj);
 CREATE INDEX IF NOT EXISTS idx_biometric_audit_tenant ON public.biometric_audit_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_biometric_audit_colab ON public.biometric_audit_logs(collaborator_id);
+CREATE INDEX IF NOT EXISTS idx_adj_tenant ON public.adjustment_requests(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_adj_colab ON public.adjustment_requests(collaborator_id);
 
 -- 7. DADOS INICIAIS (SEED)
 INSERT INTO public.tenants (tenant_id, cnpj, razao_social, nome_fantasia, slug, plano, licencas_contratadas, email_admin, status)

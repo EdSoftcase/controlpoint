@@ -191,6 +191,53 @@ export default function App() {
             };
           }));
         }
+
+        const { data: sigs } = await supabase.from('point_signatures').select('*').order('created_at', { ascending: false });
+        if (sigs && sigs.length > 0) {
+          setAssinaturasEspelho(sigs.map(s => ({
+            id: s.id,
+            tenantId: s.tenant_id,
+            colaboradorId: s.collaborator_id,
+            colaboradorNome: '', // Will be matched via ID if needed, but PortalColaborador filters by CPF
+            colaboradorCpf: '', // Need to ensure we have CPF or filter by ID
+            mesAno: s.mes_ano,
+            dataHoraAssinatura: s.data_hora_assinatura,
+            hashAssinaturaSha256: s.hash_assinatura_sha256,
+            ipAddress: s.ip_address || '',
+            dispositivoInfo: s.dispositivo_info || '',
+            rubricaDataUrl: s.rubrica_data_url || '',
+            status: s.status as any
+          })));
+        }
+
+        const { data: adjs } = await supabase.from('adjustment_requests').select('*').order('created_at', { ascending: false });
+        if (adjs && adjs.length > 0) {
+          setSolicitacoesAjuste(adjs.map(a => {
+            const details = a.detalhes ? (typeof a.detalhes === 'string' ? JSON.parse(a.detalhes) : a.detalhes) : {};
+            return {
+              id: a.request_id,
+              tenantId: a.tenant_id,
+              colaboradorId: a.collaborator_id,
+              colaboradorNome: details.colaboradorNome || 'Colaborador',
+              colaboradorCpf: details.colaboradorCpf || '',
+              departamentoId: details.departamentoId || '',
+              departamentoNome: details.departamentoNome || '',
+              gestorId: a.gestor_id || details.gestorId,
+              gestorNome: a.gestor_nome || details.gestorNome,
+              data: a.data,
+              tipo: a.tipo as any,
+              horarioAjuste: a.horario_ajuste,
+              tipoMarcacaoAjuste: a.tipo_marcacao_ajuste as any,
+              cid10: a.cid10,
+              nomeDocumentoAnexo: a.nome_documento_anexo,
+              dataHoraEnvio: a.data_hora_envio,
+              justificativa: a.justificativa,
+              status: a.status as any,
+              respostaGestor: a.resposta_gestor,
+              dataDecisao: a.data_decisao
+            };
+          }));
+        }
       } catch (e) {
         console.warn('Carregamento inicial Supabase aviso:', e);
       }
@@ -477,7 +524,26 @@ export default function App() {
               ocorrencias={ocorrencias}
               onUpdateOcorrencias={setOcorrencias}
               solicitacoesAjuste={solicitacoesAjuste}
-              onUpdateSolicitacoesAjuste={setSolicitacoesAjuste}
+              onUpdateSolicitacoesAjuste={async (novas) => {
+                setSolicitacoesAjuste(novas);
+                // Persiste a mudança de status/resposta no Supabase
+                const alterado = novas.find(n => {
+                  const anterior = solicitacoesAjuste.find(s => s.id === n.id);
+                  return anterior && JSON.stringify(n) !== JSON.stringify(anterior);
+                });
+                if (alterado) {
+                  try {
+                    const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
+                    await fetch('/api/save-adjustment', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                      body: JSON.stringify(alterado)
+                    });
+                  } catch (err) {
+                    console.error('Erro ao persistir alteração de ajuste:', err);
+                  }
+                }
+              }}
               assinaturasEspelho={assinaturasEspelho}
               onUpdateAssinaturasEspelho={setAssinaturasEspelho}
               estabelecimentos={estabelecimentos}
@@ -495,9 +561,39 @@ export default function App() {
               horasExtras={horasExtras}
               onAddHoraExtra={(nova) => setHorasExtras([nova, ...horasExtras])}
               solicitacoesAjuste={solicitacoesAjuste}
-              onAddSolicitacaoAjuste={(nova) => setSolicitacoesAjuste([nova, ...solicitacoesAjuste])}
+              onAddSolicitacaoAjuste={async (nova) => {
+                setSolicitacoesAjuste([nova, ...solicitacoesAjuste]);
+                try {
+                  const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
+                  await fetch('/api/save-adjustment', {
+                    method: 'POST',
+                    headers: { 
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(nova)
+                  });
+                } catch (err) {
+                  console.error('Erro ao persistir solicitação:', err);
+                }
+              }}
               assinaturasEspelho={assinaturasEspelho}
-              onAddAssinaturaEspelho={(nova) => setAssinaturasEspelho([nova, ...assinaturasEspelho])}
+              onAddAssinaturaEspelho={async (nova) => {
+                setAssinaturasEspelho([nova, ...assinaturasEspelho]);
+                try {
+                  const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
+                  await fetch('/api/save-signature', {
+                    method: 'POST',
+                    headers: { 
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(nova)
+                  });
+                } catch (err) {
+                  console.error('Erro ao persistir assinatura:', err);
+                }
+              }}
               onRegistrarPonto={() => {
                 if (currentUser.role === 'SUPER_ADMIN') {
                   setOperationalTab('coletor');

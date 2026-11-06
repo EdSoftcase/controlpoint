@@ -423,7 +423,11 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         latitude: novoEst.latitude,
         longitude: novoEst.longitude,
         cerca_raio_metros: novoEst.cercaRaioMetros,
-        bloquear_fora_do_raio: novoEst.bloquearForaDoRaio
+        bloquear_fora_do_raio: novoEst.bloquearForaDoRaio,
+        endereco_completo: novoEst.enderecoCompleto,
+        municipio: novoEst.municipio,
+        uf: novoEst.uf,
+        fuso_horario: novoEst.fusoHorario
       });
     } catch (err) {
       console.warn('Aviso sincronização Supabase estabelecimento:', err);

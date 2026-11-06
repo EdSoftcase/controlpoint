@@ -491,6 +491,96 @@ app.post('/api/save-point', async (req, res) => {
   }
 });
 
+// Save Point Signature (Espelho de Ponto)
+app.post('/api/save-signature', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const signature = req.body;
+    if (user.user_metadata?.tenantId && user.user_metadata.tenantId !== signature.tenantId) {
+      return res.status(403).send('Forbidden');
+    }
+    
+    const { data, error: dbError } = await supabase
+      .from('point_signatures')
+      .insert({
+        tenant_id: signature.tenantId,
+        collaborator_id: signature.colaboradorId,
+        mes_ano: signature.mesAno,
+        data_hora_assinatura: signature.dataHoraAssinatura,
+        hash_assinatura_sha256: signature.hashAssinaturaSha256,
+        ip_address: signature.ipAddress,
+        dispositivo_info: signature.dispositivoInfo,
+        rubrica_data_url: signature.rubricaDataUrl,
+        status: signature.status || 'ASSINADO'
+      })
+      .select();
+      
+    if (dbError) throw dbError;
+    
+    await logEvent(signature.tenantId, `Point sheet signed for ${signature.colaboradorId} (Month: ${signature.mesAno})`);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Save signature error:', error);
+    await logEvent('error', `Save signature error: ${error}`);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// Save/Update Point Adjustment Request
+app.post('/api/save-adjustment', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const adjustment = req.body;
+    if (user.user_metadata?.tenantId && user.user_metadata.tenantId !== adjustment.tenantId && user.user_metadata?.role !== 'SUPER_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    
+    const { data, error: dbError } = await supabase
+      .from('adjustment_requests')
+      .upsert({
+        request_id: adjustment.id,
+        tenant_id: adjustment.tenantId,
+        collaborator_id: adjustment.colaboradorId,
+        data: adjustment.data,
+        tipo: adjustment.tipo,
+        horario_ajuste: adjustment.horarioAjuste,
+        tipo_marcacao_ajuste: adjustment.tipoMarcacaoAjuste,
+        cid10: adjustment.cid10,
+        nome_documento_anexo: adjustment.nomeDocumentoAnexo,
+        data_hora_envio: adjustment.dataHoraEnvio,
+        justificativa: adjustment.justificativa,
+        status: adjustment.status || 'PENDENTE',
+        resposta_gestor: adjustment.respostaGestor,
+        data_decisao: adjustment.dataDecisao,
+        detalhes: JSON.stringify(adjustment)
+      }, { onConflict: 'request_id' })
+      .select();
+      
+    if (dbError) throw dbError;
+    
+    await logEvent(adjustment.tenantId, `Adjustment request ${adjustment.status} for ${adjustment.colaboradorId}`);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Save adjustment error:', error);
+    await logEvent('error', `Save adjustment error: ${error}`);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
 // Create Auth User (requires Service Role Key)
 app.post('/api/create-auth-user', async (req, res) => {
   const authHeader = req.headers.authorization;

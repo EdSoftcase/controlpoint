@@ -216,6 +216,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [signatureSuccessMsg, setSignatureSuccessMsg] = useState<string | null>(null);
+  const [biometricCountdown, setBiometricCountdown] = useState<number | null>(null);
 
   // Solicitações de H.E. do colaborador logado
   const minhasHorasExtras = horasExtras.filter(
@@ -273,7 +274,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
   // Assinatura do Espelho do mês atual do colaborador
   const minhaAssinaturaMesAtual = assinaturasEspelho.find(
-    (a) => a.colaboradorCpf.replace(/\D/g, '') === userCpfDigits && a.mesAno === '2026-10'
+    (a) => (a.colaboradorId === user.id || (a.colaboradorCpf && a.colaboradorCpf.replace(/\D/g, '') === userCpfDigits)) && a.mesAno === '2026-10'
   );
 
   // Submeter Novo Ajuste / Atestado
@@ -362,6 +363,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     const rubricaUrl = canvas ? canvas.toDataURL() : undefined;
 
     const now = new Date().toLocaleString('pt-BR');
+    const nowIso = new Date().toISOString();
     const hash = `sha256_espelho_ponto_${user.cpf}_202610_${Date.now().toString(16)}`;
 
     const novaAssinatura: AssinaturaEspelhoPonto = {
@@ -371,7 +373,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
       mesAno: '2026-10',
-      dataHoraAssinatura: now,
+      dataHoraAssinatura: nowIso,
       hashAssinaturaSha256: hash,
       ipAddress: '189.120.45.88',
       dispositivoInfo: `${navigator.userAgent.slice(0, 45)}... (Portal PTRP)`,
@@ -399,6 +401,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setIsBaterPontoModalOpen(true);
     setBioState('idle');
     setLivenessConfirmed(false);
+    setBiometricCountdown(null);
     setCurrentLiveness(getRandomLivenessChallenge());
     setBioMsg('Enquadre seu rosto para validação biométrica e prova de vida...');
 
@@ -440,6 +443,21 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       );
     }
   };
+
+  // Efeito de Contador Regressivo Biométrico (3 segundos)
+  React.useEffect(() => {
+    let timer: any;
+    if (biometricCountdown !== null && biometricCountdown > 0) {
+      timer = setTimeout(() => setBiometricCountdown(biometricCountdown - 1), 1000);
+    } else if (biometricCountdown === 0) {
+      setBiometricCountdown(null);
+      // Inicia análise biométrica automática após o timer
+      if (authMethod === 'FACIAL') {
+        handleValidateFace();
+      }
+    }
+    return () => clearTimeout(timer);
+  }, [biometricCountdown, authMethod]);
 
   // Ciclo da Câmera Frontal (Selfie)
   React.useEffect(() => {
@@ -510,6 +528,15 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       setBioMsg('Erro na leitura óptica facial.');
     }
   };
+
+  // Trigger countdown when face is detected for the first time
+  React.useEffect(() => {
+    if (isBaterPontoModalOpen && authMethod === 'FACIAL' && bioState === 'idle' && biometricCountdown === null) {
+      // Pequeno delay para garantir que a câmera carregou
+      const t = setTimeout(() => setBiometricCountdown(3), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [isBaterPontoModalOpen, authMethod, bioState]);
 
   // Efetivar Registro de Ponto Individual
   const handleExecutarPontoIndividual = async () => {
@@ -1863,13 +1890,46 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     <canvas ref={bioCanvasRef} className="hidden" />
 
                     {/* Guia Oval Facial */}
-                    <div className={`absolute w-44 h-56 rounded-[50%] border-2 pointer-events-none transition-colors ${
+                    <div className={`absolute w-44 h-56 rounded-[50%] border-2 pointer-events-none transition-colors z-20 ${
                       bioState === 'verified'
                         ? 'border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.6)]'
                         : bioState === 'rejected'
                         ? 'border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.6)]'
                         : 'border-white/50 border-dashed'
-                    }`} />
+                    }`}>
+                      {/* Efeito de Scanner Animado (biometric-modal-scanner-circle) */}
+                      <div className={`absolute inset-0 rounded-[50%] opacity-30 ${
+                        bioState === 'verified' ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'
+                      } biometric-modal-scanner-circle`}></div>
+                    </div>
+
+                    {/* Contador Regressivo 3s */}
+                    {biometricCountdown !== null && (
+                      <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/40 backdrop-blur-[2px]">
+                        <div className="flex flex-col items-center">
+                          <span className="text-7xl font-black text-white animate-ping drop-shadow-[0_0_15px_rgba(255,255,255,0.6)]">
+                            {biometricCountdown}
+                          </span>
+                          <span className="text-[10px] font-bold text-white uppercase tracking-widest mt-2 bg-indigo-600 px-2 py-0.5 rounded shadow-lg">
+                            Prepare-se para o ponto
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Instrução Dinâmica de Liveness após o Contador */}
+                    {currentLiveness && !livenessConfirmed && biometricCountdown === null && (
+                      <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-amber-950/40 backdrop-blur-[1px] p-4 text-center animate-in fade-in zoom-in-95 duration-300">
+                        <div className="bg-amber-500 text-slate-950 px-4 py-2 rounded-2xl shadow-2xl border-2 border-white/20 animate-bounce">
+                          <span className="text-sm font-black uppercase tracking-tight">
+                            {currentLiveness.actionPrompt}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-amber-100 font-bold mt-3 max-w-[180px] drop-shadow-md">
+                          {currentLiveness.instruction}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Badge de Status Biométrica */}
                     <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-center">
