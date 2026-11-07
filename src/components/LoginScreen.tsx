@@ -26,8 +26,8 @@ interface LoginScreenProps {
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const { supabase, updateSupabaseConfig } = useAuth();
-  const [identificador, setIdentificador] = useState('admin@softcase.com.br');
-  const [senha, setSenha] = useState('Softcase@2026');
+  const [identificador, setIdentificador] = useState('');
+  const [senha, setSenha] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -67,7 +67,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   // Etapa de Autenticação em Duas Etapas (MFA)
   const [mfaStep, setMfaStep] = useState(false);
-  const [mfaCode, setMfaCode] = useState('482910');
+  const [mfaCode, setMfaCode] = useState('');
   const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
 
   const handleIdentificadorChange = (val: string) => {

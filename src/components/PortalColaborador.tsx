@@ -602,6 +602,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       return;
     }
 
+    // Trava de Horário Regulamentar: Entrada só é permitida no horário autorizado
+    if (tipoPonto === 'ENTRADA' && !isPunchAllowed) {
+      alert(`Horário Não Permitido: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} min antes do início contratado às ${horarioInicioStr}).`);
+      return;
+    }
+
     // Validação de Duplicidade (Garantir que não bate o mesmo período 2x)
     const jaExisteTipo = batidasHoje.some(b => b.tipoMarcacao === tipoPonto);
     if (jaExisteTipo) {

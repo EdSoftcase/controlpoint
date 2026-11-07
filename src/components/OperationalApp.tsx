@@ -748,25 +748,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const activeColaboradores = colaboradores.filter((c) => c.tenantId === selectedTenantId);
   const activeRegistros = registrosPonto.filter((r) => r.tenantId === selectedTenantId);
 
-  // Calcula a data/hora efetiva do relógio (considerando simulação de teste)
+  // Data e Hora Oficial em Tempo Real (Modo Produção)
   const getEffectiveClockTime = (): Date => {
-    const base = new Date();
-    if (simulatedTimeOverride === '07:20_ANTECIPADO') {
-      const d = new Date(base);
-      d.setHours(7, 20, 0, 0);
-      return d;
-    }
-    if (simulatedTimeOverride === '08:00_NORMAL') {
-      const d = new Date(base);
-      d.setHours(8, 0, 15, 0);
-      return d;
-    }
-    if (simulatedTimeOverride === '12:35_INTERVALO_CURTO') {
-      const d = new Date(base);
-      d.setHours(12, 35, 0, 0);
-      return d;
-    }
-    return base;
+    return new Date();
   };
 
   // Estado da Biometria Facial no Coletor
@@ -1118,9 +1102,33 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
+    // Validação estrita de horário de permissão de Entrada
+    const targetType = forcedType || selectedPunchType;
+    const clockTime = new Date();
+    const hojeYMD = clockTime.toISOString().slice(0, 10);
+    const batidasHoje = registrosPonto.filter((r) => r.colaboradorId === colab.id && r.dataHora.startsWith(hojeYMD));
+    const isEntrada = targetType === 'ENTRADA' || (targetType === 'AUTO' && batidasHoje.length === 0);
+
+    if (isEntrada && colab.regraAntecedenciaAtiva !== false) {
+      const [hInicio, mInicio] = (colab.horarioInicio || '08:00').split(':').map(Number);
+      const minutosInicioContratado = hInicio * 60 + mInicio;
+      const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
+      const diferencaMinutos = minutosInicioContratado - minutosAtuais;
+      const toleranciaPermitida = colab.maxMinutosAntecedenciaPermitido || 15;
+
+      if (diferencaMinutos > toleranciaPermitida) {
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: `Horário Não Permitido: Entrada bloqueada para ${colab.nome}. Jornada inicia às ${colab.horarioInicio}. Entrada liberada apenas ${toleranciaPermitida} minutos antes.`
+        });
+        setTimeout(() => setKioskFeedback(null), 5000);
+        return;
+      }
+    }
+
     // Abre o Modal de Reconhecimento Facial com Prova de Vida Ativa
     setBiometricTargetColab(colab);
-    setBiometricPendingType(forcedType || selectedPunchType);
+    setBiometricPendingType(targetType);
     setScanProgress(0);
     setFaceDetected(false);
     setSimulatedMismatch(false);
@@ -2549,65 +2557,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               </span>
             </div>
 
-            {/* Seletor de Simulação de Horário para Teste das Regras */}
-            <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                  Ambiente de Teste de Horário & Regras:
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">
-                  CLT Art. 4º, 58 § 1º e Art. 71
-                </span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px] font-medium">
-                <button
-                  onClick={() => setSimulatedTimeOverride('REAL')}
-                  className={`py-1.5 px-2 rounded-lg border transition-colors ${
-                    simulatedTimeOverride === 'REAL'
-                      ? 'bg-emerald-600 border-emerald-500 text-white font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  Horário Real
-                </button>
-                <button
-                  onClick={() => setSimulatedTimeOverride('08:00_NORMAL')}
-                  className={`py-1.5 px-2 rounded-lg border transition-colors ${
-                    simulatedTimeOverride === '08:00_NORMAL'
-                      ? 'bg-emerald-600 border-emerald-500 text-white font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  08:00 (Início OK)
-                </button>
-                <button
-                  onClick={() => setSimulatedTimeOverride('07:20_ANTECIPADO')}
-                  className={`py-1.5 px-2 rounded-lg border transition-colors ${
-                    simulatedTimeOverride === '07:20_ANTECIPADO'
-                      ? 'bg-amber-600 border-amber-500 text-white font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  07:20 (&gt;15m Cedo)
-                </button>
-                <button
-                  onClick={() => setSimulatedTimeOverride('12:35_INTERVALO_CURTO')}
-                  className={`py-1.5 px-2 rounded-lg border transition-colors ${
-                    simulatedTimeOverride === '12:35_INTERVALO_CURTO'
-                      ? 'bg-rose-600 border-rose-500 text-white font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  12:35 (Almoço 35m)
-                </button>
-              </div>
-            </div>
-
             {/* Relógio Digital Oficial HLB */}
             <div className="text-center py-5 bg-slate-950/70 rounded-xl border border-slate-800/80 space-y-1">
-              <span className="text-xs font-mono text-slate-400 uppercase tracking-widest block">
-                Hora Legal Brasileira {simulatedTimeOverride !== 'REAL' && '(Simulação Ativa)'}
+              <span className="text-xs font-mono text-slate-400 uppercase tracking-widest block flex items-center justify-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" /> Hora Legal Brasileira (HLB)
               </span>
               <div className="text-4xl sm:text-5xl font-mono font-bold text-white tracking-wider tabular-nums">
                 {getEffectiveClockTime().toLocaleTimeString('pt-BR')}
