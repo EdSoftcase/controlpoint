@@ -648,15 +648,23 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const isProd = process.env.NODE_ENV === 'production';
+
 async function startServer() {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa'
-  });
+  if (isProd) {
+    app.use(express.static('dist'));
+    app.get('*', (req, res) => {
+      res.sendFile('dist/index.html', { root: '.' });
+    });
+  } else {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa'
+    });
+    app.use(vite.middlewares);
+  }
   
-  app.listen(3000, () => console.log('Server running on port 3000'));
-  
-  // O middleware do Vite DEVE vir DEPOIS das rotas de API
-  app.use(vite.middlewares);
+  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
 }
 startServer();
