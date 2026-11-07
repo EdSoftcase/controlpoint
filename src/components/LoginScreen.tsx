@@ -346,7 +346,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           <ShieldCheck className="w-7 h-7" />
         </div>
         <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-          Point Control
+          Control Point
         </h1>
         <p className="mt-1 text-xs text-slate-500 font-medium">
           Sistema de Controle de Jornada & Registro Eletrônico REP-P

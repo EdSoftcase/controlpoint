@@ -42,7 +42,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
 
             <div className="space-y-1">
-              <h2 className="text-lg font-bold text-white">Ops! Algo deu errado ao carregar o Point Control</h2>
+              <h2 className="text-lg font-bold text-white">Ops! Algo deu errado ao carregar o Control Point</h2>
               <p className="text-xs text-slate-400">
                 Ocorreu uma exceção não tratada na renderização. Detalhes técnicos abaixo:
               </p>

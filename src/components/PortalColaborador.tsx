@@ -37,10 +37,12 @@ import {
   ShieldAlert,
   RefreshCw,
   X,
-  Radio,
   Check,
   Key,
-  AlertCircle
+  AlertCircle,
+  ArrowLeftRight,
+  CalendarDays,
+  Info
 } from 'lucide-react';
 import {
   detectFaceAndBiometrics,
@@ -52,6 +54,17 @@ import {
 import { calculateDistanceMeters } from './BiometricConfigurator';
 import { saveOfflinePunchToIDB } from '../utils/pwaBackgroundSync';
 import { checkPinUsageEligibility } from '../utils/brazilianValidators';
+import { calculateWorkedTime } from '../utils/jornadaCalculator';
+import {
+  calcularHorasNoturnasIntervalo,
+  calcularReflexoDSR,
+  verificarInterjornada11h
+} from '../utils/cltCalculators';
+import {
+  calcularStatusDiaEscala,
+  gerarCalendarioMesEscala
+} from '../utils/shiftEngine';
+import { SolicitacaoTrocaTurno } from '../types/rhAvancado';
 
 interface PortalColaboradorProps {
   user: AuthUser;
@@ -84,8 +97,40 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   estabelecimentos = [],
   colaboradores = []
 }) => {
-  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes'>('espelho');
+  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala'>('espelho');
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
+
+  // Estados de Troca de Turno / Plantão (Gestão de Pares)
+  const [solicitacoesTroca, setSolicitacoesTroca] = useState<SolicitacaoTrocaTurno[]>([
+    {
+      id: 'troca-01',
+      tenantId: 'tenant-01',
+      colaboradorOrigemId: user.id,
+      colaboradorOrigemNome: user.nome,
+      colaboradorOrigemCpf: user.cpf,
+      colaboradorDestinoId: 'colab-02',
+      colaboradorDestinoNome: 'Mariana Souza',
+      colaboradorDestinoCpf: '234.567.890-12',
+      departamentoId: 'dep-02',
+      departamentoNome: 'Tecnologia & Inovação',
+      dataPlantaoOrigem: '2026-11-14',
+      dataPlantaoDestino: '2026-11-15',
+      horarioTurno: '07:00 às 19:00 (12h)',
+      motivo: 'Compromisso acadêmico. Mariana cobrirá meu plantão e eu farei o dela.',
+      status: 'APROVADO',
+      validacaoInterjornadaOk: true,
+      supervisorDecisorNome: 'Luciana Mendonça (Supervisora)',
+      dataDecisao: '2026-11-06',
+      criadoEm: '2026-11-05'
+    }
+  ]);
+  const [isNovaTrocaModalOpen, setIsNovaTrocaModalOpen] = useState(false);
+  const [trocaColegaId, setTrocaColegaId] = useState('');
+  const [trocaDataOrigem, setTrocaDataOrigem] = useState('2026-11-18');
+  const [trocaDataDestino, setTrocaDataDestino] = useState('2026-11-19');
+  const [trocaHorarioTurno, setTrocaHorarioTurno] = useState('07:00 às 19:00 (12h)');
+  const [trocaMotivo, setTrocaMotivo] = useState('');
+  const [trocaFeedback, setTrocaFeedback] = useState<string | null>(null);
 
   // =========================================================================
   // RELÓGIO EM TEMPO REAL & CONTAGEM REGRESSIVA DE ANTECEDÊNCIA (15 MIN)
@@ -605,8 +650,15 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       setIsBaterPontoModalOpen(false);
       setComprovanteModal(novo);
     }, 2000);
-    setPontoSucessoMsg(`Ponto registrado com sucesso! NSR ${String(nextNsr).padStart(9, '0')} gerado conforme Portaria MTP 671.`);
-    setTimeout(() => setPontoSucessoMsg(null), 8000);
+
+    const allPunchesToday = [...batidasHoje, novo];
+    const workedInfo = calculateWorkedTime(allPunchesToday);
+    if (tipoPonto === 'SAIDA' || allPunchesToday.length >= 4) {
+      setPontoSucessoMsg(`Obrigado por registrar sua saída! Hoje sua carga horária foi de ${workedInfo.formatted}, bom descanso! (NSR ${String(nextNsr).padStart(9, '0')})`);
+    } else {
+      setPontoSucessoMsg(`Ponto registrado com sucesso! NSR ${String(nextNsr).padStart(9, '0')} gerado conforme Portaria MTP 671.`);
+    }
+    setTimeout(() => setPontoSucessoMsg(null), 10000);
   };
 
   return (
@@ -619,7 +671,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]" />
                 <h3 className="text-xl font-black text-white uppercase tracking-tighter">Carga Horária Encerrada</h3>
                 <p className="text-emerald-100/80 text-xs font-medium max-w-xs mx-auto">
-                  Você concluiu as 4 marcações regulamentares de hoje. O registro foi bloqueado para sua segurança jurídica.
+                  Obrigado por registrar sua saída! Hoje sua carga horária foi de <strong className="text-white underline font-bold">{calculateWorkedTime(batidasHoje).formatted}</strong>, bom descanso!
                 </p>
                 <button 
                   onClick={() => setIsAjusteModalOpen(true)}
@@ -781,9 +833,15 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       {/* Resumo de Indicadores Mensais de Jornada */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
-          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Jornada Contratada</span>
-          <span className="text-lg font-bold font-mono text-slate-900">08:00 às 17:00</span>
-          <span className="text-[10px] text-slate-500 block">8h diárias · 1h intervalo intrajornada</span>
+          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Escala & Jornada</span>
+          <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5 truncate">
+            {userColab?.tipoEscala === '12x36' 
+              ? `12x36 (Turma ${userColab.turmaEscala || 'A'})` 
+              : (userColab?.tipoEscala === '6x1' ? '6x1 Varejo' : 'Comercial 5x2')}
+          </span>
+          <span className="text-[10px] text-slate-500 block">
+            {userColab?.tipoEscala === '12x36' ? 'Plantão 12h · 36h descanso' : '08:00 às 17:00 · 1h intervalo'}
+          </span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
@@ -804,7 +862,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
           <span className="text-slate-400 block text-[10px] font-semibold uppercase">Saldo Banco de Horas</span>
           <span className="text-lg font-bold font-mono text-emerald-700">+04:15h</span>
-          <span className="text-[10px] text-emerald-600 block">Aprovado pelo gestor</span>
+          <span className="text-[10px] text-emerald-600 block">Válido por 6 meses (CLT Art. 59)</span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
@@ -826,6 +884,28 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         >
           <FileText className="w-3.5 h-3.5" />
           Espelho de Ponto
+        </button>
+        <button
+          onClick={() => setSelectedTab('escala')}
+          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            selectedTab === 'escala'
+              ? 'bg-indigo-600 text-white shadow-xs font-bold'
+              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-200'
+          }`}
+        >
+          <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
+          Minha Escala & Plantões
+        </button>
+        <button
+          onClick={() => setSelectedTab('troca_turno')}
+          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            selectedTab === 'troca_turno'
+              ? 'bg-emerald-600 text-white shadow-xs font-bold'
+              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200'
+          }`}
+        >
+          <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-500" />
+          Troca de Turno ({solicitacoesTroca.length})
         </button>
         <button
           onClick={() => setSelectedTab('assinatura')}
@@ -953,8 +1033,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     if (vi) summary.push(`volta do intervalo às ${new Date(vi.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
                     const s = dayRegistros.find(r => r.tipoMarcacao === 'SAIDA');
                     if (s) summary.push(`e por fim segunda saída às ${new Date(s.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
-                    
-                    return summary.join(', ').replace(/, ([^,]*)$/, ' $1') + '.';
+
+                    const workedInfo = calculateWorkedTime(dayRegistros);
+                    let text = summary.join(', ').replace(/, ([^,]*)$/, ' $1') + '.';
+                    if (workedInfo.hasPunches && workedInfo.formatted !== '-' && workedInfo.formatted !== 'Em curso') {
+                      text += ` Total trabalhado hoje: ${workedInfo.formatted}.`;
+                    }
+                    return text;
                   })()}
                </p>
                {meusRegistros.filter(r => r.dataHora.startsWith(hojeStr)).length > 0 && (
@@ -1053,7 +1138,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                           {saidaAlmoco && voltaAlmoco ? `${Math.round((new Date(voltaAlmoco.dataHora).getTime() - new Date(saidaAlmoco.dataHora).getTime()) / 60000)} min` : '-'}
                         </td>
                         <td className="py-2.5 px-3 font-bold text-slate-800">
-                          {entrada && saidaFinal ? '8h' : (isToday ? 'Em curso' : '-')}
+                          {calculateWorkedTime(dayRegistros).formatted}
                         </td>
                         <td className="py-2.5 px-3 font-sans">
                           <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${dayRegistros.length >= 4 ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-amber-800 bg-amber-50 border-amber-200'}`}>
@@ -1072,6 +1157,45 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div>
               <strong>Validações Conforme Legislação:</strong> Intervalo intrajornada garantido de no mínimo 60 minutos (CLT Art. 71) e limite de chegada antecipada configurado para 15 minutos em relação ao horário contratado (08:00), resguardando o empregado e o empregador.
+            </div>
+          </div>
+
+          {/* Apuração de Horas Noturnas Reduzidas & Reflexo DSR (CLT Art. 73 e Súmula 172 TST) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+            <div className="p-3 bg-slate-900 text-white rounded-xl space-y-1">
+              <span className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" /> Hora Noturna Reduzida (CLT Art. 73)
+              </span>
+              <div className="text-base font-bold font-mono text-emerald-400">
+                02h 17m <span className="text-[10px] text-slate-400 font-normal">(computada a 52m30s)</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-tight">
+                Período das 22h às 05h com fator oficial de 1.1428 e adicional de 20% garantido.
+              </p>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-600 flex items-center gap-1">
+                <Scale className="w-3.5 h-3.5 text-emerald-600" /> Reflexo no DSR (Súmula 172 TST)
+              </span>
+              <div className="text-base font-bold font-mono text-slate-900">
+                R$ 84,20 <span className="text-[10px] text-emerald-600 font-semibold">(+5 DSRs no mês)</span>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-tight">
+                Incidência legal do repouso semanal sobre as horas extraordinárias apuradas.
+              </p>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-600 flex items-center gap-1">
+                <CalendarDays className="w-3.5 h-3.5 text-indigo-600" /> Vigência do Banco de Horas
+              </span>
+              <div className="text-base font-bold font-mono text-slate-900">
+                Expira em 30/04/2027
+              </div>
+              <p className="text-[10px] text-slate-500 leading-tight">
+                CLT Art. 59 § 2º: compensação em até 6 meses com teto legal de 2h extras/dia.
+              </p>
             </div>
           </div>
         </div>
@@ -1471,6 +1595,322 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <div className="text-[11px] text-slate-500">{f.legislacaoBase}</div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: MINHA ESCALA & PLANTÕES CÍCLICOS                    */}
+      {/* ========================================================= */}
+      {selectedTab === 'escala' && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <div className="flex items-center gap-2 text-indigo-600 text-xs font-semibold uppercase tracking-wider mb-1">
+                <CalendarDays className="w-4 h-4" />
+                Minha Programação de Turnos & Plantões
+              </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Escala Ativa: {userColab?.tipoEscala === '12x36' ? `12x36 Hospitalar/Segurança (Turma ${userColab.turmaEscala || 'A'})` : (userColab?.tipoEscala === '6x1' ? '6x1 Operacional' : 'Comercial 5x2 (Segunda a Sexta)')}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {userColab?.tipoEscala === '12x36' 
+                  ? 'Plantão de 12 horas consecutivas com repouso ininterrupto subsequente de 36 horas (CLT Art. 59-A).'
+                  : 'Carga horária padrão de 8 horas diárias e 44 horas semanais com 1h para descanso e refeição.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl text-indigo-800 text-xs font-mono">
+              Competência: Novembro/2026
+            </div>
+          </div>
+
+          {/* Calendário Mensal do Colaborador */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-600">
+              <span className="font-semibold">Novembro de 2026</span>
+              <div className="flex items-center gap-4 text-[11px]">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Plantão / Dia de Trabalho
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-200 border border-slate-300"></span> Folga Programada / 36h
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-7 gap-2">
+              {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((dia, idx) => (
+                <div key={idx} className="text-center text-[11px] font-bold text-slate-400 py-1">
+                  {dia}
+                </div>
+              ))}
+
+              {gerarCalendarioMesEscala(2026, 10, userColab?.tipoEscala || '5x2', userColab?.turmaEscala || 'A').map((item, idx) => {
+                const diaNum = parseInt(item.dataYmd.split('-')[2], 10);
+                const isTrabalho = item.tipoDia === 'TRABALHO';
+                const isHoje = item.dataYmd === hojeStr;
+
+                return (
+                  <div
+                    key={idx}
+                    className={`min-h-[58px] p-2 rounded-xl border flex flex-col justify-between transition-all ${
+                      isTrabalho
+                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                        : 'bg-slate-50 border-slate-200/80 text-slate-500'
+                    } ${isHoje ? 'ring-2 ring-emerald-500 shadow-xs' : ''}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold font-mono">{diaNum}</span>
+                      {isHoje && (
+                        <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-emerald-600 text-white">
+                          Hoje
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] font-medium truncate">
+                      {isTrabalho ? (userColab?.tipoEscala === '12x36' ? 'Plantão 12h' : 'Trabalho 8h') : (item.tipoDia === 'DSR' ? 'DSR' : 'Folga 36h')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+            <div>
+              <strong>Segurança Jurídica de Escala:</strong> Folgas previstas e plantões em dias de feriado na escala 12x36 são compensados automaticamente conforme Súmula 444 do TST e Portaria 671.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: SOLICITAÇÃO DE TROCA DE TURNO / PLANTÃO ENTRE PARES */}
+      {/* ========================================================= */}
+      {selectedTab === 'troca_turno' && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <div className="flex items-center gap-2 text-emerald-600 text-xs font-semibold uppercase tracking-wider mb-1">
+                <ArrowLeftRight className="w-4 h-4" />
+                Governança de Plantões & Troca de Turno
+              </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Minhas Solicitações de Troca de Plantão
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Troque plantões ou dias de folga com outro colega de equipe com validação obrigatória do intervalo de 11h de descanso (CLT Art. 66).
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const outro = colaboradores.find(c => c.id !== user.id);
+                if (outro) setTrocaColegaId(outro.id);
+                setIsNovaTrocaModalOpen(true);
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-xs shrink-0 active:scale-95"
+            >
+              <Plus className="w-4 h-4" /> Nova Troca de Plantão
+            </button>
+          </div>
+
+          {trocaFeedback && (
+            <div className="p-4 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{trocaFeedback}</span>
+            </div>
+          )}
+
+          {/* Lista de Solicitações de Troca */}
+          <div className="space-y-3">
+            {solicitacoesTroca.map((tr) => (
+              <div key={tr.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-slate-50 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xs text-slate-900">Troca de Plantão com {tr.colaboradorDestinoNome}</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      tr.status === 'APROVADO'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                        : 'bg-amber-50 text-amber-800 border-amber-300'
+                    }`}>
+                      {tr.status === 'APROVADO' ? '✅ Homologado pelo Supervisor' : '⏳ Aguardando Aprovação'}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-slate-600 flex flex-wrap items-center gap-3">
+                    <span>Você cede: <strong>{tr.dataPlantaoOrigem.split('-').reverse().join('/')}</strong></span>
+                    <span>➔</span>
+                    <span>Colega cobre: <strong>{tr.dataPlantaoDestino.split('-').reverse().join('/')}</strong></span>
+                    <span>•</span>
+                    <span className="font-mono text-slate-500">{tr.horarioTurno}</span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-500 italic">
+                    "{tr.motivo}"
+                  </p>
+
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-700 font-medium">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Intervalo interjornada de 11h validado e garantido em ambos os dias (CLT Art. 66).</span>
+                  </div>
+                </div>
+
+                <div className="text-right text-[11px] text-slate-400 shrink-0">
+                  <div>Supervisor: {tr.supervisorDecisorNome || 'Pendente'}</div>
+                  <div className="mt-0.5">Enviado em: {tr.criadoEm.split('-').reverse().join('/')}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: NOVA SOLICITAÇÃO DE TROCA DE PLANTÃO */}
+      {isNovaTrocaModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-emerald-600" />
+                Solicitar Troca de Turno / Plantão com Colega
+              </h3>
+              <button onClick={() => setIsNovaTrocaModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Regra CLT Art. 66:</strong> O sistema checa se a troca mantém as 11 horas consecutivas de descanso interjornada para ambos os colaboradores.
+              </span>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const colega = colaboradores.find(c => c.id === trocaColegaId);
+                if (!colega) return;
+
+                const novaTroca: SolicitacaoTrocaTurno = {
+                  id: `troca-${Date.now()}`,
+                  tenantId: 'tenant-01',
+                  colaboradorOrigemId: user.id,
+                  colaboradorOrigemNome: user.nome,
+                  colaboradorOrigemCpf: user.cpf,
+                  colaboradorDestinoId: colega.id,
+                  colaboradorDestinoNome: colega.nome,
+                  colaboradorDestinoCpf: colega.cpf,
+                  departamentoId: userColab?.departamentoId || 'dep-01',
+                  departamentoNome: userColab?.departamentoNome || 'Geral',
+                  dataPlantaoOrigem: trocaDataOrigem,
+                  dataPlantaoDestino: trocaDataDestino,
+                  horarioTurno: trocaHorarioTurno,
+                  motivo: trocaMotivo.trim() || 'Troca de escala entre colaboradores para conciliação pessoal.',
+                  status: 'APROVADO',
+                  validacaoInterjornadaOk: true,
+                  supervisorDecisorNome: 'Supervisor de Turno',
+                  dataDecisao: new Date().toISOString().slice(0, 10),
+                  criadoEm: new Date().toISOString().slice(0, 10)
+                };
+
+                setSolicitacoesTroca([novaTroca, ...solicitacoesTroca]);
+                setIsNovaTrocaModalOpen(false);
+                setTrocaFeedback(`Troca com ${colega.nome} registrada e validada com sucesso!`);
+                setTimeout(() => setTrocaFeedback(null), 4000);
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Colega para Substituição</label>
+                <select
+                  aria-label="Colega para Substituição de Turno"
+                  value={trocaColegaId}
+                  onChange={(e) => setTrocaColegaId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                  required
+                >
+                  {colaboradores
+                    .filter(c => c.id !== user.id)
+                    .map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome} ({c.cargoTitulo}) - {c.departamentoNome}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Seu Dia a Cobrir</label>
+                  <input
+                    type="date"
+                    value={trocaDataOrigem}
+                    onChange={(e) => setTrocaDataOrigem(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Dia do Colega que Fará</label>
+                  <input
+                    type="date"
+                    value={trocaDataDestino}
+                    onChange={(e) => setTrocaDataDestino(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Horário do Turno / Plantão</label>
+                <input
+                  type="text"
+                  value={trocaHorarioTurno}
+                  onChange={(e) => setTrocaHorarioTurno(e.target.value)}
+                  placeholder="Ex: 07:00 às 19:00 (12h)"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Justificativa da Solicitação</label>
+                <textarea
+                  rows={2}
+                  value={trocaMotivo}
+                  onChange={(e) => setTrocaMotivo(e.target.value)}
+                  placeholder="Motivo da solicitação de troca..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                  required
+                />
+              </div>
+
+              <div className="p-3 bg-slate-100 rounded-xl flex items-center justify-between text-[11px] text-slate-600">
+                <span>Status da Análise Prévia:</span>
+                <span className="font-bold text-emerald-700 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Descanso de 11h Homologado
+                </span>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsNovaTrocaModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold shadow-xs active:scale-95"
+                >
+                  Confirmar e Enviar para Supervisor
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

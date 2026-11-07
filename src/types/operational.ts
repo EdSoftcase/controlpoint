@@ -129,6 +129,10 @@ export interface Colaborador {
   status: 'ATIVO' | 'DESLIGADO';
   email?: string;
   senhaTemporaria?: string;
+  // Extensões de Escalas & RH Avançado (Retrocompatíveis)
+  tipoEscala?: '5x2' | '12x36' | '6x1' | '5x1' | 'flexivel';
+  turmaEscala?: 'A' | 'B';
+  dataBaseCiclo?: string;
 }
 
 export interface SolicitacaoHoraExtra {

@@ -98,7 +98,7 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [copiedExport, setCopiedExport] = useState(false);
-  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa'>('relatorios');
+  const [operationalTab, setOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa' | 'escalas' | 'afastamentos' | 'exportador' | 'riscos' | 'mobile'>('relatorios');
 
   const [estabelecimentos, setEstabelecimentos] = useState<Estabelecimento[]>([]);
   const [departamentos, setDepartamentos] = useState<Departamento[]>([]);
@@ -311,7 +311,7 @@ export default function App() {
                <ShieldCheck className="w-4 h-4" />
              </div>
              <div>
-               <h1 className="text-sm font-extrabold tracking-tight text-slate-900 leading-none">Point Control</h1>
+               <h1 className="text-sm font-extrabold tracking-tight text-slate-900 leading-none">Control Point</h1>
                <span className="text-[9px] font-semibold text-emerald-600 tracking-wider uppercase">REP-P Secure</span>
              </div>
            </div>
@@ -418,7 +418,7 @@ export default function App() {
         {/* Top Header (Global Actions) */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
             <div className="flex items-center gap-4">
-              <span className="lg:hidden text-lg font-bold">Softcase Ponto</span>
+              <span className="lg:hidden text-lg font-bold">Control Point</span>
               <div className="hidden lg:block">
                  <span className="text-sm font-medium text-slate-500">
                    {currentUser.role === 'SUPER_ADMIN' 
@@ -623,7 +623,7 @@ export default function App() {
         <footer className="border-t border-slate-200 bg-white py-6 mt-auto">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
             <div>
-              <strong>Softcase Ponto</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
+              <strong>Control Point</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
             </div>
             <div className="flex items-center gap-4 text-slate-600 font-medium">
               <span>Sessão: {currentUser.nome} ({currentUser.roleLabel})</span>
@@ -645,7 +645,7 @@ export default function App() {
           <div className="bg-white w-80 max-w-full h-full shadow-2xl flex flex-col p-6 space-y-6 animate-in slide-in-from-right duration-200">
             <div className="flex items-center justify-between pb-4 border-b border-slate-200">
               <div>
-                <span className="font-bold text-slate-900 block text-base">Softcase Ponto</span>
+                <span className="font-bold text-slate-900 block text-base">Control Point</span>
                 <span className="text-xs text-slate-500 font-mono">REP-P & PTRP Ativo</span>
               </div>
               <button

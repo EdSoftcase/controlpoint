@@ -35,6 +35,11 @@ import { BiometricConfigurator, calculateDistanceMeters } from './BiometricConfi
 import { GestaoEstrutura } from './GestaoEstrutura';
 import { MatrizPermissoes } from './MatrizPermissoes';
 import { PainelScoringIPA } from './PainelScoringIPA';
+import { GestaoEscalas } from './GestaoEscalas';
+import { GestaoAfastamentos } from './GestaoAfastamentos';
+import { ExportadorFolhaERP } from './ExportadorFolhaERP';
+import { DashboardRiscosRH } from './DashboardRiscosRH';
+import { ModuloAppMobileKiosk } from './ModuloAppMobileKiosk';
 import { useAuth } from './AuthContext';
 import {
   validateCNPJ,
@@ -59,6 +64,7 @@ import {
   getOfflineQueue,
   getDeviceHealthStatus
 } from '../utils/offlineManager';
+import { calculateWorkedTime } from '../utils/jornadaCalculator';
 import {
   Building2,
   Users,
@@ -106,7 +112,10 @@ import {
   Eye,
   EyeOff,
   Award,
-  Sparkles
+  Sparkles,
+  CalendarDays,
+  Stethoscope,
+  Smartphone
 } from 'lucide-react';
 
 export const DEFAULT_TENANT: Tenant = {
@@ -375,7 +384,7 @@ interface OperationalAppProps {
   onUpdateAssinaturasEspelho?: (novas: AssinaturaEspelhoPonto[]) => void;
   estabelecimentos?: Estabelecimento[];
   onUpdateEstabelecimentos?: (novos: Estabelecimento[]) => void;
-  operationalTab?: 'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa';
+  operationalTab?: 'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa' | 'escalas' | 'afastamentos' | 'exportador' | 'riscos' | 'mobile';
   onSelectOperationalTab?: (tab: any) => void;
 }
 
@@ -1456,6 +1465,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         msg: `Atenção: Ponto de ${labelTipo} (com Biometria Facial) registrado com observação legal! NSR ${String(nextNsr).padStart(9, '0')}.`,
         details: alertaAntecedencia || alertaIntervalo
       });
+    } else if (tipo === 'SAIDA') {
+      const allToday = [...batidasHoje, novoRegistro];
+      const worked = calculateWorkedTime(allToday);
+      setKioskFeedback({
+        type: 'SUCCESS',
+        msg: `Obrigado por registrar sua saída, ${colab.nome}! Hoje sua carga horária foi de ${worked.formatted}, bom descanso! (NSR ${String(nextNsr).padStart(9, '0')})`
+      });
     } else {
       setKioskFeedback({
         type: 'SUCCESS',
@@ -2334,6 +2350,61 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         >
           <Key className="w-3.5 h-3.5 text-amber-400" />
           Chaves
+        </button>
+        <button
+          onClick={() => setOperationalTab('escalas')}
+          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+            operationalTab === 'escalas'
+              ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
+              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80 border border-indigo-200'
+          }`}
+        >
+          <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
+          Escalas & 12x36
+        </button>
+        <button
+          onClick={() => setOperationalTab('afastamentos')}
+          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+            operationalTab === 'afastamentos'
+              ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
+              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
+          }`}
+        >
+          <Stethoscope className="w-3.5 h-3.5 text-emerald-500" />
+          Afastamentos & Férias
+        </button>
+        <button
+          onClick={() => setOperationalTab('exportador')}
+          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+            operationalTab === 'exportador'
+              ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-400/50'
+              : 'text-sky-700 bg-sky-50/70 hover:bg-sky-100/80 border border-sky-200'
+          }`}
+        >
+          <Server className="w-3.5 h-3.5 text-sky-500" />
+          Exportador ERP & 671
+        </button>
+        <button
+          onClick={() => setOperationalTab('riscos')}
+          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+            operationalTab === 'riscos'
+              ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-400/50'
+              : 'text-rose-700 bg-rose-50/70 hover:bg-rose-100/80 border border-rose-200'
+          }`}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
+          Riscos & Compliance CLT
+        </button>
+        <button
+          onClick={() => setOperationalTab('mobile')}
+          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+            operationalTab === 'mobile'
+              ? 'bg-violet-600 text-white shadow-xs ring-2 ring-violet-400/50'
+              : 'text-violet-700 bg-violet-50/70 hover:bg-violet-100/80 border border-violet-200'
+          }`}
+        >
+          <Smartphone className="w-3.5 h-3.5 text-violet-500" />
+          App Mobile & Totem
         </button>
       </div>
 
@@ -3944,6 +4015,53 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: GESTÃO DE ESCALAS COMPLEXAS (12x36, 6x1, 5x2)       */}
+      {/* ========================================================= */}
+      {operationalTab === 'escalas' && (
+        <GestaoEscalas
+          colaboradores={colaboradores}
+          onUpdateColaboradores={setColaboradores}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: GESTÃO DE AFASTAMENTOS, FÉRIAS & ATESTADOS          */}
+      {/* ========================================================= */}
+      {operationalTab === 'afastamentos' && (
+        <GestaoAfastamentos
+          colaboradores={colaboradores}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: EXPORTADOR PARA ERPS DE FOLHA & ARQUIVOS 671        */}
+      {/* ========================================================= */}
+      {operationalTab === 'exportador' && (
+        <ExportadorFolhaERP
+          tenant={tenants[0] || DEFAULT_TENANT}
+          colaboradores={colaboradores}
+          registros={registrosPonto}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: DASHBOARD DE RISCOS TRABALHISTAS & AUDITORIA CLT    */}
+      {/* ========================================================= */}
+      {operationalTab === 'riscos' && (
+        <DashboardRiscosRH
+          colaboradores={colaboradores}
+          registros={registrosPonto}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA: EMPACOTAMENTO MOBILE & TOTEM KIOSK TABLET           */}
+      {/* ========================================================= */}
+      {operationalTab === 'mobile' && (
+        <ModuloAppMobileKiosk />
       )}
 
       <NewTenantModal 

@@ -11,6 +11,14 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/camera": "^8.2.6",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/device": "^8.0.3",
+    "@capacitor/geolocation": "^8.2.4",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.49.0",
     "@tailwindcss/vite": "^4.3.3",
