@@ -158,26 +158,23 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const batidasHoje = meusRegistros.filter((r) => r.dataHora.startsWith(hojeStr));
   const isFirstPunchToday = batidasHoje.length === 0;
 
-  // Cálculo de permissão de batida e contagem regressiva
+  // Cálculo de permissão de batida: 15 min antes até 1h (60 min) depois do início da jornada
   const [startH, startM] = horarioInicioStr.split(':').map(Number);
-  const shiftStartTotalSeconds = (startH * 60 + startM) * 60;
-  const allowedStartTotalSeconds = shiftStartTotalSeconds - (maxAntecedenciaMin * 60);
-  const currentTotalSeconds = nowClock.getHours() * 3600 + nowClock.getMinutes() * 60 + nowClock.getSeconds();
+  const shiftStartTotalMinutes = startH * 60 + startM;
+  const allowedStartTotalMinutes = shiftStartTotalMinutes - maxAntecedenciaMin; // 15 min antes
+  const allowedEndTotalMinutes = shiftStartTotalMinutes + 60; // 1 hora depois (60 min)
+  const currentTotalMinutes = nowClock.getHours() * 60 + nowClock.getMinutes();
+  const currentTotalSeconds = currentTotalMinutes * 60 + nowClock.getSeconds();
 
-  const allowedStartMinutesDay = (startH * 60 + startM) - maxAntecedenciaMin;
-  const allowedH = Math.floor(((allowedStartMinutesDay + 1440) % 1440) / 60);
-  const allowedM = (allowedStartMinutesDay + 1440) % 60;
-  const allowedTimeFormatted = `${String(allowedH).padStart(2, '0')}:${String(allowedM).padStart(2, '0')}`;
+  const allowedStartMinutesDay = (shiftStartTotalMinutes - maxAntecedenciaMin + 1440) % 1440;
+  const allowedEndMinutesDay = (shiftStartTotalMinutes + 60 + 1440) % 1440;
 
-  let isPunchAllowed = true;
-  let secondsRemaining = 0;
+  const startHH = String(Math.floor(allowedStartMinutesDay / 60)).padStart(2, '0');
+  const startMM = String(allowedStartMinutesDay % 60).padStart(2, '0');
+  const endHH = String(Math.floor(allowedEndMinutesDay / 60)).padStart(2, '0');
+  const endMM = String(allowedEndMinutesDay % 60).padStart(2, '0');
 
-  if (isFirstPunchToday && regraAntecedenciaAtiva) {
-    if (currentTotalSeconds < allowedStartTotalSeconds) {
-      isPunchAllowed = false;
-      secondsRemaining = allowedStartTotalSeconds - currentTotalSeconds;
-    }
-  }
+  const allowedTimeFormatted = `${startHH}:${startMM} às ${endHH}:${endMM}`;
 
   const formatCountdown = (totalSecs: number) => {
     if (totalSecs <= 0) return '00:00:00';
@@ -186,6 +183,35 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     const s = totalSecs % 60;
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
+
+  const dayOfWeek = nowClock.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  const diasNomes = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+  const diaAtualNome = diasNomes[dayOfWeek];
+
+  // Determina os dias de folga escalados do colaborador (prioriza diasFolgaSemana customizados)
+  const defaultFolgas = userColab?.tipoEscala === '12x36' 
+    ? [] 
+    : (userColab?.tipoEscala === '6x1' ? [0] : (userColab?.tipoEscala === '5x2' ? [0, 6] : []));
+  const diasFolgaEscala = userColab?.diasFolgaSemana ?? defaultFolgas;
+  const isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek);
+
+  let isPunchAllowed = true;
+  let punchBlockReason = '';
+  let secondsRemaining = 0;
+
+  if (isFirstPunchToday && regraAntecedenciaAtiva) {
+    if (isHojeDiaFolga) {
+      isPunchAllowed = false;
+      punchBlockReason = `Hoje (${diaAtualNome}) é seu dia de folga escalado na empresa. Marcação de entrada bloqueada.`;
+    } else if (currentTotalMinutes < allowedStartTotalMinutes) {
+      isPunchAllowed = false;
+      secondsRemaining = (allowedStartTotalMinutes * 60) - currentTotalSeconds;
+      punchBlockReason = `Entrada liberada apenas das ${startHH}:${startMM} às ${endHH}:${endMM} (15 min antes até 1h depois do início às ${horarioInicioStr}). Faltam ${formatCountdown(secondsRemaining)}.`;
+    } else if (currentTotalMinutes > allowedEndTotalMinutes) {
+      isPunchAllowed = false;
+      punchBlockReason = `Janela de entrada encerrada às ${endHH}:${endMM} (1 hora após o início das ${horarioInicioStr}). Solicite autorização ao supervisor.`;
+    }
+  }
 
   const formattedLiveClock = nowClock.toLocaleTimeString('pt-BR');
 
@@ -602,9 +628,9 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       return;
     }
 
-    // Trava de Horário Regulamentar: Entrada só é permitida no horário autorizado
+    // Trava de Horário Regulamentar: Entrada só é permitida no horário autorizado (15m antes até 1h depois)
     if (tipoPonto === 'ENTRADA' && !isPunchAllowed) {
-      alert(`Horário Não Permitido: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} min antes do início contratado às ${horarioInicioStr}).`);
+      alert(`Horário Não Permitido: ${punchBlockReason || `Sua entrada é permitida apenas entre ${allowedTimeFormatted}.`}`);
       return;
     }
 
@@ -759,7 +785,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     return;
                   }
                   if (!isPunchAllowed) {
-                    alert(`Bloqueio de Antecedência: Sua entrada só é liberada a partir das ${allowedTimeFormatted} (${maxAntecedenciaMin} minutos antes da jornada de ${horarioInicioStr}). Faltam ${formatCountdown(secondsRemaining)}.`);
+                    alert(`Bloqueio de Horário: ${punchBlockReason}`);
                   } else {
                     handleOpenPersonalPunch();
                   }
@@ -771,7 +797,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 }`}
               >
                 <Camera className="w-4 h-4" />
-                {isPunchAllowed ? 'Bater Meu Ponto Agora (Facial)' : `Entrada Liberada em ${formatCountdown(secondsRemaining)}`}
+                {isPunchAllowed ? 'Bater Meu Ponto Agora (Facial)' : (secondsRemaining > 0 ? `Entrada Liberada em ${formatCountdown(secondsRemaining)}` : 'Entrada Bloqueada (Fora do Horário)')}
               </button>
             </div>
           </div>

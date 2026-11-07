@@ -132,6 +132,8 @@ export interface Colaborador {
   // Extensões de Escalas & RH Avançado (Retrocompatíveis)
   tipoEscala?: '5x2' | '12x36' | '6x1' | '5x1' | 'flexivel';
   turmaEscala?: 'A' | 'B';
+  diasFolgaSemana?: number[]; // Dias de folga semanal fixos: 0=Dom, 1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb
+  anualFolgas?: Record<string, boolean>; // Exceções de folga por data YYYY-MM-DD: true = folga, false = trabalho
   dataBaseCiclo?: string;
 }
 

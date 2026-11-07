@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS public.collaborators (
     regra_antecedencia_ativa BOOLEAN DEFAULT TRUE,
     pin_coletor TEXT,
     biometric_template TEXT,
+    tipo_escala TEXT DEFAULT '5x2',
+    turma_escala TEXT DEFAULT 'A',
+    dias_folga_semana JSONB,
+    anual_folgas JSONB,
     status TEXT NOT NULL DEFAULT 'ATIVO',
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()

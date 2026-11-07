@@ -1102,7 +1102,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    // Validação estrita de horário de permissão de Entrada
+    // Validação estrita de horário de permissão de Entrada (15 min antes até 1h depois)
     const targetType = forcedType || selectedPunchType;
     const clockTime = new Date();
     const hojeYMD = clockTime.toISOString().slice(0, 10);
@@ -1110,18 +1110,52 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const isEntrada = targetType === 'ENTRADA' || (targetType === 'AUTO' && batidasHoje.length === 0);
 
     if (isEntrada && colab.regraAntecedenciaAtiva !== false) {
-      const [hInicio, mInicio] = (colab.horarioInicio || '08:00').split(':').map(Number);
-      const minutosInicioContratado = hInicio * 60 + mInicio;
-      const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
-      const diferencaMinutos = minutosInicioContratado - minutosAtuais;
-      const toleranciaPermitida = colab.maxMinutosAntecedenciaPermitido || 15;
+      const dayOfWeek = clockTime.getDay();
+      const diasNomes = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+      const diaAtualNome = diasNomes[dayOfWeek];
 
-      if (diferencaMinutos > toleranciaPermitida) {
+      const defaultFolgas = colab.tipoEscala === '12x36' 
+        ? [] 
+        : (colab.tipoEscala === '6x1' ? [0] : (colab.tipoEscala === '5x2' ? [0, 6] : []));
+      const diasFolgaEscala = colab.diasFolgaSemana ?? defaultFolgas;
+      const isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek);
+
+      if (isHojeDiaFolga) {
         setKioskFeedback({
           type: 'ERROR',
-          msg: `Horário Não Permitido: Entrada bloqueada para ${colab.nome}. Jornada inicia às ${colab.horarioInicio}. Entrada liberada apenas ${toleranciaPermitida} minutos antes.`
+          msg: `Horário Não Permitido: Hoje (${diaAtualNome}) é dia de folga escalado para ${colab.nome}. Entrada bloqueada.`
         });
         setTimeout(() => setKioskFeedback(null), 5000);
+        return;
+      }
+
+      const [hInicio, mInicio] = (colab.horarioInicio || '08:00').split(':').map(Number);
+      const minutosInicioContratado = hInicio * 60 + mInicio;
+      const janelaInicioPermitida = minutosInicioContratado - (colab.maxMinutosAntecedenciaPermitido || 15);
+      const janelaFimPermitida = minutosInicioContratado + 60; // 1 hora depois
+      const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
+
+      const fmtStartHH = String(Math.floor(((janelaInicioPermitida + 1440) % 1440) / 60)).padStart(2, '0');
+      const fmtStartMM = String(((janelaInicioPermitida + 1440) % 1440) % 60).padStart(2, '0');
+      const fmtEndHH = String(Math.floor(((janelaFimPermitida + 1440) % 1440) / 60)).padStart(2, '0');
+      const fmtEndMM = String(((janelaFimPermitida + 1440) % 1440) % 60).padStart(2, '0');
+
+      if (minutosAtuais < janelaInicioPermitida) {
+        const diferencaMinutos = janelaInicioPermitida - minutosAtuais;
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: `Horário Não Permitido: Entrada muito cedo para ${colab.nome}. A entrada é permitida das ${fmtStartHH}:${fmtStartMM} às ${fmtEndHH}:${fmtEndMM} (início às ${colab.horarioInicio}). Faltam ${diferencaMinutos} min.`
+        });
+        setTimeout(() => setKioskFeedback(null), 5000);
+        return;
+      }
+
+      if (minutosAtuais > janelaFimPermitida) {
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: `Janela Expirada: Entrada bloqueada para ${colab.nome}. A janela de entrada para a jornada de ${colab.horarioInicio} encerrou às ${fmtEndHH}:${fmtEndMM} (1 hora após o horário contratado).`
+        });
+        setTimeout(() => setKioskFeedback(null), 6000);
         return;
       }
     }
@@ -1354,21 +1388,35 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     // =========================================================================
-    // 1. REGRA AUTOMÁTICA DE ANTECEDÊNCIA MÁXIMA (CLT Art. 58 § 1º e Art. 4º)
+    // 1. REGRA AUTOMÁTICA DE ANTECEDÊNCIA E JANELA DE ENTRADA (CLT Art. 58 § 1º)
     // =========================================================================
     if (tipo === 'ENTRADA' && colab.regraAntecedenciaAtiva !== false) {
       const [hInicio, mInicio] = (colab.horarioInicio || '08:00').split(':').map(Number);
       const minutosInicioContratado = hInicio * 60 + mInicio;
+      const janelaInicioPermitida = minutosInicioContratado - (colab.maxMinutosAntecedenciaPermitido || 15);
+      const janelaFimPermitida = minutosInicioContratado + 60; // 1h depois
       const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
 
-      const diferencaMinutos = minutosInicioContratado - minutosAtuais;
-      const toleranciaPermitida = colab.maxMinutosAntecedenciaPermitido || 15;
+      const fmtStartHH = String(Math.floor(((janelaInicioPermitida + 1440) % 1440) / 60)).padStart(2, '0');
+      const fmtStartMM = String(((janelaInicioPermitida + 1440) % 1440) % 60).padStart(2, '0');
+      const fmtEndHH = String(Math.floor(((janelaFimPermitida + 1440) % 1440) / 60)).padStart(2, '0');
+      const fmtEndMM = String(((janelaFimPermitida + 1440) % 1440) % 60).padStart(2, '0');
 
-      if (diferencaMinutos > toleranciaPermitida) {
+      if (minutosAtuais < janelaInicioPermitida) {
         setBiometricTargetColab(null);
         setKioskFeedback({
           type: 'ERROR',
-          msg: `Bloqueio de Antecedência: Entrada registrada muito cedo (${diferencaMinutos} min antes do início contratado ${colab.horarioInicio}). O limite de tolerância é ${toleranciaPermitida} min (CLT Art. 58 § 1º).`
+          msg: `Bloqueio de Antecedência: Entrada registrada muito cedo para ${colab.nome}. A janela permitida é das ${fmtStartHH}:${fmtStartMM} às ${fmtEndHH}:${fmtEndMM}.`
+        });
+        setTimeout(() => setKioskFeedback(null), 6000);
+        return;
+      }
+
+      if (minutosAtuais > janelaFimPermitida) {
+        setBiometricTargetColab(null);
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: `Janela Expirada: Entrada bloqueada para ${colab.nome}. A janela de entrada encerrou às ${fmtEndHH}:${fmtEndMM} (1 hora após o início das ${colab.horarioInicio}).`
         });
         setTimeout(() => setKioskFeedback(null), 6000);
         return;
