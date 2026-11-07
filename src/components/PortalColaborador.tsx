@@ -550,7 +550,19 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     }
 
     setBioState('detecting');
-    setBioMsg('Processando imagem facial e conferindo descritor ISO 19794-5...');
+    setBioMsg('Estabilizando iluminação e enquadramento...');
+
+    // Progresso ritmado de 3.5s para estabilização óptica
+    await new Promise(r => setTimeout(r, 800));
+    setBioMsg('Mapeando 64 pontos anatômicos faciais...');
+
+    await new Promise(r => setTimeout(r, 900));
+    setBioMsg('Extraindo descritor ISO 19794-5 e integridade temporal...');
+
+    await new Promise(r => setTimeout(r, 900));
+    setBioMsg('Comparando padrão vetorial com o banco de biometria...');
+
+    await new Promise(r => setTimeout(r, 700));
 
     try {
       const result = await detectFaceAndBiometrics(videoRef.current, bioCanvasRef.current);

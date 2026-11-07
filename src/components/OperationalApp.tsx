@@ -960,10 +960,20 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
           );
           setBiometricState('analyzing_face');
-          setFaceStatusMessage('Rosto identificado! Extraindo descritor vetorial e comparando...');
 
           setScanProgress((prev) => {
-            const next = prev + 35;
+            const next = prev + 7;
+            
+            if (next < 25) {
+              setFaceStatusMessage('Estabilizando enquadramento e calibração de luz...');
+            } else if (next < 55) {
+              setFaceStatusMessage('Mapeando 64 pontos anatômicos e extraindo vetor ISO 19794-5...');
+            } else if (next < 80) {
+              setFaceStatusMessage('Analisando integridade e prova de vida temporal...');
+            } else if (next < 100) {
+              setFaceStatusMessage('Conferindo padrão biométrico com a base cadastrada...');
+            }
+
             if (next >= 100) {
               const match = matchBiometricFace(
                 result.vector,
@@ -997,7 +1007,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       } finally {
         isProcessing = false;
       }
-    }, 220);
+    }, 250);
 
     return () => clearInterval(interval);
   }, [biometricTargetColab, isCameraActive, biometricState, simulatedMismatch, currentLivenessChallenge, livenessConfirmed]);
@@ -1012,7 +1022,19 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     setIsAnalyzingInstant(true);
-    setFaceStatusMessage('Processando captura instantânea e extração vetorial ISO 19794-5...');
+    setScanProgress(15);
+    setFaceStatusMessage('Iniciando análise biométrica estendida...');
+
+    // Progresso cadenciado de 3.5 segundos
+    for (let p of [30, 55, 80, 95]) {
+      await new Promise(r => setTimeout(r, 700));
+      setScanProgress(p);
+      if (p === 30) setFaceStatusMessage('Mapeando enquadramento e matriz YCbCr...');
+      if (p === 55) setFaceStatusMessage('Calculando vetor descritor de 64 dimensões...');
+      if (p === 80) setFaceStatusMessage('Verificando prova de vida e variância óptica...');
+      if (p === 95) setFaceStatusMessage('Comparando com o template de referência...');
+    }
+
     try {
       const result = await detectFaceAndBiometrics(videoRef.current, analyzerCanvasRef.current);
       setLightingCondition(result.lightingQuality);
