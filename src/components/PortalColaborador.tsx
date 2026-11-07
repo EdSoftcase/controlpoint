@@ -2166,8 +2166,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       {/* MODAL DE REGISTRO DE PONTO INDIVIDUAL (MOBILE / EXTERNO) */}
       {/* ========================================================= */}
       {isBaterPontoModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden border border-slate-200 shadow-2xl animate-scaleUp">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center z-50 p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[92vh] flex flex-col overflow-y-auto border border-slate-200 shadow-2xl my-auto animate-scaleUp">
             {/* Header */}
             <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">

@@ -3242,9 +3242,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
       {/* MODAL BIOMETRIA FACIAL (CHAMADO NO HANDLE BATER PONTO - STRICT LOCK REP-P) */}
       {biometricTargetColab && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
           <canvas ref={analyzerCanvasRef} width={120} height={120} className="hidden" />
-          <div className={`bg-slate-900 border rounded-2xl shadow-2xl max-w-lg w-full p-6 text-white space-y-6 relative overflow-hidden transition-all duration-300 ${
+          <div className={`bg-slate-900 border rounded-2xl shadow-2xl max-w-lg w-full max-h-[92vh] flex flex-col p-4 sm:p-6 text-white space-y-4 sm:space-y-5 relative overflow-y-auto transition-all duration-300 my-auto ${
             biometricState === 'verified'
               ? 'border-emerald-500/80 shadow-emerald-950/50'
               : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
@@ -3290,7 +3290,19 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   {biometricState === 'rejected_mismatch' && 'Divergência Biométrica (Rejeitado)'}
                 </span>
               </div>
-              <span className="text-[10px] font-mono text-slate-500 tracking-tighter">PORTARIA_671_ISO19794</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-slate-500 tracking-tighter hidden sm:inline">PORTARIA_671_ISO19794</span>
+                <button
+                  onClick={() => {
+                    setBiometricTargetColab(null);
+                    setSimulatedMismatch(false);
+                  }}
+                  className="p-1 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+                  title="Cancelar e Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="text-center space-y-1">
@@ -3339,7 +3351,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             )}
 
             {/* Circular Camera Preview / Face Frame */}
-            <div className={`relative w-64 h-64 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden border-4 transition-all duration-500 ${
+            <div className={`relative w-48 h-48 sm:w-60 sm:h-60 mx-auto rounded-full bg-slate-950 flex items-center justify-center overflow-hidden border-4 transition-all duration-500 shrink-0 ${
               biometricState === 'verified'
                 ? 'border-emerald-500 shadow-[0_0_25px_rgba(16,185,129,0.5)]'
                 : biometricState === 'rejected_mismatch' || biometricState === 'unregistered_biometrics'
@@ -3678,21 +3690,24 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                       O rosto apresentado não corresponde aos registros biométricos de {biometricTargetColab.nome}. A marcação foi bloqueada por razões de segurança jurídica (REP-P).
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2.5 w-full pt-1">
                     <button
+                      type="button"
                       onClick={() => {
                         setSimulatedMismatch(false);
                         setBiometricState('detecting_face');
                         setScanProgress(0);
                         setFaceStatusMessage('Posicione o rosto centralizado no círculo.');
                       }}
-                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all"
+                      className="flex-1 py-3 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-95"
                     >
-                      Tentar Novamente (Recapturar)
+                      <RefreshCw className="w-4 h-4 text-slate-950 shrink-0" />
+                      <span>Tentar Novamente (Recapturar)</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => setBiometricTargetColab(null)}
-                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl text-xs font-semibold"
+                      className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition-colors cursor-pointer text-center"
                     >
                       Cancelar
                     </button>
