@@ -162,6 +162,28 @@ CREATE TABLE IF NOT EXISTS public.adjustment_requests (
     CONSTRAINT fk_adjustment_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
 );
 
+-- 9. TABELA DE HOLERITES E CONTRACHEQUES (CLT)
+CREATE TABLE IF NOT EXISTS public.paystubs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    paystub_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    collaborator_id TEXT NOT NULL,
+    collaborator_cpf TEXT NOT NULL,
+    collaborator_name TEXT NOT NULL,
+    mes_ano TEXT NOT NULL,
+    competencia TEXT NOT NULL,
+    salario_bruto NUMERIC(10,2) NOT NULL DEFAULT 0,
+    descontos NUMERIC(10,2) NOT NULL DEFAULT 0,
+    salario_liquido NUMERIC(10,2) NOT NULL DEFAULT 0,
+    arquivo_nome TEXT NOT NULL,
+    arquivo_url TEXT,
+    data_upload TIMESTAMPTZ DEFAULT now(),
+    status TEXT NOT NULL DEFAULT 'EMITIDO_EMPRESA',
+    observacao TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT fk_paystub_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
+);
+
 -- Habilitar RLS
 ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.collaborators ENABLE ROW LEVEL SECURITY;
@@ -171,6 +193,7 @@ ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.biometric_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.point_signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.adjustment_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.paystubs ENABLE ROW LEVEL SECURITY;
 
 -- Políticas de Acesso Idempotentes
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.logs;
@@ -197,6 +220,9 @@ CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (t
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.adjustment_requests;
 CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.paystubs;
+CREATE POLICY "Acesso Total Backend" ON public.paystubs FOR ALL USING (true);
+
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_colab_tenant ON public.collaborators(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_tenant ON public.point_registrations(tenant_id);
@@ -206,6 +232,8 @@ CREATE INDEX IF NOT EXISTS idx_biometric_audit_tenant ON public.biometric_audit_
 CREATE INDEX IF NOT EXISTS idx_biometric_audit_colab ON public.biometric_audit_logs(collaborator_id);
 CREATE INDEX IF NOT EXISTS idx_adj_tenant ON public.adjustment_requests(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_adj_colab ON public.adjustment_requests(collaborator_id);
+CREATE INDEX IF NOT EXISTS idx_paystubs_tenant ON public.paystubs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_paystubs_colab ON public.paystubs(collaborator_id);
 
 -- 7. DADOS INICIAIS (SEED)
 INSERT INTO public.tenants (tenant_id, cnpj, razao_social, nome_fantasia, slug, plano, licencas_contratadas, email_admin, status)

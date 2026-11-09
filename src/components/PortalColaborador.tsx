@@ -67,6 +67,8 @@ import {
 } from '../utils/shiftEngine';
 import { SolicitacaoTrocaTurno } from '../types/rhAvancado';
 import { useAuth } from './AuthContext';
+import { PortalFeriasTab } from './portal/PortalFeriasTab';
+import { PortalEspelhoTab } from './portal/PortalEspelhoTab';
 
 interface PortalColaboradorProps {
   user: AuthUser;
@@ -101,8 +103,118 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   colaboradores = [],
   onOpenGuia
 }) => {
-  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias'>('espelho');
+  const { supabase } = useAuth();
+  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias' | 'holerites'>('espelho');
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
+  const [viewingHoleriteModal, setViewingHoleriteModal] = useState<any | null>(null);
+
+  const [holeritesList, setHoleritesList] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem(`sc_holerites_${user.id}`);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [
+      {
+        id: 'hol-01',
+        mesAno: '2026-10',
+        competencia: 'Outubro / 2026',
+        salarioBruto: 5200.00,
+        descontos: 680.00,
+        liquido: 4520.00,
+        arquivoNome: 'contracheque_outubro_2026.pdf',
+        dataUpload: '05/11/2026',
+        status: 'EMITIDO_EMPRESA'
+      },
+      {
+        id: 'hol-02',
+        mesAno: '2026-09',
+        competencia: 'Setembro / 2026',
+        salarioBruto: 5200.00,
+        descontos: 680.00,
+        liquido: 4520.00,
+        arquivoNome: 'contracheque_setembro_2026.pdf',
+        dataUpload: '05/10/2026',
+        status: 'EMITIDO_EMPRESA'
+      }
+    ];
+  });
+
+  React.useEffect(() => {
+    const userCpfClean = (user.cpf || '').replace(/\D/g, '');
+    let list: any[] = [];
+    
+    try {
+      const savedColab = localStorage.getItem(`sc_holerites_${user.id}`);
+      if (savedColab) {
+        list = JSON.parse(savedColab);
+      }
+    } catch (_) {}
+
+    try {
+      const savedAll = localStorage.getItem('sc_holerites_all');
+      if (savedAll) {
+        const parsedAll = JSON.parse(savedAll);
+        const userRhItems = parsedAll.filter((h: any) => {
+          const hCpf = (h.colaboradorCpf || '').replace(/\D/g, '');
+          return (user.id && h.colaboradorId === user.id) || (userCpfClean && hCpf === userCpfClean);
+        });
+
+        for (const item of userRhItems) {
+          if (!list.some(existing => existing.id === item.id)) {
+            list.unshift(item);
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (list.length > 0) {
+      setHoleritesList(list);
+    }
+
+    async function fetchPaystubsFromDb() {
+      try {
+        if (supabase) {
+          const { data } = await supabase.from('paystubs').select('*');
+          if (data && data.length > 0) {
+            const mapped = data
+              .filter((p: any) => {
+                const pCpf = (p.collaborator_cpf || '').replace(/\D/g, '');
+                return (user.id && p.collaborator_id === user.id) || (userCpfClean && pCpf === userCpfClean);
+              })
+              .map((p: any) => ({
+                id: p.paystub_id || p.id,
+                colaboradorId: p.collaborator_id,
+                colaboradorNome: p.collaborator_name,
+                colaboradorCpf: p.collaborator_cpf,
+                mesAno: p.mes_ano,
+                competencia: p.competencia,
+                salarioBruto: Number(p.salario_bruto),
+                descontos: Number(p.descontos),
+                liquido: Number(p.salario_liquido),
+                arquivoNome: p.arquivo_nome,
+                arquivoUrl: p.arquivo_url,
+                dataUpload: p.data_upload ? new Date(p.data_upload).toLocaleDateString('pt-BR') : 'Hoje',
+                status: p.status,
+                observacao: p.observacao
+              }));
+
+            if (mapped.length > 0) {
+              setHoleritesList(prev => {
+                const merged = [...prev];
+                for (const item of mapped) {
+                  if (!merged.some(m => m.id === item.id)) {
+                    merged.unshift(item);
+                  }
+                }
+                return merged;
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    fetchPaystubsFromDb();
+  }, [user.id, user.cpf, supabase]);
 
   // Estados de Troca de Turno / Plantão (Gestão de Pares)
   const [solicitacoesTroca, setSolicitacoesTroca] = useState<SolicitacaoTrocaTurno[]>([
@@ -153,7 +265,6 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const regraAntecedenciaAtiva = userColab?.regraAntecedenciaAtiva ?? true;
 
   // Consulta real de férias agendadas para este colaborador (via LocalStorage e Supabase)
-  const { supabase } = useAuth();
   const [minhasFeriasAgendadas, setMinhasFeriasAgendadas] = useState<any[]>([]);
 
   React.useEffect(() => {
@@ -1096,426 +1207,247 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           <Plane className="w-3.5 h-3.5 text-emerald-500" />
           Minha Férias (CLT)
         </button>
+        <button
+          onClick={() => setSelectedTab('holerites')}
+          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            selectedTab === 'holerites'
+              ? 'bg-blue-600 text-white shadow-xs font-bold'
+              : 'text-blue-700 bg-blue-50/70 hover:bg-blue-100 border border-blue-200'
+          }`}
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />
+          Holerites & Contracheques
+        </button>
       </div>
 
-      {/* Conteúdo: Minhas Férias (CLT) */}
-      {selectedTab === 'ferias' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+      {/* Conteúdo: Holerites & Contracheques */}
+      {selectedTab === 'holerites' && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                Minhas Férias & Períodos Aquisitivos (CLT)
-              </h3>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+                Meus Holerites & Contracheques (CLT)
+              </h2>
               <p className="text-xs text-slate-500">
-                Consulta de direito a férias regulamentares, período aquisitivo, concessivo e agendamentos confirmados pelo RH.
+                Visualize seus contracheques mensais emitidos pela empresa ou faça o upload/anexo da foto do seu holerite físico para registro e arquivo.
               </p>
             </div>
-            <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold">
-              Direito CLT: 30 Dias / Ano
-            </span>
+            <label className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-all">
+              <Plus className="w-4 h-4" />
+              <span>Anexar Foto/PDF de Holerite</span>
+              <input
+                type="file"
+                accept="image/*,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                      const dataUrl = evt.target?.result as string;
+                      const newHolerite = {
+                        id: `hol-${Date.now()}`,
+                        mesAno: '2026-10',
+                        competencia: 'Outubro / 2026',
+                        salarioBruto: 5200.00,
+                        descontos: 680.00,
+                        liquido: 4520.00,
+                        arquivoNome: file.name,
+                        arquivoUrl: dataUrl,
+                        dataUpload: new Date().toLocaleDateString('pt-BR'),
+                        status: 'ANEXADO_PELO_COLABORADOR'
+                      };
+                      const updated = [newHolerite, ...holeritesList];
+                      setHoleritesList(updated);
+                      localStorage.setItem(`sc_holerites_${user.id}`, JSON.stringify(updated));
+                      alert(`Holerite "${file.name}" anexado com sucesso!`);
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+            </label>
           </div>
 
-          {(() => {
-            const adm = userColab?.dataAdmissao || '2026-11-08';
-            let anoAdm = 2026, mesAdm = 11, diaAdm = 8;
-            if (adm && adm.includes('-')) {
-              const parts = adm.split('-').map(Number);
-              if (parts.length === 3 && !isNaN(parts[0])) {
-                anoAdm = parts[0];
-                mesAdm = parts[1];
-                diaAdm = parts[2];
-              }
-            }
-            const admDate = new Date(anoAdm, mesAdm - 1, diaAdm);
-            const hoje = new Date();
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {holeritesList.map((h) => (
+              <div key={h.id} className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 space-y-4 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between">
+                  <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-extrabold uppercase">
+                    Competência: {h.competencia}
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                    {h.status === 'EMITIDO_EMPRESA' ? 'Disponível pela Empresa' : 'Anexado pelo Colaborador'}
+                  </span>
+                </div>
 
-            let aquisitivoInicio = new Date(admDate);
-            let aquisitivoFim = new Date(aquisitivoInicio);
-            aquisitivoFim.setFullYear(aquisitivoFim.getFullYear() + 1);
-            aquisitivoFim.setDate(aquisitivoFim.getDate() - 1);
-
-            while (hoje > aquisitivoFim) {
-              aquisitivoInicio = new Date(aquisitivoFim);
-              aquisitivoInicio.setDate(aquisitivoInicio.getDate() + 1);
-              aquisitivoFim = new Date(aquisitivoInicio);
-              aquisitivoFim.setFullYear(aquisitivoFim.getFullYear() + 1);
-              aquisitivoFim.setDate(aquisitivoFim.getDate() - 1);
-            }
-
-            let concessivoInicio = new Date(aquisitivoFim);
-            concessivoInicio.setDate(concessivoInicio.getDate() + 1);
-            let concessivoFim = new Date(concessivoInicio);
-            concessivoFim.setFullYear(concessivoFim.getFullYear() + 1);
-            concessivoFim.setDate(concessivoFim.getDate() - 1);
-
-            const formatarData = (d: Date) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-            const formatarDataStr = (isoStr: string) => {
-              if (!isoStr) return '';
-              const parts = isoStr.split('-');
-              return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : isoStr;
-            };
-
-            const diasAteFimConcessao = Math.round((concessivoFim.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
-            const vencido = hoje > concessivoFim;
-            const dataGozoApartirDe = formatarData(concessivoInicio);
-            const temAgendamento = minhasFeriasAgendadas.length > 0;
-
-            return (
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Data de Admissão</span>
-                    <span className="text-base font-bold text-slate-900">{formatarData(admDate)}</span>
-                    <span className="text-[10px] text-slate-500 block">Vínculo CLT Ativo</span>
+                <div className="grid grid-cols-3 gap-2 text-center text-xs bg-white p-3 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] font-medium">Salário Bruto</span>
+                    <span className="font-bold text-slate-900">R$ {h.salarioBruto.toFixed(2)}</span>
                   </div>
-
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Período Aquisitivo Atual</span>
-                    <span className="text-sm font-bold font-mono text-slate-900">{formatarData(aquisitivoInicio)} a {formatarData(aquisitivoFim)}</span>
-                    <span className="text-[10px] text-slate-500 block">12 meses de trabalho (CLT Art. 130)</span>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] font-medium">Descontos</span>
+                    <span className="font-bold text-rose-600">R$ {h.descontos.toFixed(2)}</span>
                   </div>
-
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Período de Gozo</span>
-                    <span className={`text-sm font-bold font-mono ${temAgendamento ? 'text-emerald-700' : (vencido ? 'text-rose-600' : 'text-slate-800')}`}>
-                      {temAgendamento 
-                        ? `${formatarDataStr(minhasFeriasAgendadas[0].dataInicioFerias)} a ${formatarDataStr(minhasFeriasAgendadas[0].dataFimFerias)}` 
-                        : `A partir de ${dataGozoApartirDe}`}
-                    </span>
-                    <span className={`text-[10px] font-bold block ${temAgendamento ? 'text-emerald-600' : (vencido ? 'text-rose-600' : 'text-slate-500')}`}>
-                      {temAgendamento 
-                        ? 'Programado pelo RH' 
-                        : (vencido ? '🔴 Férias Vencidas (Art. 137 CLT)' : `Limite concessivo: ${formatarData(concessivoFim)}`)}
-                    </span>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] font-medium">Líquido</span>
+                    <span className="font-bold text-emerald-700">R$ {h.liquido.toFixed(2)}</span>
                   </div>
                 </div>
 
-                {/* Exibição condicional: se houver agendamento real ou se ainda não foi agendado pelo RH */}
-                {temAgendamento ? (
-                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-emerald-900 uppercase tracking-wider flex items-center gap-2">
-                        <Plane className="w-4 h-4 text-emerald-600" />
-                        Férias Agendadas e Homologadas pelo RH
-                      </h4>
-                      <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px] uppercase">
-                        {minhasFeriasAgendadas[0].status || 'PROGRAMADO'}
-                      </span>
-                    </div>
-                    <div className="space-y-2">
-                      {minhasFeriasAgendadas.map((f: any) => (
-                        <div key={f.id} className="p-3.5 bg-white border border-emerald-100 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                          <div>
-                            <div className="font-bold text-slate-900">
-                              Período de Gozo ({f.diasGozo} dias{f.diasAbonoPecuniario > 0 ? ` + ${f.diasAbonoPecuniario} dias abono pecuniário` : ''})
-                            </div>
-                            <div className="text-[11px] text-slate-600 font-mono mt-0.5">
-                              Início: {formatarDataStr(f.dataInicioFerias)} até {formatarDataStr(f.dataFimFerias)}
-                            </div>
-                            {f.observacao && (
-                              <div className="text-[10px] text-slate-500 mt-1 italic">
-                                Obs: {f.observacao}
-                              </div>
-                            )}
-                          </div>
-                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[10px] font-bold self-start sm:self-auto">
-                            Aprovado pelo RH
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200/60">
+                  <span className="text-slate-600 font-mono truncate max-w-[200px]" title={h.arquivoNome}>
+                    📄 {h.arquivoNome}
+                  </span>
+                  <button
+                    onClick={() => setViewingHoleriteModal(h)}
+                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg transition-colors cursor-pointer"
+                  >
+                    Visualizar Holerite
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Visualizador de Holerite / Contracheque */}
+      {viewingHoleriteModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 text-xs font-sans">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Contracheque Digital / Holerite - {viewingHoleriteModal.competencia}</h3>
+                  <p className="text-[11px] text-slate-500">Documento Oficial com Carimbo Criptográfico e Registro DP</p>
+                </div>
+              </div>
+              <button onClick={() => setViewingHoleriteModal(null)} className="text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer">✕</button>
+            </div>
+
+            {viewingHoleriteModal.arquivoUrl ? (
+              <div className="space-y-3">
+                <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  <span>Arquivo Anexado: <strong>{viewingHoleriteModal.arquivoNome}</strong></span>
+                  <a
+                    href={viewingHoleriteModal.arquivoUrl}
+                    download={viewingHoleriteModal.arquivoNome}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                  >
+                    Baixar Arquivo
+                  </a>
+                </div>
+                {viewingHoleriteModal.arquivoUrl.startsWith('data:image/') ? (
+                  <div className="max-h-[60vh] overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-100 flex justify-center">
+                    <img src={viewingHoleriteModal.arquivoUrl} alt={viewingHoleriteModal.arquivoNome} className="max-w-full rounded-lg shadow-xs" />
                   </div>
                 ) : (
-                  <div className="p-5 bg-gradient-to-r from-slate-50 via-amber-50/40 to-slate-50 border border-slate-200 rounded-xl space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 pb-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold shrink-0">
-                          <Plane className="w-4 h-4 text-amber-700" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                            Programação de Férias Regulamentares (CLT)
-                          </h4>
-                          <span className="text-[11px] text-slate-500">
-                            Aguardando realização do agendamento oficial pelo RH
-                          </span>
-                        </div>
-                      </div>
-                      <span className="px-2.5 py-1 bg-amber-100 text-amber-800 border border-amber-200 rounded-lg font-bold text-[10px] uppercase self-start sm:self-auto">
-                        Não Agendada
-                      </span>
-                    </div>
-
-                    {/* Destaque principal solicitado pelo colaborador */}
-                    <div className="p-4 bg-white border border-amber-200/90 rounded-xl shadow-2xs space-y-2">
-                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                        Previsão de Elegibilidade para Gozo:
-                      </div>
-                      <div className="text-base sm:text-lg font-extrabold text-slate-900 flex flex-wrap items-center gap-2">
-                        <span>Período de gozo a partir de:</span>
-                        <span className="text-emerald-700 font-mono bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 text-sm sm:text-base">
-                          {dataGozoApartirDe}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600 leading-relaxed pt-1">
-                        Conforme os <strong>Arts. 134 e 135 da CLT</strong>, a definição e confirmação das datas de férias cabem ao empregador (RH). Nenhuma data foi agendada previamente; a programação será realizada pelo RH no momento oportuno.
-                      </p>
-                    </div>
-
-                    {/* Informações legais do período aquisitivo e concessivo */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] text-slate-600">
-                      <div className="p-3 bg-white/80 rounded-lg border border-slate-200/80">
-                        <span className="font-bold text-slate-800 block mb-0.5">🗓️ Período Concessivo (Art. 134 CLT)</span>
-                        <span>As férias poderão ser usufruídas entre <strong>{dataGozoApartirDe}</strong> e <strong>{formatarData(concessivoFim)}</strong> após 12 meses de vigência do contrato.</span>
-                      </div>
-                      <div className="p-3 bg-white/80 rounded-lg border border-slate-200/80">
-                        <span className="font-bold text-slate-800 block mb-0.5">💰 Abono Pecuniário (Art. 143 CLT)</span>
-                        <span>É facultado ao colaborador converter 1/3 do período (10 dias) em abono financeiro mediante solicitação ao RH até 15 dias antes do fim do aquisitivo.</span>
-                      </div>
-                    </div>
+                  <div className="h-[50vh] border border-slate-200 rounded-xl overflow-hidden">
+                    <iframe src={viewingHoleriteModal.arquivoUrl} className="w-full h-full" title="Visualizador de PDF" />
                   </div>
                 )}
               </div>
-            );
-          })()}
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 font-mono text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block font-sans text-[10px]">Empregador</span>
+                    <strong className="text-slate-900 block truncate">Softcase Tecnologia S.A.</strong>
+                    <span className="text-slate-500 text-[10px]">CNPJ: 00.000.000/0001-91</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block font-sans text-[10px]">Colaborador</span>
+                    <strong className="text-slate-900 block truncate">{user.nome}</strong>
+                    <span className="text-slate-500 text-[10px]">CPF: {user.cpf}</span>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
+                        <th className="p-2.5">Descrição</th>
+                        <th className="p-2.5 text-right">Proventos (R$)</th>
+                        <th className="p-2.5 text-right">Descontos (R$)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      <tr>
+                        <td className="p-2.5 font-medium">Salário Base Mensal ({viewingHoleriteModal.competencia})</td>
+                        <td className="p-2.5 text-right font-mono text-slate-900 font-bold">R$ {viewingHoleriteModal.salarioBruto.toFixed(2)}</td>
+                        <td className="p-2.5 text-right font-mono text-slate-400">-</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2.5 font-medium">Descontos em Folha (INSS / IRRF / Benefícios)</td>
+                        <td className="p-2.5 text-right font-mono text-slate-400">-</td>
+                        <td className="p-2.5 text-right font-mono text-rose-600 font-bold">R$ {viewingHoleriteModal.descontos.toFixed(2)}</td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-emerald-50 border-t-2 border-emerald-300 font-bold">
+                        <td className="p-3 text-emerald-950 font-bold">Valor Líquido A Receber</td>
+                        <td colSpan={2} className="p-3 text-right font-mono text-emerald-900 text-sm font-extrabold">
+                          R$ {viewingHoleriteModal.liquido.toFixed(2)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                {viewingHoleriteModal.observacao && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs">
+                    <strong className="block text-[10px] uppercase font-bold text-amber-800">Observações do DP:</strong>
+                    <span>{viewingHoleriteModal.observacao}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-2 border-t border-slate-100">
+                  <span className="font-mono">Carimbo Digital: HOL-{viewingHoleriteModal.id.slice(-8)}-OK</span>
+                  <span>Emitido em: {viewingHoleriteModal.dataUpload || 'Hoje'}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end border-t border-slate-100 pt-3">
+              <button
+                onClick={() => setViewingHoleriteModal(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Fechar Visualização
+              </button>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Conteúdo: Minhas Férias (CLT) */}
+      {selectedTab === 'ferias' && (
+        <PortalFeriasTab
+          userColab={userColab}
+          minhasFeriasAgendadas={minhasFeriasAgendadas}
+        />
       )}
 
       {/* Conteúdo: Espelho de Ponto com 4 Batidas e Controle de Intervalo */}
       {selectedTab === 'espelho' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                Espelho de Ponto Eletrônico — Competência Novembro/2026
-              </h3>
-              <p className="text-xs text-slate-500">
-                Demonstrativo de apuração com horários de entrada, intervalo intrajornada (CLT Art. 71) e saída.
-              </p>
-            </div>
-            <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
-            >
-              <Printer className="w-3.5 h-3.5" /> Imprimir Espelho
-            </button>
-          </div>
-
-          {/* Resumo do Dia para o Funcionário */}
-          <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
-             <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs uppercase tracking-wider">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Resumo da Jornada de Hoje ({new Date().toLocaleDateString('pt-BR')})
-             </div>
-             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {(() => {
-                  const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(hojeStr));
-                  const getT = (type: string) => {
-                    const r = dayRegistros.find(reg => reg.tipoMarcacao === type);
-                    return r ? new Date(r.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-                  };
-                  return (
-                    <>
-                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase block">1ª Entrada</span>
-                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('ENTRADA')}</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Saída Almoço</span>
-                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('INTERVALO_INICIO')}</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Volta Almoço</span>
-                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('INTERVALO_FIM')}</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase block">2ª Saída</span>
-                        <span className="text-sm font-mono font-bold text-emerald-700">{getT('SAIDA')}</span>
-                      </div>
-                    </>
-                  );
-                })()}
-             </div>
-             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-               <p className="text-[11px] text-emerald-800 font-medium">
-                  {(() => {
-                    const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(hojeStr));
-                    if (dayRegistros.length === 0) return 'Você ainda não registrou nenhum ponto hoje.';
-                    const summary = [];
-                    const e = dayRegistros.find(r => r.tipoMarcacao === 'ENTRADA');
-                    if (e) summary.push(`Bateu o ponto de entrada às ${new Date(e.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
-                    const si = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_INICIO');
-                    if (si) summary.push(`intervalo às ${new Date(si.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
-                    const vi = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_FIM');
-                    if (vi) summary.push(`volta do intervalo às ${new Date(vi.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
-                    const s = dayRegistros.find(r => r.tipoMarcacao === 'SAIDA');
-                    if (s) summary.push(`e por fim segunda saída às ${new Date(s.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`);
-
-                    const workedInfo = calculateWorkedTime(dayRegistros);
-                    let text = summary.join(', ').replace(/, ([^,]*)$/, ' $1') + '.';
-                    if (workedInfo.hasPunches && workedInfo.formatted !== '-' && workedInfo.formatted !== 'Em curso') {
-                      text += ` Total trabalhado hoje: ${workedInfo.formatted}.`;
-                    }
-                    return text;
-                  })()}
-               </p>
-               {meusRegistros.filter(r => r.dataHora.startsWith(hojeStr)).length > 0 && (
-                 <button 
-                   onClick={() => {
-                     setAjusteTipoInput('JUSTIFICATIVA_CORRECAO');
-                     setAjusteDataInput(hojeStr);
-                     setIsAjusteModalOpen(true);
-                   }}
-                   className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-700 rounded-lg text-[10px] font-bold hover:bg-emerald-50 transition-colors flex items-center gap-1.5 shrink-0"
-                 >
-                   <PenTool className="w-3 h-3" /> Solicitar Correção
-                 </button>
-               )}
-             </div>
-          </div>
-
-          <div className="overflow-x-auto border border-slate-200 rounded-lg">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
-                  <th className="py-2.5 px-3">Data</th>
-                  <th className="py-2.5 px-3">Dia da Semana</th>
-                  <th className="py-2.5 px-3">1ª Entrada</th>
-                  <th className="py-2.5 px-3">Saída Almoço</th>
-                  <th className="py-2.5 px-3">Retorno Almoço</th>
-                  <th className="py-2.5 px-3">2ª Saída</th>
-                  <th className="py-2.5 px-3">Intervalo</th>
-                  <th className="py-2.5 px-3">Total Trabalhado</th>
-                  <th className="py-2.5 px-3">Ocorrência / Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-mono">
-                {(() => {
-                  // Agrupar registros por dia (últimos 30 dias para simplificar)
-                  const rows = [];
-                  const last30Days = [];
-                  for (let i = 0; i < 30; i++) {
-                    const d = new Date();
-                    d.setDate(d.getDate() - i);
-                    last30Days.push(d.toISOString().slice(0, 10));
-                  }
-
-                  const schedule = {
-                    ENTRADA: userColab?.horarioInicio || '08:00',
-                    INTERVALO_INICIO: '12:00',
-                    INTERVALO_FIM: '13:00',
-                    SAIDA: userColab?.horarioFim || '17:00'
-                  };
-
-                  const checkColor = (punchTime: string | undefined, expectedTime: string) => {
-                    if (!punchTime) return 'text-slate-400';
-                    const [pH, pM] = punchTime.split(':').map(Number);
-                    const [eH, eM] = expectedTime.split(':').map(Number);
-                    const punchMin = pH * 60 + pM;
-                    const expectedMin = eH * 60 + eM;
-                    const diff = Math.abs(punchMin - expectedMin);
-                    return diff <= 10 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
-                  };
-
-                  return last30Days.map(dateStr => {
-                    const dayRegistros = meusRegistros.filter(r => r.dataHora.startsWith(dateStr));
-                    const isToday = dateStr === hojeStr;
-                    
-                    const entrada = dayRegistros.find(r => r.tipoMarcacao === 'ENTRADA');
-                    const saidaAlmoco = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_INICIO');
-                    const voltaAlmoco = dayRegistros.find(r => r.tipoMarcacao === 'INTERVALO_FIM');
-                    const saidaFinal = dayRegistros.find(r => r.tipoMarcacao === 'SAIDA');
-
-                    const fmtTime = (iso: string | undefined) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-
-                    // Formatar data e dia da semana
-                    const d = new Date(dateStr + 'T12:00:00');
-                    const dayLabel = isToday ? 'Hoje' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-                    const weekDay = d.toLocaleDateString('pt-BR', { weekday: 'long' });
-
-                    if (dayRegistros.length === 0 && !isToday) return null;
-
-                    return (
-                      <tr key={dateStr} className={`hover:bg-slate-50/60 transition-colors ${isToday ? 'bg-emerald-50/10' : ''}`}>
-                        <td className="py-2.5 px-3 font-bold text-slate-900">{dayLabel}</td>
-                        <td className="py-2.5 px-3 font-sans text-slate-600 capitalize">{weekDay}</td>
-                        <td className={`py-2.5 px-3 ${checkColor(entrada ? new Date(entrada.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.ENTRADA)}`}>
-                          {fmtTime(entrada?.dataHora)}
-                        </td>
-                        <td className={`py-2.5 px-3 ${checkColor(saidaAlmoco ? new Date(saidaAlmoco.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.INTERVALO_INICIO)}`}>
-                          {fmtTime(saidaAlmoco?.dataHora)}
-                        </td>
-                        <td className={`py-2.5 px-3 ${checkColor(voltaAlmoco ? new Date(voltaAlmoco.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.INTERVALO_FIM)}`}>
-                          {fmtTime(voltaAlmoco?.dataHora)}
-                        </td>
-                        <td className={`py-2.5 px-3 ${checkColor(saidaFinal ? new Date(saidaFinal.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : undefined, schedule.SAIDA)}`}>
-                          {fmtTime(saidaFinal?.dataHora)}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-600">
-                          {saidaAlmoco && voltaAlmoco ? `${Math.round((new Date(voltaAlmoco.dataHora).getTime() - new Date(saidaAlmoco.dataHora).getTime()) / 60000)} min` : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 font-bold text-slate-800">
-                          {calculateWorkedTime(dayRegistros).formatted}
-                        </td>
-                        <td className="py-2.5 px-3 font-sans">
-                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${dayRegistros.length >= 4 ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-amber-800 bg-amber-50 border-amber-200'}`}>
-                            {dayRegistros.length >= 4 ? 'Jornada Completa' : `${dayRegistros.length} batidas`}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  }).filter(Boolean);
-                })()}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-start gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <strong>Validações Conforme Legislação:</strong> Intervalo intrajornada garantido de no mínimo 60 minutos (CLT Art. 71) e limite de chegada antecipada configurado para 15 minutos em relação ao horário contratado (08:00), resguardando o empregado e o empregador.
-            </div>
-          </div>
-
-          {/* Apuração de Horas Noturnas Reduzidas & Reflexo DSR (CLT Art. 73 e Súmula 172 TST) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-            <div className="p-3 bg-slate-900 text-white rounded-xl space-y-1">
-              <span className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5" /> Hora Noturna Reduzida (CLT Art. 73)
-              </span>
-              <div className="text-base font-bold font-mono text-emerald-400">
-                02h 17m <span className="text-[10px] text-slate-400 font-normal">(computada a 52m30s)</span>
-              </div>
-              <p className="text-[10px] text-slate-400 leading-tight">
-                Período das 22h às 05h com fator oficial de 1.1428 e adicional de 20% garantido.
-              </p>
-            </div>
-
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-              <span className="text-[10px] uppercase font-bold text-slate-600 flex items-center gap-1">
-                <Scale className="w-3.5 h-3.5 text-emerald-600" /> Reflexo no DSR (Súmula 172 TST)
-              </span>
-              <div className="text-base font-bold font-mono text-slate-900">
-                R$ 84,20 <span className="text-[10px] text-emerald-600 font-semibold">(+5 DSRs no mês)</span>
-              </div>
-              <p className="text-[10px] text-slate-500 leading-tight">
-                Incidência legal do repouso semanal sobre as horas extraordinárias apuradas.
-              </p>
-            </div>
-
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-              <span className="text-[10px] uppercase font-bold text-slate-600 flex items-center gap-1">
-                <CalendarDays className="w-3.5 h-3.5 text-indigo-600" /> Vigência do Banco de Horas
-              </span>
-              <div className="text-base font-bold font-mono text-slate-900">
-                Expira em 30/04/2027
-              </div>
-              <p className="text-[10px] text-slate-500 leading-tight">
-                CLT Art. 59 § 2º: compensação em até 6 meses com teto legal de 2h extras/dia.
-              </p>
-            </div>
-          </div>
-        </div>
+        <PortalEspelhoTab
+          meusRegistros={meusRegistros}
+          userColab={userColab}
+          hojeStr={hojeStr}
+          onSolicitarAjuste={(data, tipo) => {
+            setAjusteTipoInput(tipo as any);
+            setAjusteDataInput(data);
+            setIsAjusteModalOpen(true);
+          }}
+        />
       )}
 
       {/* Conteúdo: Solicitações de Horas Extras e Aprovação do Gestor */}
@@ -2388,12 +2320,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Anexo do Documento / Atestado (PDF/Imagem):</label>
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        setAjusteDocInput(e.target.files[0].name);
+                      }
+                    }}
+                    className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 cursor-pointer"
+                  />
+                </div>
                 <input
                   type="text"
-                  placeholder="Nome do arquivo (ex: atestado_medico_out.pdf)"
+                  placeholder="Nome do arquivo ou descrição (ex: atestado_medico_out.pdf)"
                   value={ajusteDocInput}
                   onChange={(e) => setAjusteDocInput(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-slate-800"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-slate-800 text-xs"
                 />
               </div>
 

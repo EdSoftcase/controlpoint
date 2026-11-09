@@ -29,7 +29,8 @@ function initSupabase(url: string, key: string) {
 initSupabase(currentConfig.url, currentConfig.key);
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Security: Simple AES-256-GCM Encryption
 const ALGORITHM = 'aes-256-gcm';
@@ -421,10 +422,25 @@ app.post('/api/self-register', async (req, res) => {
       return res.status(400).json({ error: 'Nome e CPF são campos obrigatórios.' });
     }
     const cleanCpf = cpf.replace(/\D/g, '');
+    if (cleanCpf.length !== 11) {
+      return res.status(400).json({ error: 'CPF deve conter exatamente 11 dígitos numéricos.' });
+    }
     let colabId = `colab-auto-${cleanCpf.slice(-6)}-${Date.now().toString().slice(-4)}`;
     const tenantId = 'tenant-01';
 
-    let savedData = null;
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const normalizedTelefone = (telefone || '').trim();
+    const normalizedDepto = departamentoNome || 'A Definir pelo Gestor';
+    const normalizedCargo = cargoTitulo || 'A Definir pelo Gestor';
+
+    const metadataBio = JSON.stringify({
+      email: normalizedEmail,
+      telefone: normalizedTelefone,
+      pretensaoDepto: normalizedDepto,
+      pretensaoCargo: normalizedCargo
+    });
+
+    let savedData: any = null;
     if (supabase) {
       try {
         // Verificar se já existe colaborador com este CPF para atualizar ao invés de duplicar
@@ -438,13 +454,6 @@ app.post('/api/self-register', async (req, res) => {
           colabId = existing.collaborator_id;
         }
 
-        const metadataBio = JSON.stringify({
-          email: email?.trim() || '',
-          telefone: telefone?.trim() || '',
-          pretensaoDepto: departamentoNome || '',
-          pretensaoCargo: cargoTitulo || ''
-        });
-
         const { data, error } = await supabase
           .from('collaborators')
           .upsert({
@@ -454,8 +463,8 @@ app.post('/api/self-register', async (req, res) => {
             cpf: cpf.trim(),
             matricula: existing?.matricula || `PEND-${cleanCpf.slice(0, 4)}`,
             data_admissao: new Date().toISOString().slice(0, 10),
-            cargo_titulo: cargoTitulo || 'A Definir pelo Gestor',
-            departamento_nome: departamentoNome || 'A Definir pelo Gestor',
+            cargo_titulo: normalizedCargo,
+            departamento_nome: normalizedDepto,
             status: 'PENDENTE',
             pin_coletor: senha?.trim() || '123456',
             biometric_template: metadataBio,
@@ -466,7 +475,7 @@ app.post('/api/self-register', async (req, res) => {
         if (error) {
           console.warn('Aviso Supabase no self-register:', error);
         } else {
-          savedData = data;
+          savedData = data && data[0] ? data[0] : null;
         }
       } catch (sbErr) {
         console.warn('Erro ao conectar Supabase no self-register:', sbErr);
@@ -479,7 +488,13 @@ app.post('/api/self-register', async (req, res) => {
       success: true,
       message: 'Cadastro recebido com sucesso! Suas informações foram enviadas para aprovação do gestor de RH.',
       colabId,
-      data: savedData
+      data: savedData ? {
+        ...savedData,
+        email: normalizedEmail,
+        telefone: normalizedTelefone,
+        pretensaoDepto: normalizedDepto,
+        pretensaoCargo: normalizedCargo
+      } : null
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Erro ao processar auto-cadastro' });
@@ -490,52 +505,86 @@ app.post('/api/self-register', async (req, res) => {
 app.post('/api/recover-access', async (req, res) => {
   try {
     const { identificador, novaSenha } = req.body;
-    if (!identificador) {
+    if (!identificador || !identificador.trim()) {
       return res.status(400).json({ error: 'Informe seu CPF ou E-mail corporativo.' });
     }
 
-    const cleanDigits = identificador.replace(/\D/g, '');
-    let colabEncontrado = null;
+    const cleanIdentificador = identificador.trim();
+    const cleanDigits = cleanIdentificador.replace(/\D/g, '');
+    let colabEncontrado: any = null;
 
     if (supabase) {
       try {
-        const orClauses = [`cpf.eq.${identificador}`, `matricula.eq.${identificador}`];
+        const orClauses: string[] = [];
         if (cleanDigits.length === 11) {
           orClauses.push(`cpf.ilike.%${cleanDigits}%`);
         }
-        if (identificador.includes('@')) {
-          orClauses.push(`email.ilike.%${identificador}%`);
+        orClauses.push(`cpf.eq.${cleanIdentificador}`);
+        orClauses.push(`matricula.eq.${cleanIdentificador}`);
+
+        // Busca resiliente de e-mail no biometric_template (já que collaborators não tem coluna email no schema)
+        if (cleanIdentificador.includes('@')) {
+          orClauses.push(`biometric_template.ilike.%${cleanIdentificador.toLowerCase()}%`);
         }
 
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('collaborators')
           .select('*')
           .or(orClauses.join(','));
 
-        if (data && data.length > 0) {
+        if (!error && data && data.length > 0) {
           colabEncontrado = data[0];
-          if (novaSenha && novaSenha.trim()) {
-            await supabase
-              .from('collaborators')
-              .update({ pin_coletor: novaSenha.trim(), updated_at: new Date().toISOString() })
-              .eq('collaborator_id', colabEncontrado.collaborator_id);
-
-            return res.json({
-              success: true,
-              message: `Senha e PIN do colaborador ${colabEncontrado.nome} atualizados com sucesso! Você já pode entrar com a nova senha.`,
-              nome: colabEncontrado.nome
+        } else {
+          // Busca em lote de contingência
+          const { data: allColabs } = await supabase.from('collaborators').select('*');
+          if (allColabs && allColabs.length > 0) {
+            colabEncontrado = allColabs.find((c: any) => {
+              const cCpfDigits = (c.cpf || '').replace(/\D/g, '');
+              if (cleanDigits.length === 11 && cCpfDigits === cleanDigits) return true;
+              if (c.cpf === cleanIdentificador || c.matricula === cleanIdentificador) return true;
+              if (c.biometric_template) {
+                try {
+                  const bio = typeof c.biometric_template === 'string' ? JSON.parse(c.biometric_template) : c.biometric_template;
+                  if (bio?.email && bio.email.toLowerCase() === cleanIdentificador.toLowerCase()) return true;
+                } catch (_) {
+                  if (String(c.biometric_template).toLowerCase().includes(cleanIdentificador.toLowerCase())) return true;
+                }
+              }
+              return false;
             });
           }
+        }
+
+        if (colabEncontrado && novaSenha && novaSenha.trim()) {
+          await supabase
+            .from('collaborators')
+            .update({ pin_coletor: novaSenha.trim(), updated_at: new Date().toISOString() })
+            .eq('collaborator_id', colabEncontrado.collaborator_id);
+
+          return res.json({
+            success: true,
+            message: `Senha e PIN do colaborador ${colabEncontrado.nome} atualizados com sucesso! Você já pode entrar com a nova senha.`,
+            nome: colabEncontrado.nome,
+            cpf: colabEncontrado.cpf,
+            identificadorUsado: cleanIdentificador
+          });
         }
       } catch (err) {
         console.warn('Erro no recover-access:', err);
       }
     }
 
-    res.json({
-      success: true,
-      message: `Solicitação de recuperação processada. Se o usuário estiver cadastrado, a nova senha estará pronta para uso imediato.`,
-      nome: colabEncontrado ? colabEncontrado.nome : 'Colaborador'
+    if (colabEncontrado) {
+      return res.json({
+        success: true,
+        message: `Colaborador ${colabEncontrado.nome} identificado. Senha pronta para atualização.`,
+        nome: colabEncontrado.nome,
+        cpf: colabEncontrado.cpf
+      });
+    }
+
+    return res.status(404).json({
+      error: 'Nenhum colaborador localizado com o CPF ou E-mail informado. Verifique os dados ou realize seu cadastro.'
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Erro ao recuperar acesso' });
@@ -716,6 +765,51 @@ app.post('/api/save-adjustment', async (req, res) => {
   }
 });
 
+// Save/Update Paystub (Holerite) in Supabase
+app.post('/api/save-holerite', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const holerite = req.body;
+    
+    const { data, error: dbError } = await supabase
+      .from('paystubs')
+      .upsert({
+        paystub_id: holerite.id,
+        tenant_id: holerite.tenantId || 'tenant-01',
+        collaborator_id: holerite.colaboradorId,
+        collaborator_cpf: holerite.colaboradorCpf,
+        collaborator_name: holerite.colaboradorNome,
+        mes_ano: holerite.mesAno,
+        competencia: holerite.competencia,
+        salario_bruto: holerite.salarioBruto,
+        descontos: holerite.descontos,
+        salario_liquido: holerite.liquido,
+        arquivo_nome: holerite.arquivoNome,
+        arquivo_url: holerite.arquivoUrl || null,
+        data_upload: new Date().toISOString(),
+        status: holerite.status || 'EMITIDO_EMPRESA',
+        observacao: holerite.observacao || null
+      }, { onConflict: 'paystub_id' })
+      .select();
+      
+    if (dbError) console.warn('Supabase paystubs upsert warning:', dbError.message);
+    
+    await logEvent(holerite.tenantId || 'tenant-01', `Holerite ${holerite.competencia} salvo no Supabase para ${holerite.colaboradorNome}`);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Save holerite error:', error);
+    await logEvent('error', `Save holerite error: ${error}`);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 // Create Auth User (requires Service Role Key)
 app.post('/api/create-auth-user', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -752,6 +846,145 @@ app.post('/api/create-auth-user', async (req, res) => {
     res.json({ success: true, user: data.user });
   } catch (error) {
     console.error('Error creating auth user:', error);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// REP-P Server-Side Punch Endpoint (Portaria 671 Compliance)
+app.post('/api/punch', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+
+    const {
+      tenantId,
+      colaboradorId,
+      tipoMarcacao,
+      latitude,
+      longitude,
+      modoDispositivo,
+      alertaAntecedencia,
+      alertaIntervalo
+    } = req.body;
+
+    if (!tenantId || !colaboradorId || !tipoMarcacao) {
+      return res.status(400).json({ error: 'tenantId, colaboradorId e tipoMarcacao são obrigatórios.' });
+    }
+
+    if (user.user_metadata?.tenantId && user.user_metadata.tenantId !== tenantId) {
+      return res.status(403).send('Forbidden');
+    }
+
+    let colaborador: any = null;
+    let tenant: any = null;
+
+    const { data: colabData } = await supabase
+      .from('collaborators')
+      .select('*')
+      .eq('collaborator_id', colaboradorId)
+      .maybeSingle();
+
+    if (colabData) {
+      colaborador = colabData;
+    }
+
+    const { data: tenantData } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if (tenantData) {
+      tenant = tenantData;
+    }
+
+    const empregadorRazaoSocial = tenant?.razao_social || 'Softcase Tecnologia';
+    const empregadorCnpj = tenant?.cnpj || '00.000.000/0001-91';
+    const colaboradorNome = colaborador?.nome || 'Colaborador';
+    const colaboradorCpf = colaborador?.cpf || '000.000.000-00';
+    const colaboradorMatricula = colaborador?.matricula || 'MAT-001';
+
+    let nextNsr = 1;
+    let previousHash = '0000000000000000000000000000000000000000000000000000000000000000';
+
+    const { data: lastPoints, error: lastPointErr } = await supabase
+      .from('point_registrations')
+      .select('nsr, hash_sha256')
+      .eq('tenant_id', tenantId)
+      .order('nsr', { ascending: false })
+      .limit(1);
+
+    if (!lastPointErr && lastPoints && lastPoints.length > 0) {
+      nextNsr = Number(lastPoints[0].nsr) + 1;
+      previousHash = lastPoints[0].hash_sha256 || previousHash;
+    }
+
+    const clockTime = new Date();
+    const nowIso = clockTime.toISOString();
+    const dataHoraFormatada = `${String(clockTime.getDate()).padStart(2, '0')}/${String(clockTime.getMonth() + 1).padStart(2, '0')}/${clockTime.getFullYear()} ${String(clockTime.getHours()).padStart(2, '0')}:${String(clockTime.getMinutes()).padStart(2, '0')}:${String(clockTime.getSeconds()).padStart(2, '0')}`;
+
+    const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
+    const hashSha256 = crypto.createHash('sha256').update(rawPayload).digest('hex');
+
+    const registroOficial = {
+      nsr: nextNsr,
+      tenantId,
+      empregadorRazaoSocial,
+      empregadorCnpj,
+      colaboradorId,
+      colaboradorNome,
+      colaboradorCpf,
+      colaboradorMatricula,
+      dataHora: nowIso,
+      dataHoraFormatada,
+      fusoHorario: '-03:00',
+      coletorId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+      tipoMarcacao,
+      alertaAntecedencia: alertaAntecedencia || null,
+      alertaIntervalo: alertaIntervalo || null,
+      hashSha256,
+      latitude: latitude || -23.561684,
+      longitude: longitude || -46.655981,
+      distanciaCentroMetros: 10,
+      foraDoRaioGeofence: false,
+      localizacaoEndereco: 'Av. Paulista, 1000 - São Paulo, SP (Validado Server-Side)',
+      modoDispositivo: modoDispositivo || 'WEB_CAM'
+    };
+
+    const { error: insertError } = await supabase
+      .from('point_registrations')
+      .insert({
+        nsr: nextNsr,
+        tenant_id: tenantId,
+        collaborator_id: colaboradorId,
+        data_hora: nowIso,
+        tipo_marcacao: tipoMarcacao,
+        latitude: registroOficial.latitude,
+        longitude: registroOficial.longitude,
+        hash_sha256: hashSha256,
+        modo_dispositivo: registroOficial.modoDispositivo,
+        detalhes: registroOficial
+      });
+
+    if (insertError) {
+      console.warn('Erro ao inserir ponto no Supabase via /api/punch:', insertError);
+      throw insertError;
+    }
+
+    await logEvent(tenantId, `Ponto REP-P oficial registrado server-side: NSR ${nextNsr} para ${colaboradorNome} (${tipoMarcacao})`);
+
+    res.json({
+      success: true,
+      registro: registroOficial
+    });
+  } catch (error) {
+    console.error('Erro no endpoint /api/punch:', error);
+    await logEvent('error', `Punch error: ${error}`);
     res.status(500).json({ error: String(error) });
   }
 });

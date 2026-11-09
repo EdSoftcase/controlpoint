@@ -134,6 +134,14 @@ export function formatPhone(value: string): string {
 }
 
 /**
+ * Validação de e-mail RFC 5322
+ */
+export function validateEmail(email: string): boolean {
+  const re = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  return re.test((email || '').trim());
+}
+
+/**
  * Validação de PIS/NIS/PASEP (11 dígitos)
  */
 export function validatePIS(pisInput: string): boolean {
