@@ -125,8 +125,9 @@ export interface Colaborador {
   biometriaCadastrada?: boolean;
   biometriaHashTemplate?: string;
   limiarConfiancaMinimo?: number;
-  dataUltimaAtualizacaoBiometria?: string;
-  status: 'ATIVO' | 'DESLIGADO';
+  status: 'ATIVO' | 'DESLIGADO' | 'PENDENTE';
+  telefone?: string;
+  dataSolicitacaoCadastro?: string;
   email?: string;
   senhaTemporaria?: string;
   // Extensões de Escalas & RH Avançado (Retrocompatíveis)
@@ -287,4 +288,22 @@ export interface ResumoGerencialDepartamento {
   totalHorasDesconto: number;
   totalValorDescontos: number;
   taxaAbsenteismoPercentual: number;
+}
+
+export interface ProgramacaoFerias {
+  id: string;
+  tenantId: string;
+  colaboradorId: string;
+  colaboradorNome: string;
+  colaboradorCpf: string;
+  periodoAquisitivoInicio: string; // YYYY-MM-DD
+  periodoAquisitivoFim: string; // YYYY-MM-DD
+  periodoConcessivoInicio: string; // YYYY-MM-DD
+  periodoConcessivoFim: string; // YYYY-MM-DD
+  dataInicioFerias: string; // YYYY-MM-DD
+  dataFimFerias: string; // YYYY-MM-DD
+  diasGozo: number; // ex: 20 ou 30
+  diasAbonoPecuniario: number; // ex: 10 (venda de 1/3)
+  status: 'PROGRAMADO' | 'EM_GOZO' | 'CONCLUIDO' | 'VENCIDO';
+  observacao?: string;
 }

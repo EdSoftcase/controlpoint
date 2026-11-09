@@ -393,6 +393,12 @@ app.post('/api/save-collaborator', async (req, res) => {
         regra_antecedencia_ativa: collaborator.regraAntecedenciaAtiva,
         pin_coletor: collaborator.pinColetor,
         status: collaborator.status,
+        ...(collaborator.biometriaHashTemplate || collaborator.email || collaborator.telefone ? {
+          biometric_template: collaborator.biometriaHashTemplate || JSON.stringify({
+            email: collaborator.email || '',
+            telefone: collaborator.telefone || ''
+          })
+        } : {}),
         updated_at: new Date().toISOString()
       }, { onConflict: 'collaborator_id' })
       .select();
@@ -404,6 +410,135 @@ app.post('/api/save-collaborator', async (req, res) => {
   } catch (error) {
     await logEvent('error', `Save collaborator error: ${error}`);
     res.status(500).json({ error: String(error) });
+  }
+});
+
+// Auto-cadastro de Colaborador (Pendente de Aprovação pelo Gestor/RH)
+app.post('/api/self-register', async (req, res) => {
+  try {
+    const { nome, cpf, email, telefone, departamentoNome, cargoTitulo, senha } = req.body;
+    if (!nome || !cpf) {
+      return res.status(400).json({ error: 'Nome e CPF são campos obrigatórios.' });
+    }
+    const cleanCpf = cpf.replace(/\D/g, '');
+    let colabId = `colab-auto-${cleanCpf.slice(-6)}-${Date.now().toString().slice(-4)}`;
+    const tenantId = 'tenant-01';
+
+    let savedData = null;
+    if (supabase) {
+      try {
+        // Verificar se já existe colaborador com este CPF para atualizar ao invés de duplicar
+        const { data: existing } = await supabase
+          .from('collaborators')
+          .select('collaborator_id, matricula')
+          .eq('cpf', cpf.trim())
+          .maybeSingle();
+
+        if (existing?.collaborator_id) {
+          colabId = existing.collaborator_id;
+        }
+
+        const metadataBio = JSON.stringify({
+          email: email?.trim() || '',
+          telefone: telefone?.trim() || '',
+          pretensaoDepto: departamentoNome || '',
+          pretensaoCargo: cargoTitulo || ''
+        });
+
+        const { data, error } = await supabase
+          .from('collaborators')
+          .upsert({
+            collaborator_id: colabId,
+            tenant_id: tenantId,
+            nome: nome.trim(),
+            cpf: cpf.trim(),
+            matricula: existing?.matricula || `PEND-${cleanCpf.slice(0, 4)}`,
+            data_admissao: new Date().toISOString().slice(0, 10),
+            cargo_titulo: cargoTitulo || 'A Definir pelo Gestor',
+            departamento_nome: departamentoNome || 'A Definir pelo Gestor',
+            status: 'PENDENTE',
+            pin_coletor: senha?.trim() || '123456',
+            biometric_template: metadataBio,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'collaborator_id' })
+          .select();
+
+        if (error) {
+          console.warn('Aviso Supabase no self-register:', error);
+        } else {
+          savedData = data;
+        }
+      } catch (sbErr) {
+        console.warn('Erro ao conectar Supabase no self-register:', sbErr);
+      }
+    }
+
+    await logEvent(tenantId, `Novo auto-cadastro de colaborador pendente: ${nome} (CPF: ${cpf})`);
+
+    res.json({
+      success: true,
+      message: 'Cadastro recebido com sucesso! Suas informações foram enviadas para aprovação do gestor de RH.',
+      colabId,
+      data: savedData
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao processar auto-cadastro' });
+  }
+});
+
+// Recuperação de Acesso / Redefinição de Senha ou PIN
+app.post('/api/recover-access', async (req, res) => {
+  try {
+    const { identificador, novaSenha } = req.body;
+    if (!identificador) {
+      return res.status(400).json({ error: 'Informe seu CPF ou E-mail corporativo.' });
+    }
+
+    const cleanDigits = identificador.replace(/\D/g, '');
+    let colabEncontrado = null;
+
+    if (supabase) {
+      try {
+        const orClauses = [`cpf.eq.${identificador}`, `matricula.eq.${identificador}`];
+        if (cleanDigits.length === 11) {
+          orClauses.push(`cpf.ilike.%${cleanDigits}%`);
+        }
+        if (identificador.includes('@')) {
+          orClauses.push(`email.ilike.%${identificador}%`);
+        }
+
+        const { data } = await supabase
+          .from('collaborators')
+          .select('*')
+          .or(orClauses.join(','));
+
+        if (data && data.length > 0) {
+          colabEncontrado = data[0];
+          if (novaSenha && novaSenha.trim()) {
+            await supabase
+              .from('collaborators')
+              .update({ pin_coletor: novaSenha.trim(), updated_at: new Date().toISOString() })
+              .eq('collaborator_id', colabEncontrado.collaborator_id);
+
+            return res.json({
+              success: true,
+              message: `Senha e PIN do colaborador ${colabEncontrado.nome} atualizados com sucesso! Você já pode entrar com a nova senha.`,
+              nome: colabEncontrado.nome
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Erro no recover-access:', err);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Solicitação de recuperação processada. Se o usuário estiver cadastrado, a nova senha estará pronta para uso imediato.`,
+      nome: colabEncontrado ? colabEncontrado.nome : 'Colaborador'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao recuperar acesso' });
   }
 });
 
