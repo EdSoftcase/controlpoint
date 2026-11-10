@@ -43,8 +43,12 @@ import {
   ArrowLeftRight,
   CalendarDays,
   Info,
-  Plane
+  Plane,
+  Megaphone,
+  MessageSquare,
+  Pin
 } from 'lucide-react';
+import { ComunicadoEmpresa, ChamadoAtendimentoRh, CategoriaComunicado, AssuntoChamadoRh } from '../types/rhAvancado';
 import {
   detectFaceAndBiometrics,
   matchBiometricFace,
@@ -104,9 +108,14 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   onOpenGuia
 }) => {
   const { supabase } = useAuth();
-  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias' | 'holerites'>('espelho');
+  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias' | 'holerites' | 'comunicados' | 'fale_dp'>('espelho');
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
   const [viewingHoleriteModal, setViewingHoleriteModal] = useState<any | null>(null);
+  const [viewingIrpfModal, setViewingIrpfModal] = useState<any | null>(null);
+  const [isSigningHolerite, setIsSigningHolerite] = useState(false);
+  const [holeriteOffset, setHoleriteOffset] = useState(0);
+  const LIMIT = 10;
+
 
   const [holeritesList, setHoleritesList] = useState<any[]>(() => {
     try {
@@ -138,6 +147,110 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       }
     ];
   });
+
+  const [informesIrpfList, setInformesIrpfList] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem(`sc_informes_irpf_${user.id}`);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [
+      {
+        id: 'irpf-2025',
+        anoCalendario: '2025',
+        exercicio: '2026',
+        titulo: 'Informe de Rendimentos IRPF - Ano Calendário 2025',
+        arquivoNome: 'informe_rendimentos_2025.pdf',
+        dataUpload: '28/02/2026',
+        status: 'PUBLICADO_RH'
+      }
+    ];
+  });
+
+  // Estados do Mural Digital & Atendimento Fale com o DP/RH
+  const [comunicadosList, setComunicadosList] = useState<ComunicadoEmpresa[]>(() => {
+    try {
+      const saved = localStorage.getItem('sc_comunicados_all');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [
+      {
+        id: 'ann-01',
+        tenantId: 'tenant-01',
+        titulo: 'Feriado de Proclamação da República e Emenda de Ponte',
+        conteudo: 'Informamos a todos os colaboradores que no dia 15/11 (sexta-feira) não haverá expediente em virtude do feriado nacional. As atividades retornarão normalmente na segunda-feira subsequente.',
+        categoria: 'FERIADOS',
+        autorNome: 'Luciana Mendonça (Coordenação de RH)',
+        fixado: true,
+        exigeConfirmacaoLeitura: true,
+        confirmacoesLeitura: [],
+        criadoEm: '08/11/2026'
+      },
+      {
+        id: 'ann-02',
+        tenantId: 'tenant-01',
+        titulo: 'Campanha de Vacinação Corporativa contra Gripe H1N1',
+        conteudo: 'Na próxima quarta-feira (18/11), a equipe médica da empresa estará no auditório da matriz disponibilizando a vacinação gratuita para todos os funcionários contratados CLT.',
+        categoria: 'CAMPANHA_SAUDE',
+        autorNome: 'Departamento de Medicina do Trabalho',
+        fixado: false,
+        exigeConfirmacaoLeitura: true,
+        confirmacoesLeitura: [],
+        criadoEm: '07/11/2026'
+      }
+    ];
+  });
+
+  const [chamadosRhList, setChamadosRhList] = useState<ChamadoAtendimentoRh[]>(() => {
+    try {
+      const saved = localStorage.getItem(`sc_chamados_rh_${user.id}`);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    try {
+      const savedAll = localStorage.getItem('sc_chamados_rh_all');
+      if (savedAll) {
+        const parsedAll = JSON.parse(savedAll);
+        const userCpfClean = (user.cpf || '').replace(/\D/g, '');
+        return parsedAll.filter((t: any) => t.colaboradorId === user.id || (userCpfClean && (t.colaboradorCpf || '').replace(/\D/g, '') === userCpfClean));
+      }
+    } catch (_) {}
+    return [
+      {
+        id: 'ticket-01',
+        tenantId: 'tenant-01',
+        colaboradorId: user.id,
+        colaboradorNome: user.nome,
+        colaboradorCpf: user.cpf,
+        departamentoNome: user.departamentoNome || 'Geral',
+        assunto: 'VALE_TRANSPORTE',
+        titulo: 'Solicitação de Alteração de Rota do Vale-Transporte',
+        mensagemInicial: 'Mudei de residência recentemente e gostaria de solicitar a alteração da rota do meu VT.',
+        status: 'EM_ATENDIMENTO',
+        prioridade: 'MEDIA',
+        respostas: [
+          {
+            id: 'resp-01',
+            autorId: 'user-02',
+            autorNome: 'Luciana Mendonça (RH)',
+            eDoRh: true,
+            mensagem: 'Olá! Por favor anexe o novo comprovante de residência em seu nome para atualizarmos o benefício no sistema.',
+            dataHora: '08/11/2026 15:30'
+          }
+        ],
+        criadoEm: '08/11/2026 10:15',
+        atualizadoEm: '08/11/2026 15:30'
+      }
+    ];
+  });
+
+  const [isNovoChamadoModalOpen, setIsNovoChamadoModalOpen] = useState(false);
+  const [novoChamadoAssunto, setNovoChamadoAssunto] = useState<AssuntoChamadoRh>('DUVIDA_HOLERITE');
+  const [novoChamadoTitulo, setNovoChamadoTitulo] = useState('');
+  const [novoChamadoMensagem, setNovoChamadoMensagem] = useState('');
+  const [novoChamadoAnexoNome, setNovoChamadoAnexoNome] = useState('');
+  const [novoChamadoAnexoUrl, setNovoChamadoAnexoUrl] = useState('');
+  const [selectedUserTicket, setSelectedUserTicket] = useState<ChamadoAtendimentoRh | null>(null);
+  const [respostaColabInput, setRespostaColabInput] = useState('');
+  const [confirmingReadAnnId, setConfirmingReadAnnId] = useState<string | null>(null);
 
   React.useEffect(() => {
     const userCpfClean = (user.cpf || '').replace(/\D/g, '');
@@ -171,10 +284,45 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       setHoleritesList(list);
     }
 
-    async function fetchPaystubsFromDb() {
+    // Carregar Informes IRPF salvos localmente
+    let irpfLocal: any[] = [];
+    try {
+      const savedIrpfColab = localStorage.getItem(`sc_informes_irpf_${user.id}`);
+      if (savedIrpfColab) {
+        irpfLocal = JSON.parse(savedIrpfColab);
+      }
+    } catch (_) {}
+
+    try {
+      const savedIrpfAll = localStorage.getItem('sc_informes_irpf_all');
+      if (savedIrpfAll) {
+        const parsedIrpfAll = JSON.parse(savedIrpfAll);
+        const userIrpfItems = parsedIrpfAll.filter((i: any) => {
+          const iCpf = (i.colaboradorCpf || '').replace(/\D/g, '');
+          return (user.id && i.colaboradorId === user.id) || (userCpfClean && iCpf === userCpfClean);
+        });
+
+        for (const item of userIrpfItems) {
+          if (!irpfLocal.some(existing => existing.id === item.id)) {
+            irpfLocal.unshift(item);
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (irpfLocal.length > 0) {
+      setInformesIrpfList(irpfLocal);
+    }
+
+    async function fetchPaystubsFromDb(offset: number = 0) {
       try {
         if (supabase) {
-          const { data } = await supabase.from('paystubs').select('*');
+          const { data } = await supabase
+            .from('paystubs')
+            .select('*')
+            .range(offset, offset + LIMIT - 1)
+            .order('created_at', { ascending: false });
+
           if (data && data.length > 0) {
             const mapped = data
               .filter((p: any) => {
@@ -195,11 +343,54 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 arquivoUrl: p.arquivo_url,
                 dataUpload: p.data_upload ? new Date(p.data_upload).toLocaleDateString('pt-BR') : 'Hoje',
                 status: p.status,
-                observacao: p.observacao
+                observacao: p.observacao,
+                confirmadoEm: p.confirmado_em,
+                confirmadoIp: p.confirmado_ip,
+                confirmadoHash: p.confirmado_hash
               }));
 
+            setHoleritesList(prev => {
+              const merged = [...prev];
+              for (const item of mapped) {
+                const idx = merged.findIndex(m => m.id === item.id);
+                if (idx >= 0) {
+                  merged[idx] = { ...merged[idx], ...item };
+                } else {
+                  merged.push(item);
+                }
+              }
+              return merged;
+            });
+          }
+        }
+      } catch (_) {}
+    }
+
+    async function fetchTaxReportsFromDb() {
+      try {
+        if (supabase) {
+          const { data } = await supabase.from('tax_reports').select('*');
+          if (data && data.length > 0) {
+            const mapped = data
+              .filter((t: any) => {
+                const tCpf = (t.collaborator_cpf || '').replace(/\D/g, '');
+                return (user.id && t.collaborator_id === user.id) || (userCpfClean && tCpf === userCpfClean);
+              })
+              .map((t: any) => ({
+                id: t.report_id || t.id,
+                colaboradorId: t.collaborator_id,
+                colaboradorNome: t.collaborator_name,
+                colaboradorCpf: t.collaborator_cpf,
+                anoCalendario: t.ano_calendario,
+                exercicio: t.exercicio,
+                titulo: t.titulo || `Informe de Rendimentos IRPF - ${t.ano_calendario}`,
+                arquivoNome: t.arquivo_nome,
+                arquivoUrl: t.arquivo_url,
+                dataUpload: t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Hoje',
+                status: t.status || 'PUBLICADO_RH'
+              }));
             if (mapped.length > 0) {
-              setHoleritesList(prev => {
+              setInformesIrpfList(prev => {
                 const merged = [...prev];
                 for (const item of mapped) {
                   if (!merged.some(m => m.id === item.id)) {
@@ -213,8 +404,282 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         }
       } catch (_) {}
     }
-    fetchPaystubsFromDb();
-  }, [user.id, user.cpf, supabase]);
+
+    async function fetchAnnouncementsFromDb() {
+      try {
+        if (supabase) {
+          const { data } = await supabase.from('company_announcements').select('*');
+          if (data && data.length > 0) {
+            const mapped = data.map((a: any) => ({
+              id: a.announcement_id || a.id,
+              tenantId: a.tenant_id,
+              titulo: a.titulo,
+              conteudo: a.conteudo,
+              categoria: a.categoria,
+              autorNome: a.autor_nome,
+              fixado: a.fixado,
+              exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
+              anexoNome: a.anexo_nome,
+              anexoUrl: a.anexo_url,
+              confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
+              criadoEm: a.created_at ? new Date(a.created_at).toLocaleDateString('pt-BR') : 'Hoje'
+            }));
+
+            setComunicadosList(prev => {
+              const merged = [...prev];
+              for (const item of mapped) {
+                const idx = merged.findIndex(m => m.id === item.id);
+                if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+                else merged.unshift(item);
+              }
+              return merged;
+            });
+          }
+        }
+      } catch (_) {}
+    }
+
+    async function fetchTicketsFromDb() {
+      try {
+        if (supabase) {
+          const { data } = await supabase.from('rh_tickets').select('*');
+          if (data && data.length > 0) {
+            const mapped = data
+              .filter((t: any) => {
+                const tCpf = (t.collaborator_cpf || '').replace(/\D/g, '');
+                return (user.id && t.collaborator_id === user.id) || (userCpfClean && tCpf === userCpfClean);
+              })
+              .map((t: any) => ({
+                id: t.ticket_id || t.id,
+                tenantId: t.tenant_id,
+                colaboradorId: t.collaborator_id,
+                colaboradorNome: t.collaborator_name,
+                colaboradorCpf: t.collaborator_cpf,
+                departamentoNome: t.departamento_nome,
+                assunto: t.assunto,
+                titulo: t.titulo,
+                mensagemInicial: t.mensagem_inicial,
+                anexoNome: t.anexo_nome,
+                anexoUrl: t.anexo_url,
+                status: t.status,
+                prioridade: t.prioridade,
+                respostas: Array.isArray(t.respostas) ? t.respostas : [],
+                criadoEm: t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Hoje',
+                atualizadoEm: t.updated_at ? new Date(t.updated_at).toLocaleDateString('pt-BR') : 'Hoje'
+              }));
+
+            if (mapped.length > 0) {
+              setChamadosRhList(prev => {
+                const merged = [...prev];
+                for (const item of mapped) {
+                  const idx = merged.findIndex(m => m.id === item.id);
+                  if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+                  else merged.unshift(item);
+                }
+                return merged;
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    fetchPaystubsFromDb(holeriteOffset);
+    fetchTaxReportsFromDb();
+    fetchAnnouncementsFromDb();
+    fetchTicketsFromDb();
+  }, [user.id, user.cpf, supabase, holeriteOffset]);
+
+  const handleConfirmReadingAnnouncement = async (ann: ComunicadoEmpresa) => {
+    setConfirmingReadAnnId(ann.id);
+    const userCpfClean = user.cpf.replace(/\D/g, '');
+    const ip = '189.120.45.88';
+    const timestamp = new Date().toLocaleString('pt-BR');
+
+    const readEntry = {
+      colaboradorId: user.id,
+      colaboradorCpf: user.cpf,
+      colaboradorNome: user.nome,
+      dataHora: timestamp,
+      ip
+    };
+
+    const updatedAnn: ComunicadoEmpresa = {
+      ...ann,
+      confirmacoesLeitura: [...(ann.confirmacoesLeitura || []), readEntry]
+    };
+
+    const updatedList = comunicadosList.map(c => c.id === ann.id ? updatedAnn : c);
+    setComunicadosList(updatedList);
+    localStorage.setItem('sc_comunicados_all', JSON.stringify(updatedList));
+
+    try {
+      await fetch('/api/read-announcement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          announcementId: ann.id,
+          userCpf: user.cpf,
+          userName: user.nome,
+          userId: user.id
+        })
+      });
+    } catch (_) {}
+
+    setConfirmingReadAnnId(null);
+    alert(`Confirmação de leitura registrada com sucesso!\n\nComunicado: "${ann.titulo}"\nData/Hora: ${timestamp}\nIP: ${ip}`);
+  };
+
+  const handleCreateTicket = async () => {
+    if (!novoChamadoTitulo.trim() || !novoChamadoMensagem.trim()) {
+      alert('Informe o título e os detalhes da solicitação.');
+      return;
+    }
+
+    const ticketId = `ticket-${Date.now()}`;
+    const novo: ChamadoAtendimentoRh = {
+      id: ticketId,
+      tenantId: user.tenantId || 'tenant-01',
+      colaboradorId: user.id,
+      colaboradorNome: user.nome,
+      colaboradorCpf: user.cpf,
+      departamentoNome: user.departamentoNome || 'Geral',
+      assunto: novoChamadoAssunto,
+      titulo: novoChamadoTitulo.trim(),
+      mensagemInicial: novoChamadoMensagem.trim(),
+      anexoNome: novoChamadoAnexoNome || undefined,
+      anexoUrl: novoChamadoAnexoUrl || undefined,
+      status: 'ABERTO',
+      prioridade: 'MEDIA',
+      respostas: [],
+      criadoEm: new Date().toLocaleString('pt-BR'),
+      atualizadoEm: new Date().toLocaleString('pt-BR')
+    };
+
+    const updatedList = [novo, ...chamadosRhList];
+    setChamadosRhList(updatedList);
+    localStorage.setItem(`sc_chamados_rh_${user.id}`, JSON.stringify(updatedList));
+
+    try {
+      const savedAll = localStorage.getItem('sc_chamados_rh_all');
+      const all = savedAll ? JSON.parse(savedAll) : [];
+      localStorage.setItem('sc_chamados_rh_all', JSON.stringify([novo, ...all]));
+    } catch (_) {}
+
+    try {
+      await fetch('/api/save-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(novo)
+      });
+    } catch (_) {}
+
+    setIsNovoChamadoModalOpen(false);
+    setNovoChamadoTitulo('');
+    setNovoChamadoMensagem('');
+    setNovoChamadoAnexoNome('');
+    setNovoChamadoAnexoUrl('');
+    setSelectedUserTicket(novo);
+    alert('Chamado criado e enviado com sucesso para a equipe de RH/DP!');
+  };
+
+  const handleSendUserReplyTicket = async (ticket: ChamadoAtendimentoRh) => {
+    if (!respostaColabInput.trim()) return;
+
+    const novaResposta = {
+      id: `resp-${Date.now()}`,
+      autorId: user.id,
+      autorNome: `${user.nome} (Você)`,
+      eDoRh: false,
+      mensagem: respostaColabInput.trim(),
+      dataHora: new Date().toLocaleString('pt-BR')
+    };
+
+    const updatedTicket: ChamadoAtendimentoRh = {
+      ...ticket,
+      respostas: [...ticket.respostas, novaResposta],
+      atualizadoEm: new Date().toLocaleString('pt-BR')
+    };
+
+    const updatedList = chamadosRhList.map(t => t.id === ticket.id ? updatedTicket : t);
+    setChamadosRhList(updatedList);
+    localStorage.setItem(`sc_chamados_rh_${user.id}`, JSON.stringify(updatedList));
+
+    try {
+      const savedAll = localStorage.getItem('sc_chamados_rh_all');
+      if (savedAll) {
+        const all = JSON.parse(savedAll);
+        const updatedAll = all.map((t: any) => t.id === ticket.id ? updatedTicket : t);
+        localStorage.setItem('sc_chamados_rh_all', JSON.stringify(updatedAll));
+      }
+    } catch (_) {}
+
+    setSelectedUserTicket(updatedTicket);
+    setRespostaColabInput('');
+
+    try {
+      await fetch('/api/save-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: ticket.id,
+          resposta: novaResposta
+        })
+      });
+    } catch (_) {}
+  };
+
+  const handleConfirmHoleriteReceipt = async (holerite: any) => {
+    setIsSigningHolerite(true);
+    try {
+      const resp = await fetch('/api/confirm-holerite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paystubId: holerite.id,
+          userCpf: user.cpf,
+          userName: user.nome
+        })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        const timestamp = data.confirmadoEm;
+        const ip = data.confirmadoIp;
+        const hash = data.confirmadoHash;
+
+        const updatedHolerite = {
+          ...holerite,
+          confirmadoEm: timestamp,
+          confirmadoIp: ip,
+          confirmadoHash: hash,
+          status: 'CONFIRMADO_PELO_COLABORADOR'
+        };
+
+        const updatedList = holeritesList.map(h => h.id === holerite.id ? updatedHolerite : h);
+        setHoleritesList(updatedList);
+        localStorage.setItem(`sc_holerites_${user.id}`, JSON.stringify(updatedList));
+
+        try {
+          const savedAll = localStorage.getItem('sc_holerites_all');
+          if (savedAll) {
+            const parsedAll = JSON.parse(savedAll);
+            const updatedAll = parsedAll.map((h: any) => h.id === holerite.id ? updatedHolerite : h);
+            localStorage.setItem('sc_holerites_all', JSON.stringify(updatedAll));
+          }
+        } catch (_) {}
+
+        setViewingHoleriteModal(updatedHolerite);
+        alert(`Recibo digital do contracheque assinado com sucesso! (CLT Art. 464)\n\nHash SHA-256: ${hash}\nData/Hora: ${timestamp}\nIP: ${ip}`);
+      } else {
+        alert(`Erro ao assinar recibo: ${data.error || 'Falha no servidor'}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de conexão ao assinar recibo digital.');
+    } finally {
+      setIsSigningHolerite(false);
+    }
+  };
 
   // Estados de Troca de Turno / Plantão (Gestão de Pares)
   const [solicitacoesTroca, setSolicitacoesTroca] = useState<SolicitacaoTrocaTurno[]>([
@@ -1218,6 +1683,28 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />
           Holerites & Contracheques
         </button>
+        <button
+          onClick={() => setSelectedTab('comunicados')}
+          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            selectedTab === 'comunicados'
+              ? 'bg-indigo-600 text-white shadow-xs font-bold'
+              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-200'
+          }`}
+        >
+          <Megaphone className="w-3.5 h-3.5 text-indigo-500" />
+          Mural Digital ({comunicadosList.length})
+        </button>
+        <button
+          onClick={() => setSelectedTab('fale_dp')}
+          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            selectedTab === 'fale_dp'
+              ? 'bg-emerald-600 text-white shadow-xs font-bold'
+              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200'
+          }`}
+        >
+          <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
+          Fale com o DP / RH ({chamadosRhList.length})
+        </button>
       </div>
 
       {/* Conteúdo: Holerites & Contracheques */}
@@ -1277,8 +1764,18 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-extrabold uppercase">
                     Competência: {h.competencia}
                   </span>
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                    {h.status === 'EMITIDO_EMPRESA' ? 'Disponível pela Empresa' : 'Anexado pelo Colaborador'}
+                  <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    h.confirmadoHash || h.status === 'CONFIRMADO_PELO_COLABORADOR'
+                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                      : h.status === 'EMITIDO_EMPRESA' 
+                      ? 'bg-amber-50 text-amber-800 border-amber-200' 
+                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                  }`}>
+                    {h.confirmadoHash || h.status === 'CONFIRMADO_PELO_COLABORADOR' 
+                      ? '✅ Recibo Assinado (CLT 464)' 
+                      : h.status === 'EMITIDO_EMPRESA' 
+                      ? 'Disponível pela Empresa' 
+                      : 'Anexado pelo Colaborador'}
                   </span>
                 </div>
 
@@ -1311,10 +1808,76 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               </div>
             ))}
           </div>
+
+          <div className="text-center pt-4">
+            <button
+              onClick={() => {
+                const nextOffset = holeriteOffset + LIMIT;
+                setHoleriteOffset(nextOffset);
+              }}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+            >
+              Carregar mais Holerites
+            </button>
+          </div>
+
+          {/* Seção Informe de Rendimentos IRPF */}
+          <div className="pt-6 border-t border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                  Informe de Rendimentos Anual (IRPF)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Comprovante de Rendimentos Pagos e de Retenção de Imposto de Renda na Fonte para declaração IRPF.
+                </p>
+              </div>
+            </div>
+
+            {informesIrpfList.length === 0 ? (
+              <div className="p-6 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500">
+                Nenhum Informe de Rendimentos IRPF publicado até o momento.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {informesIrpfList.map((irpf) => (
+                  <div key={irpf.id} className="bg-emerald-50/50 border border-emerald-200/90 rounded-2xl p-4 space-y-3 hover:shadow-md transition-all">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2.5 py-0.5 bg-emerald-700 text-white rounded font-mono font-bold text-[11px]">
+                        Ano-Calendário {irpf.anoCalendario}
+                      </span>
+                      <span className="text-[10px] text-emerald-800 font-semibold bg-emerald-100 px-2 py-0.5 rounded">
+                        Exercício {irpf.exercicio || Number(irpf.anoCalendario) + 1}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">{irpf.titulo}</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Disponibilizado em: {irpf.dataUpload || 'Recentemente'}</p>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-2 border-t border-emerald-200/60">
+                      <span className="text-slate-600 font-mono text-[11px] truncate max-w-[180px]" title={irpf.arquivoNome}>
+                        📄 {irpf.arquivoNome}
+                      </span>
+                      <button
+                        onClick={() => setViewingIrpfModal(irpf)}
+                        className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Visualizar Informe
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Modal Visualizador de Holerite / Contracheque */}
+      {/* Modal Visualizador de Holerite / Contracheque (com Assinatura Digital CLT Art. 464) */}
       {viewingHoleriteModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 text-xs font-sans">
@@ -1325,7 +1888,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">Contracheque Digital / Holerite - {viewingHoleriteModal.competencia}</h3>
-                  <p className="text-[11px] text-slate-500">Documento Oficial com Carimbo Criptográfico e Registro DP</p>
+                  <p className="text-[11px] text-slate-500">Documento Oficial com Recibo Digital CLT Art. 464</p>
                 </div>
               </div>
               <button onClick={() => setViewingHoleriteModal(null)} className="text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer">✕</button>
@@ -1346,11 +1909,11 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   </a>
                 </div>
                 {viewingHoleriteModal.arquivoUrl.startsWith('data:image/') ? (
-                  <div className="max-h-[60vh] overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-100 flex justify-center">
+                  <div className="max-h-[50vh] overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-100 flex justify-center">
                     <img src={viewingHoleriteModal.arquivoUrl} alt={viewingHoleriteModal.arquivoNome} className="max-w-full rounded-lg shadow-xs" />
                   </div>
                 ) : (
-                  <div className="h-[50vh] border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="h-[45vh] border border-slate-200 rounded-xl overflow-hidden">
                     <iframe src={viewingHoleriteModal.arquivoUrl} className="w-full h-full" title="Visualizador de PDF" />
                   </div>
                 )}
@@ -1408,13 +1971,53 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     <span>{viewingHoleriteModal.observacao}</span>
                   </div>
                 )}
-
-                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-2 border-t border-slate-100">
-                  <span className="font-mono">Carimbo Digital: HOL-{viewingHoleriteModal.id.slice(-8)}-OK</span>
-                  <span>Emitido em: {viewingHoleriteModal.dataUpload || 'Hoje'}</span>
-                </div>
               </div>
             )}
+
+            {/* BLOCO DE CONFIRMAÇÃO DIGITAL / RECIBO DE LEITURA (CLT Art. 464) */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  Comprovação Eletrônica de Recebimento do Contracheque (CLT Art. 464)
+                </span>
+                {viewingHoleriteModal.confirmadoHash || viewingHoleriteModal.status === 'CONFIRMADO_PELO_COLABORADOR' ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold border border-emerald-300">
+                    ✅ Recibo Assinado
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-300">
+                    ⏳ Pendente de Assinatura
+                  </span>
+                )}
+              </div>
+
+              {viewingHoleriteModal.confirmadoHash || viewingHoleriteModal.status === 'CONFIRMADO_PELO_COLABORADOR' ? (
+                <div className="p-3 bg-emerald-950 text-white rounded-xl space-y-1.5 font-mono text-[10px]">
+                  <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Recibo de Pagamento Assinado Digitalmente pelo Empregado</span>
+                  </div>
+                  <div><strong>Data/Hora do Carimbo:</strong> {viewingHoleriteModal.confirmadoEm || 'Confirmado'}</div>
+                  <div><strong>Endereço IP Registrado:</strong> {viewingHoleriteModal.confirmadoIp || '189.120.45.88'}</div>
+                  <div className="truncate"><strong>Hash Criptográfico SHA-256:</strong> {viewingHoleriteModal.confirmadoHash}</div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-600">
+                    Conforme o Art. 464 da Consolidação das Leis do Trabalho (CLT), o recibo de pagamento emitido através do sistema informatizado da empresa substitui a assinatura física em papel.
+                  </p>
+                  <button
+                    onClick={() => handleConfirmHoleriteReceipt(viewingHoleriteModal)}
+                    disabled={isSigningHolerite}
+                    className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <PenTool className="w-4 h-4" />
+                    <span>{isSigningHolerite ? 'Gerando Carimbo Digital...' : 'Assinar / Confirmar Recebimento do Holerite (CLT Art. 464)'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className="flex justify-end border-t border-slate-100 pt-3">
               <button
@@ -1422,6 +2025,445 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
               >
                 Fechar Visualização
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Conteúdo: Mural Digital de Comunicados */}
+      {selectedTab === 'comunicados' && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-indigo-600" />
+                Mural Digital de Comunicados da Empresa
+              </h2>
+              <p className="text-xs text-slate-500">
+                Avisos institucionais da empresa, comunicados de feriados pontes, campanhas de vacinação e metas do mês.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {comunicadosList.map((ann) => {
+              const userCpfClean = user.cpf.replace(/\D/g, '');
+              const jaConfirmou = (ann.confirmacoesLeitura || []).some(
+                (r) => (r.colaboradorId === user.id) || (userCpfClean && (r.colaboradorCpf || '').replace(/\D/g, '') === userCpfClean)
+              );
+              const minhaConfirmacao = (ann.confirmacoesLeitura || []).find(
+                (r) => (r.colaboradorId === user.id) || (userCpfClean && (r.colaboradorCpf || '').replace(/\D/g, '') === userCpfClean)
+              );
+
+              return (
+                <div
+                  key={ann.id}
+                  className={`p-5 rounded-2xl border transition-all ${
+                    ann.fixado
+                      ? 'bg-gradient-to-r from-indigo-50/70 via-slate-50 to-indigo-50/50 border-indigo-200 shadow-xs'
+                      : 'bg-slate-50/80 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200/80">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {ann.fixado && (
+                        <span className="px-2.5 py-0.5 bg-indigo-600 text-white rounded text-[10px] font-bold flex items-center gap-1">
+                          <Pin className="w-3 h-3 fill-current" /> Destaque Fixado
+                        </span>
+                      )}
+                      <span className="px-2.5 py-0.5 bg-slate-200 text-slate-800 rounded font-mono font-bold text-[10px] uppercase">
+                        {ann.categoria === 'FERIADOS' && '🏖️ Feriado / Ponte'}
+                        {ann.categoria === 'CAMPANHA_SAUDE' && '🏥 Campanha de Saúde'}
+                        {ann.categoria === 'METAS_MES' && '🎯 Metas do Mês'}
+                        {ann.categoria === 'COMUNICADO_GERAL' && '📢 Geral'}
+                        {ann.categoria === 'SEGURANCA_TRABALHO' && '🛡️ Segurança do Trabalho'}
+                      </span>
+                      <h3 className="text-sm font-bold text-slate-900">{ann.titulo}</h3>
+                    </div>
+                    <span className="text-[11px] text-slate-400 font-medium">Publicado em: {ann.criadoEm} por {ann.autorNome}</span>
+                  </div>
+
+                  <div className="py-3 text-xs text-slate-700 leading-relaxed whitespace-pre-line">
+                    {ann.conteudo}
+                  </div>
+
+                  {ann.anexoNome && (
+                    <div className="p-2.5 bg-white border border-slate-200 rounded-xl text-xs flex items-center justify-between max-w-md my-2">
+                      <span className="text-slate-700 font-mono truncate" title={ann.anexoNome}>📄 {ann.anexoNome}</span>
+                      {ann.anexoUrl && (
+                        <a href={ann.anexoUrl} download={ann.anexoNome} target="_blank" rel="noreferrer" className="text-indigo-600 font-bold hover:underline">
+                          Baixar Anexo
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* BLOCO DE CONFIRMAÇÃO DE LEITURA */}
+                  <div className="pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <span className="text-slate-500 text-[11px]">
+                      Status de Leitura: {jaConfirmou ? <strong className="text-emerald-700 font-bold">Leitura Confirmada</strong> : <span className="text-amber-700 font-bold">Aguardando Sua Leitura</span>}
+                    </span>
+
+                    {ann.exigeConfirmacaoLeitura && (
+                      jaConfirmou ? (
+                        <div className="p-2 bg-emerald-100/90 text-emerald-900 rounded-xl font-mono text-[10px] flex items-center gap-2 border border-emerald-300">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>Leitura Confirmada em <strong>{minhaConfirmacao?.dataHora || 'Recentemente'}</strong> (IP: {minhaConfirmacao?.ip || '189.120.45.88'})</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleConfirmReadingAnnouncement(ann)}
+                          disabled={confirmingReadAnnId === ann.id}
+                          className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>{confirmingReadAnnId === ann.id ? 'Gravando...' : 'Confirmar Leitura do Comunicado'}</span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Conteúdo: Canal Fale com o DP / RH */}
+      {selectedTab === 'fale_dp' && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-emerald-600" />
+                Canal Fale com o DP / RH
+              </h2>
+              <p className="text-xs text-slate-500">
+                Tire suas dúvidas sobre holerites, solicite alteração do Vale-Transporte (VT) ou solicite alterações cadastrais diretamente à equipe de RH.
+              </p>
+            </div>
+            <button
+              onClick={() => setIsNovoChamadoModalOpen(true)}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-all shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Abrir Novo Chamado DP/RH</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Lista dos Meus Chamados */}
+            <div className="lg:col-span-1 space-y-3">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Meus Chamados ({chamadosRhList.length})</h3>
+
+              {chamadosRhList.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+                  Você não possui chamados abertos com o DP/RH no momento.
+                </div>
+              ) : (
+                chamadosRhList.map((t) => {
+                  const isSelected = selectedUserTicket?.id === t.id;
+                  return (
+                    <div
+                      key={t.id}
+                      onClick={() => setSelectedUserTicket(t)}
+                      className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2 ${
+                        isSelected
+                          ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                          : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                          t.status === 'ABERTO' ? 'bg-amber-100 text-amber-900 border border-amber-300' :
+                          t.status === 'EM_ATENDIMENTO' ? 'bg-blue-100 text-blue-900 border border-blue-300' :
+                          'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                        }`}>
+                          {t.status === 'ABERTO' ? '🟡 Em Análise' : t.status === 'EM_ATENDIMENTO' ? '🔵 Respondido pelo RH' : '🟢 Concluído'}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{t.criadoEm}</span>
+                      </div>
+
+                      <h4 className="text-xs font-bold text-slate-900 truncate">{t.titulo}</h4>
+                      <p className="text-[11px] text-slate-600 line-clamp-2">{t.mensagemInicial}</p>
+
+                      <div className="text-[10px] text-slate-500 pt-1 font-mono">
+                        Assunto: <strong>
+                          {t.assunto === 'DUVIDA_HOLERITE' && 'Dúvida sobre Holerite'}
+                          {t.assunto === 'VALE_TRANSPORTE' && 'Vale-Transporte (VT)'}
+                          {t.assunto === 'ALTERACAO_CADASTRAL' && 'Alteração Cadastral'}
+                          {t.assunto === 'DUVIDA_PONTO' && 'Espelho de Ponto'}
+                          {t.assunto === 'OUTROS' && 'Outras Solicitações'}
+                        </strong>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Visualizador de Respostas e Conversa */}
+            <div className="lg:col-span-2 bg-slate-50 border border-slate-200 rounded-2xl p-5 flex flex-col justify-between min-h-[450px]">
+              {selectedUserTicket ? (
+                <div className="flex flex-col h-full justify-between space-y-4">
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-slate-900">{selectedUserTicket.titulo}</h3>
+                      <span className="text-[10px] font-mono text-slate-400">Criado em: {selectedUserTicket.criadoEm}</span>
+                    </div>
+
+                    <div className="p-3 bg-slate-100 rounded-lg text-xs text-slate-800 space-y-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Sua Mensagem Inicial:</span>
+                      <p>{selectedUserTicket.mensagemInicial}</p>
+                    </div>
+
+                    {selectedUserTicket.anexoNome && (
+                      <div className="flex items-center justify-between p-2 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-900">
+                        <span>Anexo enviado: <strong>{selectedUserTicket.anexoNome}</strong></span>
+                        {selectedUserTicket.anexoUrl && (
+                          <a href={selectedUserTicket.anexoUrl} download={selectedUserTicket.anexoNome} target="_blank" rel="noreferrer" className="font-bold underline text-indigo-700">
+                            Baixar Anexo
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Thread de Respostas */}
+                  <div className="flex-1 overflow-y-auto space-y-3 p-2 max-h-[280px]">
+                    {selectedUserTicket.respostas.length === 0 ? (
+                      <div className="text-center text-xs text-slate-400 py-8">
+                        Sua solicitação foi recebida pela equipe de RH/DP. Em breve uma analista responderá ao seu chamado por aqui.
+                      </div>
+                    ) : (
+                      selectedUserTicket.respostas.map((r) => (
+                        <div
+                          key={r.id}
+                          className={`p-3.5 rounded-xl text-xs space-y-1 max-w-[85%] ${
+                            r.eDoRh
+                              ? 'bg-emerald-900 text-white border border-emerald-700 shadow-xs'
+                              : 'bg-white text-slate-800 border border-slate-200 shadow-xs ml-auto'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px] opacity-80">
+                            <span className="font-bold">{r.autorNome}</span>
+                            <span>{r.dataHora}</span>
+                          </div>
+                          <p className="leading-relaxed">{r.mensagem}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Campo de Réplica / Resposta do Funcionário */}
+                  <div className="flex gap-2 pt-2 border-t border-slate-200">
+                    <input
+                      type="text"
+                      placeholder="Enviar resposta ou réplica para o RH..."
+                      value={respostaColabInput}
+                      onChange={(e) => setRespostaColabInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSendUserReplyTicket(selectedUserTicket);
+                      }}
+                      className="flex-1 bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      onClick={() => handleSendUserReplyTicket(selectedUserTicket)}
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Enviar Réplica</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center space-y-3 text-slate-400 py-20">
+                  <MessageSquare className="w-12 h-12 text-slate-300" />
+                  <h4 className="text-sm font-bold text-slate-600">Nenhum Chamado Selecionado</h4>
+                  <p className="text-xs max-w-xs">
+                    Selecione um chamado da lista ao lado para ver o histórico e respostas do RH ou clique no botão "Abrir Novo Chamado DP/RH".
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: NOVO CHAMADO FALE COM O DP / RH */}
+      {isNovoChamadoModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-xs font-sans">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-emerald-600" />
+                Fale com o DP / RH - Abrir Nova Solicitação
+              </h3>
+              <button onClick={() => setIsNovoChamadoModalOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Assunto da Solicitação:</label>
+                <select
+                  value={novoChamadoAssunto}
+                  onChange={(e) => setNovoChamadoAssunto(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                >
+                  <option value="DUVIDA_HOLERITE">📄 Dúvida sobre Holerite / Contracheque / Descontos</option>
+                  <option value="VALE_TRANSPORTE">🚌 Vale-Transporte (VT) - Pedido ou Mudança de Rota</option>
+                  <option value="ALTERACAO_CADASTRAL">👤 Alteração Cadastral (Endereço, Estado Civil, Dependentes)</option>
+                  <option value="DUVIDA_PONTO">⏰ Dúvidas ou Correções no Espelho de Ponto</option>
+                  <option value="OUTROS">💬 Outras Solicitações e Dúvidas com o RH</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Título / Resumo:</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Mudança de endereço residencial para atualização do cartão VT"
+                  value={novoChamadoTitulo}
+                  onChange={(e) => setNovoChamadoTitulo(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Mensagem / Detalhes da Solicitação:</label>
+                <textarea
+                  rows={4}
+                  placeholder="Descreva detalhadamente sua solicitação para a equipe do Departamento Pessoal..."
+                  value={novoChamadoMensagem}
+                  onChange={(e) => setNovoChamadoMensagem(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Anexo de Comprovante (PDF/Imagem - Opcional):</label>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setNovoChamadoAnexoNome(file.name);
+                      const reader = new FileReader();
+                      reader.onload = (evt) => setNovoChamadoAnexoUrl(evt.target?.result as string);
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-100 file:text-emerald-800 hover:file:bg-emerald-200 cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                onClick={() => setIsNovoChamadoModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateTicket}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
+              >
+                <Send className="w-4 h-4" />
+                <span>Enviar Chamado ao RH</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Visualizador de Informe de Rendimentos IRPF */}
+      {viewingIrpfModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 text-xs font-sans">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">{viewingIrpfModal.titulo}</h3>
+                  <p className="text-[11px] text-slate-500">Ano-Calendário {viewingIrpfModal.anoCalendario} · Exercício {viewingIrpfModal.exercicio || Number(viewingIrpfModal.anoCalendario) + 1}</p>
+                </div>
+              </div>
+              <button onClick={() => setViewingIrpfModal(null)} className="text-slate-400 hover:text-slate-600 font-bold text-sm cursor-pointer">✕</button>
+            </div>
+
+            {viewingIrpfModal.arquivoUrl ? (
+              <div className="space-y-3">
+                <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between bg-emerald-50 p-2.5 rounded-xl border border-emerald-200">
+                  <span>Arquivo: <strong>{viewingIrpfModal.arquivoNome}</strong></span>
+                  <a
+                    href={viewingIrpfModal.arquivoUrl}
+                    download={viewingIrpfModal.arquivoNome}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1 bg-emerald-700 text-white rounded-lg text-xs font-bold hover:bg-emerald-800 transition-colors"
+                  >
+                    Baixar Informe PDF
+                  </a>
+                </div>
+                {viewingIrpfModal.arquivoUrl.startsWith('data:image/') ? (
+                  <div className="max-h-[50vh] overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-100 flex justify-center">
+                    <img src={viewingIrpfModal.arquivoUrl} alt={viewingIrpfModal.arquivoNome} className="max-w-full rounded-lg shadow-xs" />
+                  </div>
+                ) : (
+                  <div className="h-[45vh] border border-slate-200 rounded-xl overflow-hidden">
+                    <iframe src={viewingIrpfModal.arquivoUrl} className="w-full h-full" title="Visualizador de PDF IRPF" />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 space-y-4 font-mono text-[11px] text-slate-700">
+                <div className="p-3 bg-emerald-900 text-white rounded-xl font-sans font-bold flex items-center justify-between">
+                  <span>COMPROVANTE DE RENDIMENTOS PAGOS E DE RETENÇÃO DE IMPOSTO DE RENDA</span>
+                  <span className="text-[10px] bg-emerald-700 px-2 py-0.5 rounded">RECEITA FEDERAL</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <span className="text-slate-400 font-sans text-[10px] block">1. Fonte Paguadora (Empresa)</span>
+                    <strong className="block text-slate-900">Softcase Tecnologia S.A.</strong>
+                    <span>CNPJ: 58.392.102/0001-44</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-slate-200">
+                    <span className="text-slate-400 font-sans text-[10px] block">2. Pessoa Física Beneficiária</span>
+                    <strong className="block text-slate-900">{user.nome}</strong>
+                    <span>CPF: {user.cpf}</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 font-sans text-xs space-y-2">
+                  <strong className="block text-slate-900">Resumo Anual de Rendimentos ({viewingIrpfModal.anoCalendario}):</strong>
+                  <div className="flex justify-between border-b pb-1">
+                    <span>Rendimentos Tributáveis / Salários:</span>
+                    <strong className="font-mono">R$ 62.400,00</strong>
+                  </div>
+                  <div className="flex justify-between border-b pb-1">
+                    <span>Imposto de Renda Retido na Fonte (IRRF):</span>
+                    <strong className="font-mono text-rose-600">R$ 4.280,00</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Contribuição Previdenciária Oficial (INSS):</span>
+                    <strong className="font-mono text-blue-700">R$ 5.890,00</strong>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end border-t border-slate-100 pt-3">
+              <button
+                onClick={() => setViewingIrpfModal(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Fechar Informe
               </button>
             </div>
           </div>

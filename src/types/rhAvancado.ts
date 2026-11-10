@@ -126,3 +126,71 @@ export interface ParametrosExportacaoERP {
   codigoEmpresaFolha: string;
   formatoLinha: 'TXT_POSICIONAL' | 'CSV_TABULADO';
 }
+
+export type CategoriaComunicado = 
+  | 'FERIADOS' 
+  | 'CAMPANHA_SAUDE' 
+  | 'METAS_MES' 
+  | 'COMUNICADO_GERAL' 
+  | 'SEGURANCA_TRABALHO';
+
+export interface ConfirmacaoLeituraComunicado {
+  colaboradorId: string;
+  colaboradorCpf: string;
+  colaboradorNome: string;
+  dataHora: string;
+  ip: string;
+}
+
+export interface ComunicadoEmpresa {
+  id: string;
+  tenantId: string;
+  titulo: string;
+  conteudo: string;
+  categoria: CategoriaComunicado;
+  autorNome: string;
+  fixado: boolean;
+  exigeConfirmacaoLeitura: boolean;
+  anexoNome?: string;
+  anexoUrl?: string;
+  confirmacoesLeitura: ConfirmacaoLeituraComunicado[];
+  criadoEm: string;
+}
+
+export type AssuntoChamadoRh = 
+  | 'DUVIDA_HOLERITE' 
+  | 'VALE_TRANSPORTE' 
+  | 'ALTERACAO_CADASTRAL' 
+  | 'DUVIDA_PONTO' 
+  | 'OUTROS';
+
+export interface RespostaChamadoRh {
+  id: string;
+  autorId: string;
+  autorNome: string;
+  eDoRh: boolean;
+  mensagem: string;
+  dataHora: string;
+  anexoNome?: string;
+  anexoUrl?: string;
+}
+
+export interface ChamadoAtendimentoRh {
+  id: string;
+  tenantId: string;
+  colaboradorId: string;
+  colaboradorNome: string;
+  colaboradorCpf: string;
+  departamentoNome?: string;
+  assunto: AssuntoChamadoRh;
+  titulo: string;
+  mensagemInicial: string;
+  anexoNome?: string;
+  anexoUrl?: string;
+  status: 'ABERTO' | 'EM_ATENDIMENTO' | 'CONCLUIDO' | 'CANCELADO';
+  prioridade: 'BAIXA' | 'MEDIA' | 'ALTA';
+  respostas: RespostaChamadoRh[];
+  criadoEm: string;
+  atualizadoEm: string;
+}
+

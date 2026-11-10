@@ -32,6 +32,9 @@ interface GestaoEquipesEAprovacoesProps {
   currentUser: AuthUser;
 }
 
+import { GestaoMuralEAtendimento } from './rh/GestaoMuralEAtendimento';
+import { Megaphone } from 'lucide-react';
+
 export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> = ({
   departamentos,
   onUpdateDepartamentos,
@@ -43,7 +46,7 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   onUpdateSolicitacoesAjuste,
   currentUser
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes' | 'ajustes'>('aprovacoes');
+  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes' | 'ajustes' | 'mural_atendimento'>('aprovacoes');
   
   // Filtros de Aprovação de Horas Extras
   const [statusFilter, setStatusFilter] = useState<'TODOS' | 'PENDENTE' | 'APROVADO' | 'REJEITADO'>('PENDENTE');
@@ -284,7 +287,23 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
           <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
           <span className="whitespace-nowrap sm:whitespace-normal">Equipes & Gestores</span>
         </button>
+
+        <button
+          onClick={() => setActiveSubTab('mural_atendimento')}
+          className={`flex-1 py-2.5 px-3 rounded-lg transition-colors flex items-center justify-center text-center gap-2 min-w-0 ${
+            activeSubTab === 'mural_atendimento'
+              ? 'bg-indigo-600 text-white shadow-xs font-bold'
+              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-200'
+          }`}
+        >
+          <Megaphone className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+          <span className="whitespace-nowrap sm:whitespace-normal">Mural & Atendimento DP</span>
+        </button>
       </div>
+
+      {activeSubTab === 'mural_atendimento' && (
+        <GestaoMuralEAtendimento currentUser={currentUser} />
+      )}
 
       {/* ======================================================== */}
       {/* SUB-ABA 1: FILA DE APROVAÇÃO DE HORAS EXTRAS            */}

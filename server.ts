@@ -810,6 +810,93 @@ app.post('/api/save-holerite', async (req, res) => {
   }
 });
 
+// Confirm/Sign Paystub Receipt (CLT Art. 464 Compliance)
+app.post('/api/confirm-holerite', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const { paystubId, tenantId, colaboradorId, ipAddress } = req.body;
+    const nowIso = new Date().toISOString();
+    const rawPayload = `${paystubId}|${colaboradorId}|${nowIso}|${ipAddress || '189.125.44.12'}|RECIBO_HOLERITE_CLT_464`;
+    const hashSignature = crypto.createHash('sha256').update(rawPayload).digest('hex');
+
+    const { data, error: dbError } = await supabase
+      .from('paystubs')
+      .update({
+        status: 'CONFIRMADO_PELO_COLABORADOR',
+        confirmado_em: nowIso,
+        confirmado_ip: ipAddress || '189.125.44.12',
+        confirmado_hash: hashSignature
+      })
+      .eq('paystub_id', paystubId)
+      .select();
+      
+    if (dbError) console.warn('Supabase confirm paystub warning:', dbError.message);
+    
+    await logEvent(tenantId || 'tenant-01', `Recibo de holerite ${paystubId} assinado digitalmente (Art. 464 CLT) por ${colaboradorId}`);
+    res.json({
+      success: true,
+      confirmadoEm: nowIso,
+      confirmadoIp: ipAddress || '189.125.44.12',
+      confirmadoHash: hashSignature,
+      data
+    });
+  } catch (error) {
+    console.error('Confirm holerite error:', error);
+    await logEvent('error', `Confirm holerite error: ${error}`);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Save Income Tax Annual Statement (Informe de Rendimentos IRPF)
+app.post('/api/save-informe-irpf', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+    
+    const informe = req.body;
+    
+    const { data, error: dbError } = await supabase
+      .from('tax_reports')
+      .upsert({
+        report_id: informe.id,
+        tenant_id: informe.tenantId || 'tenant-01',
+        collaborator_id: informe.colaboradorId,
+        collaborator_cpf: informe.colaboradorCpf,
+        collaborator_name: informe.colaboradorNome,
+        ano_calendario: informe.anoCalendario,
+        rendimentos_tributaveis: informe.rendimentosTributaveis,
+        contribuicao_previdenciaria: informe.contribuicaoPrevidenciaria,
+        imposto_retido_fonte: informe.impostoRetidoFonte,
+        arquivo_nome: informe.arquivoNome,
+        arquivo_url: informe.arquivoUrl || null,
+        data_upload: new Date().toISOString(),
+        status: 'DISPONIVEL'
+      }, { onConflict: 'report_id' })
+      .select();
+      
+    if (dbError) console.warn('Supabase tax_reports upsert warning:', dbError.message);
+    
+    await logEvent(informe.tenantId || 'tenant-01', `Informe IRPF ${informe.anoCalendario} publicado para ${informe.colaboradorNome}`);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Save informe IRPF error:', error);
+    await logEvent('error', `Save informe IRPF error: ${error}`);
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 // Create Auth User (requires Service Role Key)
 app.post('/api/create-auth-user', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -986,6 +1073,135 @@ app.post('/api/punch', async (req, res) => {
     console.error('Erro no endpoint /api/punch:', error);
     await logEvent('error', `Punch error: ${error}`);
     res.status(500).json({ error: String(error) });
+  }
+});
+
+// Endpoint: Salvar / Publicar Comunicado da Empresa no Mural
+app.post('/api/save-announcement', async (req, res) => {
+  try {
+    const { id, tenantId = 'tenant-01', titulo, conteudo, categoria, autorNome, fixado, exigeConfirmacaoLeitura, anexoNome, anexoUrl } = req.body;
+    const annId = id || `ann-${Date.now()}`;
+
+    const announcementObj = {
+      announcement_id: annId,
+      tenant_id: tenantId,
+      titulo,
+      conteudo,
+      categoria: categoria || 'COMUNICADO_GERAL',
+      autor_nome: autorNome || 'RH Softcase',
+      fixado: !!fixado,
+      exige_confirmacao_leitura: exigeConfirmacaoLeitura !== false,
+      anexo_nome: anexoNome || null,
+      anexo_url: anexoUrl || null
+    };
+
+    if (supabase) {
+      const { error } = await supabase.from('company_announcements').upsert(announcementObj, { onConflict: 'announcement_id' });
+      if (error) console.warn('Supabase save-announcement warning:', error);
+    }
+
+    res.json({ success: true, announcement: { id: annId, ...announcementObj } });
+  } catch (err) {
+    console.error('Save announcement error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Endpoint: Confirmar Leitura de Comunicado pelo Colaborador
+app.post('/api/read-announcement', async (req, res) => {
+  try {
+    const { announcementId, userCpf, userName, userId } = req.body;
+    const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '189.120.45.88';
+    const ip = Array.isArray(rawIp) ? rawIp[0] : String(rawIp);
+    const timestamp = new Date().toLocaleString('pt-BR');
+
+    const readEntry = {
+      colaboradorId: userId,
+      colaboradorCpf: userCpf,
+      colaboradorNome: userName,
+      dataHora: timestamp,
+      ip: ip.replace('::ffff:', '')
+    };
+
+    if (supabase) {
+      const { data } = await supabase.from('company_announcements').select('confirmacoes_leitura').eq('announcement_id', announcementId).single();
+      let currentReads = data?.confirmacoes_leitura || [];
+      if (!Array.isArray(currentReads)) currentReads = [];
+      
+      const userCpfClean = (userCpf || '').replace(/\D/g, '');
+      if (!currentReads.some((r: any) => (userId && r.colaboradorId === userId) || (userCpfClean && (r.colaboradorCpf || '').replace(/\D/g, '') === userCpfClean))) {
+        currentReads.push(readEntry);
+        await supabase.from('company_announcements').update({ confirmacoes_leitura: currentReads }).eq('announcement_id', announcementId);
+      }
+    }
+
+    res.json({ success: true, readEntry });
+  } catch (err) {
+    console.error('Read announcement error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Endpoint: Criar / Responder Chamado "Fale com o DP / RH"
+app.post('/api/save-ticket', async (req, res) => {
+  try {
+    const { id, tenantId = 'tenant-01', collaboratorId, collaboratorCpf, collaboratorName, departamentoNome, assunto, titulo, mensagemInicial, anexoNome, anexoUrl, prioridade, resposta } = req.body;
+    const ticketId = id || `ticket-${Date.now()}`;
+
+    if (supabase) {
+      if (resposta) {
+        const { data } = await supabase.from('rh_tickets').select('respostas').eq('ticket_id', ticketId).single();
+        let existingRespostas = data?.respostas || [];
+        if (!Array.isArray(existingRespostas)) existingRespostas = [];
+        existingRespostas.push(resposta);
+
+        await supabase.from('rh_tickets').update({
+          respostas: existingRespostas,
+          updated_at: new Date().toISOString()
+        }).eq('ticket_id', ticketId);
+      } else {
+        const ticketObj = {
+          ticket_id: ticketId,
+          tenant_id: tenantId,
+          collaborator_id: collaboratorId,
+          collaborator_cpf: collaboratorCpf,
+          collaborator_name: collaboratorName,
+          departamento_nome: departamentoNome || 'Geral',
+          assunto,
+          titulo,
+          mensagem_inicial: mensagemInicial,
+          anexo_nome: anexoNome || null,
+          anexo_url: anexoUrl || null,
+          status: 'ABERTO',
+          prioridade: prioridade || 'MEDIA',
+          respostas: []
+        };
+
+        const { error } = await supabase.from('rh_tickets').upsert(ticketObj, { onConflict: 'ticket_id' });
+        if (error) console.warn('Supabase save-ticket warning:', error);
+      }
+    }
+
+    res.json({ success: true, ticketId });
+  } catch (err) {
+    console.error('Save ticket error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Endpoint: Atualizar Status de Chamado do DP / RH
+app.post('/api/update-ticket-status', async (req, res) => {
+  try {
+    const { ticketId, status } = req.body;
+    if (supabase) {
+      await supabase.from('rh_tickets').update({
+        status,
+        updated_at: new Date().toISOString()
+      }).eq('ticket_id', ticketId);
+    }
+    res.json({ success: true, status });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 
