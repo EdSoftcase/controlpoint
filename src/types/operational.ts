@@ -10,6 +10,18 @@ export interface Tenant {
   status: 'ATIVO' | 'SUSPENSO' | 'IMPLANTACAO';
   dataAdesao: string;
   emailAdmin: string;
+  cep?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
+  enderecoCompleto?: string;
+  latitude?: number;
+  longitude?: number;
+  cercaRaioMetros?: number;
+  bloquearForaDoRaio?: boolean;
 }
 
 export interface Estabelecimento {

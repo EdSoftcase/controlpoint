@@ -1,13 +1,18 @@
 import React, { useState } from 'react';
-import { Colaborador, Departamento, Cargo } from '../../types/operational';
-import { UserPlus, CheckCircle2, Search, Plus, UserCheck, UserX, FileSpreadsheet, FileText } from 'lucide-react';
+import { Colaborador, Departamento, Cargo, Tenant, Estabelecimento } from '../../types/operational';
+import { UserPlus, CheckCircle2, Search, Plus, UserCheck, UserX, FileSpreadsheet, FileText, Building2, MapPin, Edit3, X } from 'lucide-react';
 
 interface GestaoColaboradoresTabProps {
   activeColaboradores: Colaborador[];
+  allColaboradores?: Colaborador[];
+  tenants?: Tenant[];
+  selectedTenantId?: string;
+  estabelecimentos?: Estabelecimento[];
   departamentos: Departamento[];
   cargos: Cargo[];
-  onAprovarAutoCadastro: (colabId: string, deptoId?: string, cargoId?: string) => void;
+  onAprovarAutoCadastro: (colabId: string, deptoId?: string, cargoId?: string, tenantId?: string, estabelecimentoId?: string) => void;
   onRecusarAutoCadastro: (colabId: string) => void;
+  onUpdateColaborador?: (updated: Colaborador) => Promise<void> | void;
   onOpenNewColabModal: () => void;
   colabApprovalNotice: string | null;
   onCloseApprovalNotice: () => void;
@@ -23,20 +28,95 @@ interface GestaoColaboradoresTabProps {
 
 export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
   activeColaboradores,
+  allColaboradores,
+  tenants = [],
+  selectedTenantId = '',
+  estabelecimentos = [],
   departamentos,
   cargos,
   onAprovarAutoCadastro,
   onRecusarAutoCadastro,
+  onUpdateColaborador,
   onOpenNewColabModal,
   colabApprovalNotice,
   onCloseApprovalNotice,
   getColabContactInfo
 }) => {
-  const [colabFilterStatus, setColabFilterStatus] = useState<'TODOS' | 'ATIVO' | 'PENDENTE'>('TODOS');
+  const sourceColaboradores = (allColaboradores && allColaboradores.length > 0) ? allColaboradores : activeColaboradores;
+
+  const [colabFilterStatus, setColabFilterStatus] = useState<'TODOS' | 'ATIVO' | 'PENDENTE' | 'DESLIGADO'>('TODOS');
+  const [colabFilterTenant, setColabFilterTenant] = useState<string>('ALL');
+  const [colabFilterEst, setColabFilterEst] = useState<string>('ALL');
   const [colabSearchFilter, setColabSearchFilter] = useState<string>('');
   const [pendingDeptoSelection, setPendingDeptoSelection] = useState<Record<string, string>>({});
   const [pendingCargoSelection, setPendingCargoSelection] = useState<Record<string, string>>({});
+  const [pendingTenantSelection, setPendingTenantSelection] = useState<Record<string, string>>({});
+  const [pendingEstSelection, setPendingEstSelection] = useState<Record<string, string>>({});
   const [selectedPendentes, setSelectedPendentes] = useState<string[]>([]);
+
+  // Modal de Edição / Alocação de Empresa e Unidade
+  const [editModalColab, setEditModalColab] = useState<Colaborador | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    tenantId: '',
+    estabelecimentoId: '',
+    departamentoId: '',
+    cargoId: '',
+    regime: 'REGULAR' as 'REGULAR' | 'EXCECAO' | 'DISPENSA_ART_62',
+    status: 'ATIVO' as 'ATIVO' | 'DESLIGADO' | 'PENDENTE'
+  });
+
+  const openEditModal = (colab: Colaborador) => {
+    const initialTenantId = colab.tenantId || tenants[0]?.id || selectedTenantId || '';
+    const tenantEsts = estabelecimentos.filter(e => e.tenantId === initialTenantId);
+    const matchedEst = estabelecimentos.find(e => e.id === colab.estabelecimentoId) || tenantEsts[0] || estabelecimentos[0];
+    setEditModalColab(colab);
+    setEditForm({
+      tenantId: initialTenantId,
+      estabelecimentoId: matchedEst?.id || colab.estabelecimentoId || '',
+      departamentoId: colab.departamentoId || departamentos[0]?.id || '',
+      cargoId: colab.cargoId || cargos[0]?.id || '',
+      regime: colab.regime || 'REGULAR',
+      status: colab.status || 'ATIVO'
+    });
+  };
+
+  const handleSaveEditAllocation = async () => {
+    if (!editModalColab || !onUpdateColaborador) return;
+    setEditSaving(true);
+    try {
+      const estObj = estabelecimentos.find(e => e.id === editForm.estabelecimentoId);
+      const deptoObj = departamentos.find(d => d.id === editForm.departamentoId);
+      const cargoObj = cargos.find(c => c.id === editForm.cargoId);
+
+      const updated: Colaborador = {
+        ...editModalColab,
+        tenantId: editForm.tenantId || editModalColab.tenantId,
+        estabelecimentoId: estObj?.id || editForm.estabelecimentoId || editModalColab.estabelecimentoId,
+        estabelecimentoNome: estObj?.nome || editModalColab.estabelecimentoNome || 'Unidade Principal',
+        departamentoId: deptoObj?.id || editForm.departamentoId || editModalColab.departamentoId,
+        departamentoNome: deptoObj?.nome || editModalColab.departamentoNome,
+        cargoId: cargoObj?.id || editForm.cargoId || editModalColab.cargoId,
+        cargoTitulo: cargoObj?.titulo || editModalColab.cargoTitulo,
+        regime: editForm.regime,
+        status: editForm.status
+      };
+
+      await onUpdateColaborador(updated);
+      setEditModalColab(null);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const getTenantDisplayName = (tenantId?: string) => {
+    const t = tenants.find(item => item.id === tenantId);
+    return t ? (t.nomeFantasia || t.razaoSocial) : (tenantId || 'Empresa não vinculada');
+  };
+
+  const getEstDisplayObj = (colab: Colaborador) => {
+    return estabelecimentos.find(e => e.id === colab.estabelecimentoId);
+  };
 
   // Estados para Emissão / Anexo de Holerite pelo RH
   const [holeriteModalColab, setHoleriteModalColab] = useState<Colaborador | null>(null);
@@ -160,18 +240,23 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     setIrpfModalColab(null);
   };
 
-  const colaboradoresPendentes = activeColaboradores.filter((c) => c.status === 'PENDENTE');
-  const colaboradoresAtivos = activeColaboradores.filter((c) => c.status === 'ATIVO');
+  const colaboradoresPendentes = sourceColaboradores.filter((c) => c.status === 'PENDENTE');
+  const colaboradoresAtivos = sourceColaboradores.filter((c) => c.status === 'ATIVO');
 
-  const filteredColaboradores = activeColaboradores.filter((c) => {
+  const filteredColaboradores = sourceColaboradores.filter((c) => {
+    if (colabFilterTenant !== 'ALL' && c.tenantId !== colabFilterTenant) return false;
+    if (colabFilterEst !== 'ALL' && c.estabelecimentoId !== colabFilterEst) return false;
     if (colabFilterStatus === 'ATIVO' && c.status !== 'ATIVO') return false;
     if (colabFilterStatus === 'PENDENTE' && c.status !== 'PENDENTE') return false;
+    if (colabFilterStatus === 'DESLIGADO' && c.status !== 'DESLIGADO') return false;
     if (colabSearchFilter.trim()) {
       const query = colabSearchFilter.toLowerCase();
       const matchNome = c.nome.toLowerCase().includes(query);
       const matchCpf = c.cpf.includes(query);
       const matchMatricula = c.matricula.toLowerCase().includes(query);
-      if (!matchNome && !matchCpf && !matchMatricula) return false;
+      const matchEmpresa = getTenantDisplayName(c.tenantId).toLowerCase().includes(query);
+      const matchEst = (c.estabelecimentoNome || '').toLowerCase().includes(query);
+      if (!matchNome && !matchCpf && !matchMatricula && !matchEmpresa && !matchEst) return false;
     }
     return true;
   });
@@ -257,9 +342,13 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <button
                     onClick={() => {
                       selectedPendentes.forEach(id => {
+                        const pendObj = colaboradoresPendentes.find(p => p.id === id);
+                        const chosenTenantId = pendingTenantSelection[id] || pendObj?.tenantId || selectedTenantId || tenants[0]?.id;
+                        const tenantEsts = estabelecimentos.filter(e => e.tenantId === chosenTenantId);
+                        const chosenEstId = pendingEstSelection[id] || pendObj?.estabelecimentoId || tenantEsts[0]?.id || estabelecimentos[0]?.id;
                         const deptoId = pendingDeptoSelection[id] || departamentos[0]?.id;
                         const cargoId = pendingCargoSelection[id] || cargos[0]?.id;
-                        onAprovarAutoCadastro(id, deptoId, cargoId);
+                        onAprovarAutoCadastro(id, deptoId, cargoId, chosenTenantId, chosenEstId);
                       });
                       setSelectedPendentes([]);
                     }}
@@ -345,6 +434,11 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                     );
                     const defaultCargoId = matchedCargo?.id || pend.cargoId || cargos[0]?.id;
 
+                    const chosenTenantId = pendingTenantSelection[pend.id] || pend.tenantId || selectedTenantId || tenants[0]?.id || '';
+                    const tenantEsts = estabelecimentos.filter(e => e.tenantId === chosenTenantId);
+                    const availableEsts = tenantEsts.length > 0 ? tenantEsts : estabelecimentos;
+                    const defaultEstId = pendingEstSelection[pend.id] || (availableEsts.some(e => e.id === pend.estabelecimentoId) ? pend.estabelecimentoId : availableEsts[0]?.id) || '';
+
                     return (
                       <>
                         <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-slate-600">
@@ -382,6 +476,47 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
 
                         {/* Configuração Definitiva do Gestor */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-[11px]">
+                          {tenants.length > 0 && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
+                                Alocar na Empresa:
+                              </label>
+                              <select
+                                value={chosenTenantId}
+                                onChange={(e) => {
+                                  const nextTenantId = e.target.value;
+                                  setPendingTenantSelection(prev => ({ ...prev, [pend.id]: nextTenantId }));
+                                  const nextEst = estabelecimentos.find(est => est.tenantId === nextTenantId) || estabelecimentos[0];
+                                  if (nextEst) {
+                                    setPendingEstSelection(prev => ({ ...prev, [pend.id]: nextEst.id }));
+                                  }
+                                }}
+                                className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white font-medium focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                              >
+                                {tenants.map(t => (
+                                  <option key={t.id} value={t.id}>{t.nomeFantasia || t.razaoSocial}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {availableEsts.length > 0 && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
+                                Unidade / Local do Ponto:
+                              </label>
+                              <select
+                                value={defaultEstId}
+                                onChange={(e) => setPendingEstSelection(prev => ({ ...prev, [pend.id]: e.target.value }))}
+                                className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg bg-white font-medium focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                              >
+                                {availableEsts.map(est => (
+                                  <option key={est.id} value={est.id}>{est.nome}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
                           <div>
                             <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
                               Homologar Departamento:
@@ -412,33 +547,35 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                             </select>
                           </div>
                         </div>
+
+                        {/* Botões de Ação para o Gestor */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            onClick={() => onAprovarAutoCadastro(
+                              pend.id,
+                              pendingDeptoSelection[pend.id] || defaultDeptoId,
+                              pendingCargoSelection[pend.id] || defaultCargoId,
+                              chosenTenantId,
+                              defaultEstId
+                            )}
+                            className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                            Aprovar & Liberar Funções
+                          </button>
+
+                          <button
+                            onClick={() => onRecusarAutoCadastro(pend.id)}
+                            className="py-2 px-3 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 text-xs font-semibold rounded-xl transition-colors flex items-center justify-center gap-1 border border-slate-200 cursor-pointer"
+                            title="Recusar solicitação de cadastro"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                            Recusar
+                          </button>
+                        </div>
                       </>
                     );
                   })()}
-                </div>
-
-                {/* Botões de Ação para o Gestor */}
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                  <button
-                    onClick={() => onAprovarAutoCadastro(
-                      pend.id,
-                      pendingDeptoSelection[pend.id] || pend.departamentoId,
-                      pendingCargoSelection[pend.id] || pend.cargoId
-                    )}
-                    className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
-                  >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    Aprovar & Liberar Funções
-                  </button>
-
-                  <button
-                    onClick={() => onRecusarAutoCadastro(pend.id)}
-                    className="py-2 px-3 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 text-xs font-semibold rounded-xl transition-colors flex items-center justify-center gap-1 border border-slate-200 cursor-pointer"
-                    title="Recusar solicitação de cadastro"
-                  >
-                    <UserX className="w-3.5 h-3.5" />
-                    Recusar
-                  </button>
                 </div>
               </div>
             );
@@ -470,14 +607,14 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
             </div>
 
             <button 
-              onClick={() => setHoleriteModalColab(activeColaboradores.find(c => c.status === 'ATIVO') || activeColaboradores[0] || null)}
+              onClick={() => setHoleriteModalColab(sourceColaboradores.find(c => c.status === 'ATIVO') || sourceColaboradores[0] || null)}
               className="flex items-center gap-2 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
             >
               <FileSpreadsheet className="w-4 h-4" /> Anexar Holerite RH
             </button>
 
             <button 
-              onClick={() => setIrpfModalColab(activeColaboradores.find(c => c.status === 'ATIVO') || activeColaboradores[0] || null)}
+              onClick={() => setIrpfModalColab(sourceColaboradores.find(c => c.status === 'ATIVO') || sourceColaboradores[0] || null)}
               className="flex items-center gap-2 px-3.5 py-2.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
             >
               <FileText className="w-4 h-4" /> Publicar Informe IRPF
@@ -492,43 +629,88 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
           </div>
         </div>
 
-        {/* Abas e Filtros de Status */}
-        <div className="flex items-center gap-2 border-b border-slate-100 pb-2 text-xs font-semibold">
-          <button
-            onClick={() => setColabFilterStatus('TODOS')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              colabFilterStatus === 'TODOS'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Todos ({activeColaboradores.length})
-          </button>
-          <button
-            onClick={() => setColabFilterStatus('ATIVO')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              colabFilterStatus === 'ATIVO'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Ativos ({colaboradoresAtivos.length})
-          </button>
-          <button
-            onClick={() => setColabFilterStatus('PENDENTE')}
-            className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
-              colabFilterStatus === 'PENDENTE'
-                ? 'bg-amber-500 text-slate-950 font-bold'
-                : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200'
-            }`}
-          >
-            <span>Pendentes de Aprovação</span>
-            {colaboradoresPendentes.length > 0 && (
-              <span className="w-4 h-4 rounded-full bg-amber-600 text-white text-[9px] flex items-center justify-center font-bold">
-                {colaboradoresPendentes.length}
-              </span>
+        {/* Abas e Filtros de Status, Empresa e Unidade */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3 text-xs font-semibold">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setColabFilterStatus('TODOS')}
+              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                colabFilterStatus === 'TODOS'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Todos ({sourceColaboradores.length})
+            </button>
+            <button
+              onClick={() => setColabFilterStatus('ATIVO')}
+              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                colabFilterStatus === 'ATIVO'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Ativos ({colaboradoresAtivos.length})
+            </button>
+            <button
+              onClick={() => setColabFilterStatus('PENDENTE')}
+              className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
+                colabFilterStatus === 'PENDENTE'
+                  ? 'bg-amber-500 text-slate-950 font-bold'
+                  : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200'
+              }`}
+            >
+              <span>Pendentes de Aprovação</span>
+              {colaboradoresPendentes.length > 0 && (
+                <span className="w-4 h-4 rounded-full bg-amber-600 text-white text-[9px] flex items-center justify-center font-bold">
+                  {colaboradoresPendentes.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {tenants.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1">
+                <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <select
+                  value={colabFilterTenant}
+                  onChange={(e) => {
+                    setColabFilterTenant(e.target.value);
+                    setColabFilterEst('ALL');
+                  }}
+                  className="bg-transparent text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer max-w-[200px]"
+                >
+                  <option value="ALL">Todas as Empresas ({sourceColaboradores.length})</option>
+                  {tenants.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.nomeFantasia || t.razaoSocial} ({sourceColaboradores.filter(c => c.tenantId === t.id).length})
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
-          </button>
+
+            {estabelecimentos.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1">
+                <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                <select
+                  value={colabFilterEst}
+                  onChange={(e) => setColabFilterEst(e.target.value)}
+                  className="bg-transparent text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer max-w-[200px]"
+                >
+                  <option value="ALL">Todas as Unidades</option>
+                  {estabelecimentos
+                    .filter(est => colabFilterTenant === 'ALL' || est.tenantId === colabFilterTenant)
+                    .map(est => (
+                      <option key={est.id} value={est.id}>
+                        {est.nome}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Tabela de Colaboradores */}
@@ -538,8 +720,9 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
               <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
                 <th className="pb-3 px-2">Colaborador</th>
                 <th className="pb-3 px-2">CPF</th>
-                <th className="pb-3 px-2">Cargo & Depto</th>
-                <th className="pb-3 px-2">Acesso & Login</th>
+                <th className="pb-3 px-2">Empresa &amp; Unidade</th>
+                <th className="pb-3 px-2">Cargo &amp; Depto</th>
+                <th className="pb-3 px-2">Acesso &amp; Login</th>
                 <th className="pb-3 px-2">Status</th>
                 <th className="pb-3 px-2 text-right">Ações</th>
               </tr>
@@ -547,18 +730,32 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
             <tbody className="divide-y divide-slate-50">
               {filteredColaboradores.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
                     Nenhum colaborador encontrado para os filtros selecionados.
                   </td>
                 </tr>
               ) : (
-                filteredColaboradores.map((colab) => (
+                filteredColaboradores.map((colab) => {
+                  const estObj = getEstDisplayObj(colab);
+                  const empresaNome = getTenantDisplayName(colab.tenantId);
+                  const unidadeNome = estObj?.nome || colab.estabelecimentoNome || 'Unidade não definida';
+                  return (
                   <tr key={colab.id} className="hover:bg-slate-50 transition-colors group">
                     <td className="py-3 px-2">
                       <div className="font-bold text-slate-900">{colab.nome}</div>
                       <div className="text-[10px] text-slate-500 font-mono">{colab.matricula}</div>
                     </td>
                     <td className="py-3 px-2 text-slate-600 font-mono">{colab.cpf}</td>
+                    <td className="py-3 px-2">
+                      <div className="flex items-center gap-1 text-slate-800 font-bold text-[11px]">
+                        <Building2 className="w-3 h-3 text-indigo-600 shrink-0" />
+                        <span className="truncate max-w-[170px]" title={empresaNome}>{empresaNome}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] text-slate-500 mt-0.5">
+                        <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
+                        <span className="truncate max-w-[170px]" title={unidadeNome}>{unidadeNome}</span>
+                      </div>
+                    </td>
                     <td className="py-3 px-2">
                       <div className="text-slate-700 font-medium">{colab.cargoTitulo}</div>
                       <div className="text-[10px] text-slate-500">{colab.departamentoNome}</div>
@@ -595,38 +792,57 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                       </span>
                     </td>
                     <td className="py-3 px-2 text-right">
-                      {colab.status === 'PENDENTE' ? (
-                        <button
-                          onClick={() => onAprovarAutoCadastro(colab.id)}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
-                          title="Aprovar e liberar acesso agora"
-                        >
-                          <UserCheck className="w-3.5 h-3.5" />
-                          <span>Aprovar</span>
-                        </button>
-                      ) : (
-                        <div className="inline-flex items-center justify-end gap-1">
+                      <div className="inline-flex items-center justify-end gap-1">
+                        {onUpdateColaborador && (
                           <button
-                            onClick={() => setHoleriteModalColab(colab)}
-                            className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
-                            title="Disponibilizar Holerite / Contracheque no Portal deste colaborador"
+                            onClick={() => openEditModal(colab)}
+                            className="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
+                            title="Editar empresa, unidade, cargo ou status de alocação"
                           >
-                            <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
-                            <span>Holerite</span>
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Alocar</span>
                           </button>
+                        )}
+                        {colab.status === 'PENDENTE' ? (
                           <button
-                            onClick={() => setIrpfModalColab(colab)}
-                            className="px-2.5 py-1 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
-                            title="Publicar Informe de Rendimentos IRPF deste colaborador"
+                            onClick={() => onAprovarAutoCadastro(
+                              colab.id,
+                              pendingDeptoSelection[colab.id] || colab.departamentoId,
+                              pendingCargoSelection[colab.id] || colab.cargoId,
+                              pendingTenantSelection[colab.id] || colab.tenantId || selectedTenantId,
+                              pendingEstSelection[colab.id] || colab.estabelecimentoId
+                            )}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
+                            title="Aprovar e liberar acesso agora"
                           >
-                            <FileText className="w-3.5 h-3.5 text-purple-600" />
-                            <span>Informe IRPF</span>
+                            <UserCheck className="w-3.5 h-3.5" />
+                            <span>Aprovar</span>
                           </button>
-                        </div>
-                      )}
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setHoleriteModalColab(colab)}
+                              className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
+                              title="Disponibilizar Holerite / Contracheque no Portal deste colaborador"
+                            >
+                              <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
+                              <span>Holerite</span>
+                            </button>
+                            <button
+                              onClick={() => setIrpfModalColab(colab)}
+                              className="px-2.5 py-1 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded-lg text-[11px] font-bold transition-all shadow-xs inline-flex items-center gap-1 cursor-pointer"
+                              title="Publicar Informe de Rendimentos IRPF deste colaborador"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-purple-600" />
+                              <span>Informe IRPF</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -661,7 +877,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
                 >
-                  {activeColaboradores.map(c => (
+                  {sourceColaboradores.map(c => (
                     <option key={c.id} value={c.id}>
                       {c.nome} (CPF: {c.cpf} - Matrícula: {c.matricula})
                     </option>
@@ -811,7 +1027,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:ring-2 focus:ring-purple-600 focus:outline-none"
                 >
-                  {activeColaboradores.map(c => (
+                  {sourceColaboradores.map(c => (
                     <option key={c.id} value={c.id}>
                       {c.nome} (CPF: {c.cpf} - Matrícula: {c.matricula})
                     </option>
@@ -910,6 +1126,171 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
               >
                 <FileText className="w-4 h-4" />
                 Publicar Informe de Rendimentos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição / Alocação de Empresa e Unidade */}
+      {editModalColab && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-lg w-full overflow-hidden text-xs">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-900 text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm">Editar Alocação do Colaborador</h3>
+                  <p className="text-[11px] text-slate-300">{editModalColab.nome} · CPF {editModalColab.cpf}</p>
+                </div>
+              </div>
+              <button onClick={() => setEditModalColab(null)} className="text-slate-400 hover:text-white cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {tenants.length > 0 && (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Empresa Contratante:</label>
+                  <select
+                    value={editForm.tenantId}
+                    onChange={(e) => {
+                      const nextTenantId = e.target.value;
+                      const tenantEsts = estabelecimentos.filter(est => est.tenantId === nextTenantId);
+                      const fallbackEst = tenantEsts[0] || estabelecimentos[0];
+                      setEditForm(prev => ({
+                        ...prev,
+                        tenantId: nextTenantId,
+                        estabelecimentoId: fallbackEst?.id || prev.estabelecimentoId
+                      }));
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-900 text-xs focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  >
+                    {tenants.map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.razaoSocial} ({t.cnpj})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Estabelecimento / Local Permitido para o Ponto:</label>
+                {(() => {
+                  const tenantUnits = estabelecimentos.filter(est => est.tenantId === editForm.tenantId);
+                  const otherUnits = estabelecimentos.filter(est => est.tenantId !== editForm.tenantId);
+                  const selectedEst = estabelecimentos.find(est => est.id === editForm.estabelecimentoId);
+                  return (
+                    <>
+                      <select
+                        value={editForm.estabelecimentoId}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, estabelecimentoId: e.target.value }))}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-semibold text-slate-900 text-xs focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                      >
+                        {tenantUnits.length > 0 && (
+                          <optgroup label="Unidades desta Empresa">
+                            {tenantUnits.map(est => (
+                              <option key={est.id} value={est.id}>{est.nome} ({est.municipio}/{est.uf})</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {otherUnits.length > 0 && (
+                          <optgroup label="Outras Unidades Cadastradas">
+                            {otherUnits.map(est => (
+                              <option key={est.id} value={est.id}>{est.nome} ({est.municipio}/{est.uf})</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      {selectedEst && (
+                        <div className="mt-2 p-2.5 rounded-xl bg-rose-50/70 border border-rose-200/70 text-[11px] text-slate-700 space-y-0.5">
+                          <div className="font-bold text-rose-900 flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5 text-rose-600" />
+                            <span>{selectedEst.enderecoCompleto || `${selectedEst.municipio}/${selectedEst.uf}`}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-600 font-mono">
+                            Cerca GPS: Lat {selectedEst.latitude.toFixed(5)}, Lng {selectedEst.longitude.toFixed(5)} · Raio {selectedEst.cercaRaioMetros}m ({selectedEst.bloquearForaDoRaio !== false ? 'Bloqueia fora do raio' : 'Apenas alerta'})
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Departamento:</label>
+                  <select
+                    value={editForm.departamentoId}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, departamentoId: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-medium text-slate-800 text-xs"
+                  >
+                    {departamentos.map(d => (
+                      <option key={d.id} value={d.id}>{d.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Cargo:</label>
+                  <select
+                    value={editForm.cargoId}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, cargoId: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-medium text-slate-800 text-xs"
+                  >
+                    {cargos.map(c => (
+                      <option key={c.id} value={c.id}>{c.titulo}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Regime de Ponto:</label>
+                  <select
+                    value={editForm.regime}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, regime: e.target.value as any }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-medium text-slate-800 text-xs"
+                  >
+                    <option value="REGULAR">Regular (Jornada Controlada)</option>
+                    <option value="EXCECAO">Exceção / Externo</option>
+                    <option value="DISPENSA_ART_62">Dispensa Art. 62 CLT</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Status Cadastral:</label>
+                  <select
+                    value={editForm.status}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as any }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-bold text-slate-800 text-xs"
+                  >
+                    <option value="ATIVO">ATIVO</option>
+                    <option value="PENDENTE">PENDENTE</option>
+                    <option value="DESLIGADO">DESLIGADO</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 p-4 bg-slate-50 border-t border-slate-100">
+              <button
+                onClick={() => setEditModalColab(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/70 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                disabled={editSaving}
+                onClick={handleSaveEditAllocation}
+                className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                {editSaving ? 'Salvando...' : 'Salvar Alocação'}
               </button>
             </div>
           </div>

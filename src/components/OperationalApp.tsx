@@ -120,8 +120,13 @@ import {
   CalendarDays,
   Stethoscope,
   Smartphone,
-  UserPlus
+  UserPlus,
+  MapPin,
+  Navigation,
+  Crosshair,
+  Edit3
 } from 'lucide-react';
+import { fetchAddressByCep, formatCep, geocodeBrazilianAddress } from '../utils/cepGeocoding';
 
 export const DEFAULT_TENANT: Tenant = {
   id: 'tenant-01',
@@ -442,22 +447,33 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       // Carrega dados do Supabase diretamente pelo client autenticado ou público
       
       try {
-        // Carrega Tenants
+        // Carrega Tenants + metadados locais de endereço/coordenadas
+        let cachedTenantLocations: Record<string, any> = {};
+        if (typeof window !== 'undefined') {
+          try {
+            cachedTenantLocations = JSON.parse(localStorage.getItem('sc_tenant_locations') || '{}');
+          } catch (_) {}
+        }
+
         const { data: tenantsData } = await supabase.from('tenants').select('*');
         if (tenantsData && tenantsData.length > 0) {
-          setTenants(tenantsData.map(t => ({
-            id: t.tenant_id,
-            cnpj: t.cnpj || '58.392.102/0001-44',
-            razaoSocial: t.razao_social || 'Softcase Tecnologia e Sistemas Ltda',
-            nomeFantasia: t.nome_fantasia || 'Softcase Tecnologia',
-            slug: t.slug || 'softcase',
-            plano: (t.plano as any) || 'REP-P Corporativo',
-            licencasContratadas: Number(t.licencas_contratadas) || 500,
-            licencasEmUso: 0,
-            status: (t.status as any) || 'ATIVO',
-            dataAdesao: t.created_at || new Date().toISOString(),
-            emailAdmin: t.email_admin || 'admin@softcase.com.br'
-          })));
+          setTenants(tenantsData.map(t => {
+            const loc = cachedTenantLocations[t.tenant_id] || {};
+            return {
+              id: t.tenant_id,
+              cnpj: t.cnpj || '58.392.102/0001-44',
+              razaoSocial: t.razao_social || 'Softcase Tecnologia e Sistemas Ltda',
+              nomeFantasia: t.nome_fantasia || 'Softcase Tecnologia',
+              slug: t.slug || 'softcase',
+              plano: (t.plano as any) || 'REP-P Corporativo',
+              licencasContratadas: Number(t.licencas_contratadas) || 500,
+              licencasEmUso: 0,
+              status: (t.status as any) || 'ATIVO',
+              dataAdesao: t.created_at || new Date().toISOString(),
+              emailAdmin: t.email_admin || 'admin@softcase.com.br',
+              ...loc
+            };
+          }));
         } else {
           setTenants([DEFAULT_TENANT]);
         }
@@ -501,20 +517,21 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
         // Carrega Estabelecimentos
         const { data: estsData } = await supabase.from('establishments').select('*');
-        if (estsData) setEstabelecimentos(estsData.map(e => ({
+        if (estsData && estsData.length > 0) setEstabelecimentos(estsData.map(e => ({
             id: e.establishment_id,
             tenantId: e.tenant_id,
             nome: e.nome,
             cnpj: e.cnpj,
-            codigo: e.establishment_id.split('-')[0], // Default
-            tipo: 'MATRIZ', // Default
-            fusoHorario: '-03:00', // Default
-            uf: 'SP', // Default
-            municipio: 'São Paulo', // Default
-            latitude: Number(e.latitude),
-            longitude: Number(e.longitude),
-            cercaRaioMetros: e.cerca_raio_metros,
-            bloquearForaDoRaio: e.bloquear_fora_do_raio
+            codigo: (e.establishment_id || '').split('-')[0] || 'EST',
+            tipo: (e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL',
+            fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
+            uf: e.uf || 'SP',
+            municipio: e.municipio || 'São Paulo',
+            enderecoCompleto: e.endereco_completo || '',
+            latitude: Number(e.latitude) || -23.561684,
+            longitude: Number(e.longitude) || -46.655981,
+            cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
+            bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
         })));
 
         // Carrega Registros de Ponto
@@ -721,6 +738,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   // Modal Novo Cliente
   const [isNewTenantModalOpen, setIsNewTenantModalOpen] = useState(false);
+  const [expandedTenantRosterId, setExpandedTenantRosterId] = useState<string | null>(null);
   const [newTenantForm, setNewTenantForm] = useState({
     cnpj: '',
     razaoSocial: '',
@@ -728,13 +746,25 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     slug: '',
     plano: 'Pro' as 'Starter' | 'Pro' | 'REP-P Corporativo',
     licencas: 100,
-    emailAdmin: ''
+    emailAdmin: '',
+    cep: '',
+    logradouro: '',
+    numero: '',
+    complemento: '',
+    bairro: '',
+    municipio: '',
+    uf: 'SP',
+    latitude: -23.561684,
+    longitude: -46.655981,
+    cercaRaioMetros: 100,
+    bloquearForaDoRaio: true
   });
   const [newTenantError, setNewTenantError] = useState<string | null>(null);
 
   // Modal Novo Colaborador
   const [isNewColabModalOpen, setIsNewColabModalOpen] = useState(false);
   const [newColabForm, setNewColabForm] = useState({
+    tenantId: '',
     nome: '',
     cpf: '',
     matricula: '',
@@ -828,16 +858,27 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     };
   };
 
-  const handleAprovarAutoCadastro = async (colabId: string) => {
+  const handleAprovarAutoCadastro = async (
+    colabId: string,
+    deptoIdParam?: string,
+    cargoIdParam?: string,
+    tenantIdParam?: string,
+    estIdParam?: string
+  ) => {
     const colab = colaboradores.find((c) => c.id === colabId);
     if (!colab) return;
 
     const contact = getColabContactInfo(colab);
-    const chosenDeptoId = pendingDeptoSelection[colabId] || colab.departamentoId || departamentos[0]?.id || 'dep-01';
-    const chosenCargoId = pendingCargoSelection[colabId] || colab.cargoId || cargos[0]?.id || 'crg-01';
+    const chosenTenantId = tenantIdParam || colab.tenantId || selectedTenantId || tenants[0]?.id || 'tenant-01';
+    const tenantEsts = estabelecimentos.filter((e) => e.tenantId === chosenTenantId);
+    const chosenEstId = estIdParam || colab.estabelecimentoId || tenantEsts[0]?.id || estabelecimentos[0]?.id || 'est-01';
+    const chosenDeptoId = deptoIdParam || pendingDeptoSelection[colabId] || colab.departamentoId || departamentos[0]?.id || 'dep-01';
+    const chosenCargoId = cargoIdParam || pendingCargoSelection[colabId] || colab.cargoId || cargos[0]?.id || 'crg-01';
 
+    const estObj = estabelecimentos.find((e) => e.id === chosenEstId) || tenantEsts[0] || estabelecimentos[0];
     const deptoObj = departamentos.find((d) => d.id === chosenDeptoId) || departamentos[0];
     const cargoObj = cargos.find((c) => c.id === chosenCargoId) || cargos[0];
+    const tenantObj = tenants.find((t) => t.id === chosenTenantId);
 
     const matriculaFinal = colab.matricula?.startsWith('PEND-')
       ? `MAT-${Date.now().toString().slice(-4)}`
@@ -845,6 +886,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
     const colabAtualizado: Colaborador = {
       ...colab,
+      tenantId: chosenTenantId,
+      estabelecimentoId: estObj?.id || chosenEstId,
+      estabelecimentoNome: estObj?.nome || colab.estabelecimentoNome || 'Matriz Principal',
       status: 'ATIVO',
       matricula: matriculaFinal,
       departamentoId: deptoObj.id,
@@ -861,7 +905,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setColaboradores(novosColabs);
 
     try {
-      const token = localStorage.getItem('sc_supabase_anon') || '';
+      const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
       await fetch('/api/save-collaborator', {
         method: 'POST',
         headers: {
@@ -873,6 +917,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
       await supabase.from('collaborators').update({
         status: 'ATIVO',
+        tenant_id: colabAtualizado.tenantId,
+        estabelecimento_id: colabAtualizado.estabelecimentoId,
+        estabelecimento_nome: colabAtualizado.estabelecimentoNome,
         matricula: matriculaFinal,
         departamento_id: deptoObj.id,
         departamento_nome: deptoObj.nome,
@@ -883,8 +930,53 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       console.warn('Aviso ao sincronizar aprovação no Supabase:', err);
     }
 
-    setColabApprovalNotice(`Colaborador ${colab.nome} homologado com sucesso! Acesso e funções liberadas com matrícula ${matriculaFinal}.`);
-    setTimeout(() => setColabApprovalNotice(null), 4000);
+    setColabApprovalNotice(
+      `Colaborador ${colab.nome} homologado em "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || chosenTenantId}" (${colabAtualizado.estabelecimentoNome}) com matrícula ${matriculaFinal}.`
+    );
+    setTimeout(() => setColabApprovalNotice(null), 5000);
+  };
+
+  const handleUpdateColaborador = async (updatedColab: Colaborador) => {
+    const novosColabs = colaboradores.map((c) => (c.id === updatedColab.id ? updatedColab : c));
+    setColaboradores(novosColabs);
+
+    const tenantObj = tenants.find((t) => t.id === updatedColab.tenantId);
+
+    try {
+      const { error: sbErr } = await supabase.from('collaborators').update({
+        tenant_id: updatedColab.tenantId,
+        estabelecimento_id: updatedColab.estabelecimentoId,
+        estabelecimento_nome: updatedColab.estabelecimentoNome,
+        departamento_id: updatedColab.departamentoId,
+        departamento_nome: updatedColab.departamentoNome,
+        cargo_id: updatedColab.cargoId,
+        cargo_titulo: updatedColab.cargoTitulo,
+        regime: updatedColab.regime,
+        status: updatedColab.status,
+        updated_at: new Date().toISOString()
+      }).eq('collaborator_id', updatedColab.id);
+
+      if (sbErr) {
+        console.warn('Aviso ao atualizar alocação no Supabase:', sbErr);
+      }
+
+      const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
+      await fetch('/api/save-collaborator', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(updatedColab)
+      });
+    } catch (err) {
+      console.warn('Aviso ao sincronizar alocação do colaborador:', err);
+    }
+
+    setColabApprovalNotice(
+      `Alocação de ${updatedColab.nome} atualizada para "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || updatedColab.tenantId}" · ${updatedColab.estabelecimentoNome}.`
+    );
+    setTimeout(() => setColabApprovalNotice(null), 4500);
   };
 
   const handleRecusarAutoCadastro = async (colabId: string) => {
@@ -1589,14 +1681,17 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     // =========================================================================
     // 0. VALIDAÇÃO DE GEOFENCING E RAIO PERMITIDO DA UNIDADE (EM TEMPO REAL)
     // =========================================================================
-    const estColab = estabelecimentos.find((e) => e.id === colab.estabelecimentoId) || estabelecimentos[0] || {
-      id: 'est-01',
-      latitude: -23.561684,
-      longitude: -46.655981,
-      cercaRaioMetros: 100,
-      bloquearForaDoRaio: true,
-      nome: 'Sede Administrativa'
-    };
+    const estColab =
+      estabelecimentos.find((e) => e.id === colab.estabelecimentoId) ||
+      estabelecimentos.find((e) => e.tenantId === colab.tenantId) ||
+      estabelecimentos[0] || {
+        id: 'est-01',
+        latitude: -23.561684,
+        longitude: -46.655981,
+        cercaRaioMetros: 100,
+        bloquearForaDoRaio: true,
+        nome: 'Sede Administrativa'
+      };
 
     let currentGps = gpsData;
     if (typeof window !== 'undefined' && navigator.geolocation) {
@@ -1871,7 +1966,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Ação: Criar Novo Cliente
+  // Ação: Criar Novo Cliente (com endereço via CEP e criação automática da Matriz Geofence)
   const handleCreateTenant = async () => {
     const cnpjVal = validateCNPJ(newTenantForm.cnpj);
     if (!cnpjVal.isValid) {
@@ -1885,19 +1980,40 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     const slug = newTenantForm.slug || newTenantForm.razaoSocial.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
+    const streetPart = [newTenantForm.logradouro, newTenantForm.numero].filter(Boolean).join(', ');
+    const compPart = [streetPart, newTenantForm.complemento, newTenantForm.bairro].filter(Boolean).join(' - ');
+    const cityPart = [newTenantForm.municipio, newTenantForm.uf].filter(Boolean).join('/');
+    const enderecoCompleto = [compPart, cityPart].filter(Boolean).join(' · ') || 'Endereço sede não informado';
+
+    const tenantId = `tenant-${Date.now()}`;
+    const lat = Number(newTenantForm.latitude) || -23.561684;
+    const lng = Number(newTenantForm.longitude) || -46.655981;
+    const raio = Number(newTenantForm.cercaRaioMetros) || 100;
 
     const novo: Tenant = {
-      id: `tenant-${Date.now()}`,
+      id: tenantId,
       cnpj: newTenantForm.cnpj,
-      razaoSocial: newTenantForm.razaoSocial,
-      nomeFantasia: newTenantForm.nomeFantasia || newTenantForm.razaoSocial,
+      razaoSocial: newTenantForm.razaoSocial.trim(),
+      nomeFantasia: (newTenantForm.nomeFantasia || newTenantForm.razaoSocial).trim(),
       slug,
       plano: newTenantForm.plano,
-      licencasContratadas: newTenantForm.licencas,
+      licencasContratadas: Number(newTenantForm.licencas) || 100,
       licencasEmUso: 0,
       status: 'ATIVO',
       dataAdesao: new Date().toISOString().slice(0, 10),
-      emailAdmin: newTenantForm.emailAdmin || 'admin@cliente.com.br'
+      emailAdmin: newTenantForm.emailAdmin || 'admin@cliente.com.br',
+      cep: newTenantForm.cep,
+      logradouro: newTenantForm.logradouro,
+      numero: newTenantForm.numero,
+      complemento: newTenantForm.complemento,
+      bairro: newTenantForm.bairro,
+      municipio: newTenantForm.municipio || 'São Paulo',
+      uf: (newTenantForm.uf || 'SP').toUpperCase(),
+      enderecoCompleto,
+      latitude: lat,
+      longitude: lng,
+      cercaRaioMetros: raio,
+      bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio
     };
 
     // PERSISTÊNCIA NO SUPABASE (BLOQUEANTE)
@@ -1923,6 +2039,67 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       }
     }
 
+    // Cachear localização completa do Tenant no navegador para recarregamentos
+    if (typeof window !== 'undefined') {
+      try {
+        const existingLocs = JSON.parse(localStorage.getItem('sc_tenant_locations') || '{}');
+        existingLocs[novo.id] = {
+          cep: novo.cep,
+          logradouro: novo.logradouro,
+          numero: novo.numero,
+          complemento: novo.complemento,
+          bairro: novo.bairro,
+          municipio: novo.municipio,
+          uf: novo.uf,
+          enderecoCompleto: novo.enderecoCompleto,
+          latitude: novo.latitude,
+          longitude: novo.longitude,
+          cercaRaioMetros: novo.cercaRaioMetros,
+          bloquearForaDoRaio: novo.bloquearForaDoRaio
+        };
+        localStorage.setItem('sc_tenant_locations', JSON.stringify(existingLocs));
+      } catch (_) {}
+    }
+
+    // Criar automaticamente o Estabelecimento Matriz da nova empresa com a localização exata para o ponto
+    const novaMatriz: Estabelecimento = {
+      id: `est-matriz-${Date.now()}`,
+      tenantId: novo.id,
+      codigo: '0001',
+      nome: `Matriz - ${novo.nomeFantasia}`,
+      cnpj: novo.cnpj,
+      tipo: 'MATRIZ',
+      fusoHorario: 'America/Sao_Paulo',
+      cercaRaioMetros: raio,
+      latitude: lat,
+      longitude: lng,
+      uf: (newTenantForm.uf || 'SP').toUpperCase(),
+      municipio: newTenantForm.municipio || 'São Paulo',
+      enderecoCompleto,
+      cep: newTenantForm.cep,
+      bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio
+    };
+
+    try {
+      await supabase.from('establishments').upsert({
+        establishment_id: novaMatriz.id,
+        tenant_id: novaMatriz.tenantId,
+        nome: novaMatriz.nome,
+        cnpj: novaMatriz.cnpj,
+        latitude: novaMatriz.latitude,
+        longitude: novaMatriz.longitude,
+        cerca_raio_metros: novaMatriz.cercaRaioMetros,
+        bloquear_fora_do_raio: novaMatriz.bloquearForaDoRaio,
+        endereco_completo: novaMatriz.enderecoCompleto,
+        municipio: novaMatriz.municipio,
+        uf: novaMatriz.uf,
+        fuso_horario: novaMatriz.fusoHorario
+      });
+    } catch (err) {
+      console.warn('Aviso ao criar estabelecimento matriz no Supabase:', err);
+    }
+
+    setEstabelecimentos([novaMatriz, ...estabelecimentos]);
     setTenants([novo, ...tenants]);
     setSelectedTenantId(novo.id);
     setIsNewTenantModalOpen(false);
@@ -1933,7 +2110,18 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       slug: '',
       plano: 'Pro',
       licencas: 100,
-      emailAdmin: ''
+      emailAdmin: '',
+      cep: '',
+      logradouro: '',
+      numero: '',
+      complemento: '',
+      bairro: '',
+      municipio: '',
+      uf: 'SP',
+      latitude: -23.561684,
+      longitude: -46.655981,
+      cercaRaioMetros: 100,
+      bloquearForaDoRaio: true
     });
     setNewTenantError(null);
   };
@@ -1951,11 +2139,12 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    const currentTenant = activeTenant || DEFAULT_TENANT;
+    const currentTenant = tenants.find((t) => t.id === (newColabForm.tenantId || selectedTenantId)) || activeTenant || DEFAULT_TENANT;
+    const tenantEsts = estabelecimentos.filter((e) => e.tenantId === currentTenant.id);
     const depId = newColabForm.departamentoId || (departamentos && departamentos[0]?.id);
     const dep = (depId ? departamentos.find((d) => d.id === depId) : null) || (departamentos && departamentos[0]) || DEFAULT_DEP;
     const crg = (newColabForm.cargoId ? cargos.find((c) => c.id === newColabForm.cargoId) : null) || (cargos && cargos[0]) || DEFAULT_CRG;
-    const est = (newColabForm.estabelecimentoId ? estabelecimentos.find((e) => e.id === newColabForm.estabelecimentoId) : null) || (estabelecimentos && estabelecimentos[0]) || DEFAULT_EST;
+    const est = (newColabForm.estabelecimentoId ? estabelecimentos.find((e) => e.id === newColabForm.estabelecimentoId) : null) || tenantEsts[0] || (estabelecimentos && estabelecimentos[0]) || DEFAULT_EST;
 
     // Gerar credenciais se solicitado
     let generatedPass = '';
@@ -2049,7 +2238,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           options: {
             data: {
               nome: newColabForm.nome,
-              tenantId: activeTenant.id,
+              tenantId: currentTenant.id,
               cpf: newColabForm.cpf,
               role: 'COLABORADOR',
               roleLabel: 'Colaborador CLT'
@@ -2067,7 +2256,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             email: targetEmail,
             password: generatedPass,
             nome: newColabForm.nome,
-            tenantId: activeTenant.id,
+            tenantId: currentTenant.id,
             cpf: newColabForm.cpf,
             role: 'COLABORADOR'
           })
@@ -2092,6 +2281,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     
     setIsNewColabModalOpen(false);
     setNewColabForm({
+      tenantId: '',
       nome: '',
       cpf: '',
       matricula: '',
@@ -3184,11 +3374,24 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       {operationalTab === 'empresa' && (
         <GestaoColaboradoresTab
           activeColaboradores={activeColaboradores}
+          allColaboradores={colaboradores}
+          tenants={tenants}
+          selectedTenantId={selectedTenantId}
+          estabelecimentos={estabelecimentos}
           departamentos={departamentos}
           cargos={cargos}
           onAprovarAutoCadastro={handleAprovarAutoCadastro}
           onRecusarAutoCadastro={handleRecusarAutoCadastro}
-          onOpenNewColabModal={() => setIsNewColabModalOpen(true)}
+          onUpdateColaborador={handleUpdateColaborador}
+          onOpenNewColabModal={() => {
+            const firstEst = estabelecimentos.find((e) => e.tenantId === selectedTenantId) || estabelecimentos[0];
+            setNewColabForm((prev) => ({
+              ...prev,
+              tenantId: selectedTenantId || tenants[0]?.id || '',
+              estabelecimentoId: firstEst?.id || ''
+            }));
+            setIsNewColabModalOpen(true);
+          }}
           colabApprovalNotice={colabApprovalNotice}
           onCloseApprovalNotice={() => setColabApprovalNotice(null)}
           getColabContactInfo={getColabContactInfo}
@@ -3252,35 +3455,117 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Empresas Contratantes</h2>
-                <p className="text-xs text-slate-500">Gestão global de clientes e licenças do Softcase Ponto.</p>
+                <p className="text-xs text-slate-500">
+                  Gestão multi-empresa, endereços de cerca geofence e colaboradores alocados em cada CNPJ.
+                </p>
               </div>
               <button 
                 onClick={() => setIsNewTenantModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold"
+                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
               >
-                <Plus className="w-4 h-4" /> Nova Empresa
+                <Plus className="w-4 h-4 text-emerald-400" /> Nova Empresa (com Endereço &amp; CEP)
               </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {tenants.map(t => (
-                <div key={t.id} className={`p-4 rounded-xl border transition-all ${t.id === selectedTenantId ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-100 bg-slate-50/50'}`}>
-                  <div className="flex justify-between items-start mb-3">
-                    <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center">
-                      <Building2 className="w-4 h-4 text-slate-400" />
+              {tenants.map(t => {
+                const colabsDaEmpresa = colaboradores.filter(c => c.tenantId === t.id);
+                const estsDaEmpresa = estabelecimentos.filter(e => e.tenantId === t.id);
+                const matriz = estsDaEmpresa.find(e => e.tipo === 'MATRIZ') || estsDaEmpresa[0];
+                const enderecoExibir = t.enderecoCompleto || matriz?.enderecoCompleto || (matriz ? `${matriz.municipio}/${matriz.uf}` : 'Endereço não cadastrado');
+                const latExibir = t.latitude ?? matriz?.latitude;
+                const lngExibir = t.longitude ?? matriz?.longitude;
+                const raioExibir = t.cercaRaioMetros ?? matriz?.cercaRaioMetros ?? 100;
+                const isExpanded = expandedTenantRosterId === t.id;
+
+                return (
+                <div key={t.id} className={`p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3 ${t.id === selectedTenantId ? 'border-emerald-500 bg-emerald-50/30 shadow-xs' : 'border-slate-200 bg-slate-50/50 hover:bg-white'}`}>
+                  <div>
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center border border-slate-100">
+                        <Building2 className="w-4 h-4 text-slate-600" />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {t.id === selectedTenantId && (
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-900 text-white">
+                            ATIVA
+                          </span>
+                        )}
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${t.status === 'ATIVO' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
+                          {t.status}
+                        </span>
+                      </div>
                     </div>
-                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${t.status === 'ATIVO' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
-                      {t.status}
-                    </span>
+                    <h4 className="text-sm font-bold text-slate-900 truncate" title={t.razaoSocial}>{t.razaoSocial}</h4>
+                    <p className="text-[10px] text-slate-500 font-mono mb-2">{t.cnpj}</p>
+
+                    <div className="p-2 rounded-lg bg-white border border-slate-100 space-y-1 text-[10px] text-slate-600 mb-2">
+                      <div className="flex items-start gap-1">
+                        <MapPin className="w-3 h-3 text-rose-500 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2" title={enderecoExibir}>{enderecoExibir}</span>
+                      </div>
+                      {latExibir !== undefined && lngExibir !== undefined && (
+                        <div className="font-mono text-[9px] text-slate-400">
+                          GPS: {Number(latExibir).toFixed(4)}, {Number(lngExibir).toFixed(4)} · Raio {raioExibir}m
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <h4 className="text-sm font-bold text-slate-900 truncate">{t.razaoSocial}</h4>
-                  <p className="text-[10px] text-slate-500 font-mono mb-3">{t.cnpj}</p>
-                  <div className="flex items-center justify-between text-[10px] text-slate-600">
-                    <span>Licenças: <strong>{t.licencasContratadas}</strong></span>
-                    <span>Plano: <strong>{t.plano}</strong></span>
+
+                  <div className="space-y-2 pt-2 border-t border-slate-200/70">
+                    <div className="flex items-center justify-between text-[10px] text-slate-600">
+                      <span>Alocados: <strong className="text-slate-900">{colabsDaEmpresa.length}</strong> / {t.licencasContratadas}</span>
+                      <span>Unidades: <strong className="text-slate-900">{estsDaEmpresa.length}</strong></span>
+                      <span>Plano: <strong>{t.plano}</strong></span>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedTenantRosterId(isExpanded ? null : t.id)}
+                        className="flex-1 py-1.5 px-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
+                      >
+                        {isExpanded ? 'Ocultar Alocados ▲' : `Ver Alocados (${colabsDaEmpresa.length}) ▼`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTenantId(t.id);
+                          setOperationalTab('empresa');
+                        }}
+                        className="py-1.5 px-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
+                      >
+                        Gerenciar RH
+                      </button>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="mt-2 pt-2 border-t border-slate-200 space-y-1.5 max-h-44 overflow-y-auto">
+                        {colabsDaEmpresa.length === 0 ? (
+                          <p className="text-[10px] text-slate-400 italic py-1">Nenhum colaborador alocado nesta empresa ainda.</p>
+                        ) : (
+                          colabsDaEmpresa.map(col => (
+                            <div key={col.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-lg px-2 py-1.5 text-[10px]">
+                              <div className="min-w-0">
+                                <div className="font-bold text-slate-800 truncate">{col.nome}</div>
+                                <div className="text-slate-400 truncate">
+                                  {col.estabelecimentoNome || 'Sem unidade'} · {col.cargoTitulo}
+                                </div>
+                              </div>
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 ml-2 ${
+                                col.status === 'ATIVO' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                              }`}>
+                                {col.status}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -4022,6 +4307,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         onConfirm={handleCreateColaborador}
         form={newColabForm}
         setForm={setNewColabForm}
+        tenants={tenants}
+        selectedTenantId={selectedTenantId}
         departamentos={departamentos}
         estabelecimentos={estabelecimentos}
         cargos={cargos}
@@ -4040,28 +4327,125 @@ const NewTenantModal: React.FC<{
   setForm: (f: any) => void;
   error: string | null;
 }> = ({ isOpen, onClose, onConfirm, form, setForm, error }) => {
+  const [cepLoading, setCepLoading] = useState(false);
+  const [geoFeedback, setGeoFeedback] = useState<string | null>(null);
+
   if (!isOpen) return null;
+
+  const handleLookupCep = async () => {
+    setGeoFeedback(null);
+    setCepLoading(true);
+    try {
+      const addr = await fetchAddressByCep(form.cep);
+      const geo = await geocodeBrazilianAddress({
+        logradouro: addr.logradouro,
+        numero: form.numero,
+        bairro: addr.bairro,
+        municipio: addr.municipio,
+        uf: addr.uf,
+        cep: addr.cep
+      });
+
+      setForm((prev: any) => ({
+        ...prev,
+        cep: addr.cep,
+        logradouro: addr.logradouro || prev.logradouro,
+        complemento: addr.complemento || prev.complemento,
+        bairro: addr.bairro || prev.bairro,
+        municipio: addr.municipio || prev.municipio,
+        uf: addr.uf || prev.uf,
+        latitude: geo ? geo.latitude : prev.latitude,
+        longitude: geo ? geo.longitude : prev.longitude
+      }));
+
+      if (geo) {
+        setGeoFeedback(`Endereço e coordenadas (${geo.latitude.toFixed(5)}, ${geo.longitude.toFixed(5)}) preenchidos via CEP ${addr.cep}.`);
+      } else {
+        setGeoFeedback(`Endereço preenchido via CEP ${addr.cep}. Informe o número ou capture o GPS para precisão exata.`);
+      }
+    } catch (err: any) {
+      setGeoFeedback(err?.message || 'Não foi possível consultar o CEP.');
+    } finally {
+      setCepLoading(false);
+    }
+  };
+
+  const handleGeocodeFullAddress = async () => {
+    setCepLoading(true);
+    setGeoFeedback(null);
+    try {
+      const geo = await geocodeBrazilianAddress({
+        logradouro: form.logradouro,
+        numero: form.numero,
+        bairro: form.bairro,
+        municipio: form.municipio,
+        uf: form.uf,
+        cep: form.cep
+      });
+      if (geo) {
+        setForm((prev: any) => ({
+          ...prev,
+          latitude: geo.latitude,
+          longitude: geo.longitude
+        }));
+        setGeoFeedback(`Coordenadas atualizadas (${geo.precision}): ${geo.latitude.toFixed(6)}, ${geo.longitude.toFixed(6)}.`);
+      } else {
+        setGeoFeedback('Não foi possível localizar coordenadas automáticas para este endereço. Use o GPS atual ou ajuste manualmente.');
+      }
+    } finally {
+      setCepLoading(false);
+    }
+  };
+
+  const handleUseCurrentGps = () => {
+    if (!('geolocation' in navigator)) {
+      setGeoFeedback('Geolocalização não suportada neste navegador.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
+        setForm((prev: any) => ({
+          ...prev,
+          latitude: lat,
+          longitude: lng
+        }));
+        setGeoFeedback(`GPS atual capturado com precisão: ${lat}, ${lng}.`);
+      },
+      (err) => {
+        setGeoFeedback(`Erro ao capturar GPS: ${err.message}`);
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-slate-900">Cadastrar Nova Empresa (Tenant)</h3>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
+      <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+          <div>
+            <h3 className="text-base font-bold">Cadastrar Nova Empresa (com Endereço &amp; Local do Ponto)</h3>
+            <p className="text-[11px] text-slate-300">Ao salvar, a unidade Matriz é criada automaticamente com a cerca GPS exata.</p>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"><X className="w-5 h-5 text-slate-300" /></button>
         </div>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase">CNPJ da Empresa</label>
+
+        <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+          {/* Dados da Empresa */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">CNPJ da Empresa *</label>
               <input 
                 type="text" 
                 placeholder="00.000.000/0001-00"
                 value={form.cnpj}
                 onChange={e => setForm({...form, cnpj: e.target.value})}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase">Slug / Identificador</label>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Slug / Identificador</label>
               <input 
                 type="text" 
                 placeholder="nome-da-empresa"
@@ -4071,44 +4455,249 @@ const NewTenantModal: React.FC<{
               />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-400 uppercase">Razão Social</label>
-            <input 
-              type="text" 
-              placeholder="Ex: Softcase Tecnologia LTDA"
-              value={form.razaoSocial}
-              onChange={e => setForm({...form, razaoSocial: e.target.value})}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-            />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Razão Social *</label>
+              <input 
+                type="text" 
+                placeholder="Ex: Softcase Tecnologia LTDA"
+                value={form.razaoSocial}
+                onChange={e => setForm({...form, razaoSocial: e.target.value})}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Nome Fantasia</label>
+              <input 
+                type="text" 
+                placeholder="Ex: Softcase Tecnologia"
+                value={form.nomeFantasia}
+                onChange={e => setForm({...form, nomeFantasia: e.target.value})}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-             <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase">Plano</label>
-                <select 
-                  value={form.plano}
-                  onChange={e => setForm({...form, plano: e.target.value})}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
-                >
-                  <option value="Starter">Starter</option>
-                  <option value="Pro">Pro</option>
-                  <option value="REP-P Corporativo">REP-P Corporativo</option>
-                </select>
-             </div>
-             <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase">Licenças</label>
-                <input 
-                  type="number" 
-                  value={form.licencas}
-                  onChange={e => setForm({...form, licencas: parseInt(e.target.value)})}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Plano</label>
+              <select 
+                value={form.plano}
+                onChange={e => setForm({...form, plano: e.target.value})}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
+              >
+                <option value="Starter">Starter</option>
+                <option value="Pro">Pro</option>
+                <option value="REP-P Corporativo">REP-P Corporativo</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Licenças</label>
+              <input 
+                type="number" 
+                value={form.licencas}
+                onChange={e => setForm({...form, licencas: parseInt(e.target.value) || 0})}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">E-mail Admin</label>
+              <input 
+                type="email" 
+                placeholder="admin@empresa.com.br"
+                value={form.emailAdmin}
+                onChange={e => setForm({...form, emailAdmin: e.target.value})}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Endereço da Empresa + Busca Automática por CEP */}
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <span className="text-[11px] font-bold text-slate-800 uppercase flex items-center gap-1.5">
+                <MapPin className="w-4 h-4 text-rose-600" />
+                Endereço da Sede (Busca Automática por CEP)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              <div className="sm:col-span-2 space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">CEP</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="01310-100"
+                    value={form.cep}
+                    onChange={e => setForm({ ...form, cep: formatCep(e.target.value) })}
+                    className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={cepLoading}
+                    onClick={handleLookupCep}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg text-xs font-bold whitespace-nowrap cursor-pointer transition-colors"
+                  >
+                    {cepLoading ? 'Buscando...' : 'Buscar CEP'}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">UF</label>
+                <input
+                  type="text"
+                  maxLength={2}
+                  placeholder="SP"
+                  value={form.uf}
+                  onChange={e => setForm({ ...form, uf: e.target.value.toUpperCase() })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-mono font-bold uppercase text-center outline-none"
                 />
-             </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="sm:col-span-3 space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Logradouro / Rua / Av.</label>
+                <input
+                  type="text"
+                  placeholder="Av. Paulista"
+                  value={form.logradouro}
+                  onChange={e => setForm({ ...form, logradouro: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Número</label>
+                <input
+                  type="text"
+                  placeholder="1000"
+                  value={form.numero}
+                  onChange={e => setForm({ ...form, numero: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Bairro</label>
+                <input
+                  type="text"
+                  placeholder="Bela Vista"
+                  value={form.bairro}
+                  onChange={e => setForm({ ...form, bairro: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Município</label>
+                <input
+                  type="text"
+                  placeholder="São Paulo"
+                  value={form.municipio}
+                  onChange={e => setForm({ ...form, municipio: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Complemento</label>
+                <input
+                  type="text"
+                  placeholder="Sala 101"
+                  value={form.complemento}
+                  onChange={e => setForm({ ...form, complemento: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+            </div>
           </div>
+
+          {/* Localização Exata para Registro do Ponto (Geofencing) */}
+          <div className="p-4 bg-rose-50/50 rounded-xl border border-rose-200/80 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-rose-950 flex items-center gap-1.5">
+                <Crosshair className="w-4 h-4 text-rose-600" />
+                Localização Exata para Registro do Ponto (Geofencing)
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={cepLoading}
+                  onClick={handleGeocodeFullAddress}
+                  className="px-2.5 py-1 bg-white border border-rose-300 text-rose-700 rounded-lg text-[10px] font-bold hover:bg-rose-50 transition-colors cursor-pointer"
+                >
+                  Atualizar pelo Endereço
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUseCurrentGps}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-rose-600 text-white rounded-lg text-[10px] font-bold hover:bg-rose-700 transition-colors cursor-pointer"
+                >
+                  <Navigation className="w-3 h-3" /> Usar Meu GPS Atual
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-[10px] text-slate-600 font-semibold mb-0.5">Latitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={form.latitude}
+                  onChange={e => setForm({ ...form, latitude: Number(e.target.value) })}
+                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white font-mono text-[11px]"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-600 font-semibold mb-0.5">Longitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={form.longitude}
+                  onChange={e => setForm({ ...form, longitude: Number(e.target.value) })}
+                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white font-mono text-[11px]"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] text-slate-600 font-semibold mb-0.5">Raio Permitido (m)</label>
+                <input
+                  type="number"
+                  min={20}
+                  max={5000}
+                  value={form.cercaRaioMetros}
+                  onChange={e => setForm({ ...form, cercaRaioMetros: Number(e.target.value) })}
+                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white font-mono font-bold text-rose-700 text-[11px]"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1 border-t border-rose-200/50">
+              <input
+                type="checkbox"
+                id="chkBloqueioTenant"
+                checked={form.bloquearForaDoRaio}
+                onChange={e => setForm({ ...form, bloquearForaDoRaio: e.target.checked })}
+                className="w-4 h-4 text-rose-600 rounded cursor-pointer"
+              />
+              <label htmlFor="chkBloqueioTenant" className="text-[11px] font-semibold text-slate-800 cursor-pointer">
+                Bloquear registro de ponto se o colaborador estiver fora do raio da empresa
+              </label>
+            </div>
+
+            {geoFeedback && (
+              <div className="p-2 bg-white border border-rose-200 rounded-lg text-[11px] text-slate-700 font-medium">
+                {geoFeedback}
+              </div>
+            )}
+          </div>
+
           {error && <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-xs rounded-lg font-medium">{error}</div>}
         </div>
-        <div className="p-6 bg-slate-50 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold">Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold">Confirmar Cadastro</button>
+        <div className="p-5 bg-slate-50 border-t border-slate-100 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold cursor-pointer">Cancelar</button>
+          <button onClick={onConfirm} className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors">Confirmar Cadastro da Empresa</button>
         </div>
       </div>
     </div>
@@ -4121,25 +4710,31 @@ const NewColaboradorModal: React.FC<{
   onConfirm: () => void;
   form: any;
   setForm: (f: any) => void;
+  tenants: Tenant[];
+  selectedTenantId: string;
   departamentos: Departamento[];
   estabelecimentos: Estabelecimento[];
   cargos: Cargo[];
-}> = ({ isOpen, onClose, onConfirm, form, setForm, departamentos, estabelecimentos, cargos }) => {
+}> = ({ isOpen, onClose, onConfirm, form, setForm, tenants, selectedTenantId, departamentos, estabelecimentos, cargos }) => {
   if (!isOpen) return null;
+  const activeTenantId = form.tenantId || selectedTenantId || tenants[0]?.id || '';
+  const tenantEsts = estabelecimentos.filter(e => e.tenantId === activeTenantId);
+  const otherEsts = estabelecimentos.filter(e => e.tenantId !== activeTenantId);
+
   return (
     <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
         <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
           <div>
              <h3 className="text-lg font-bold">Admitir Novo Colaborador</h3>
-             <p className="text-[10px] text-slate-400 uppercase tracking-widest">Cadastro REP-P & Acesso ao Sistema</p>
+             <p className="text-[10px] text-slate-400 uppercase tracking-widest">Cadastro REP-P &amp; Alocação Empresa/Unidade</p>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6 max-h-[70vh] overflow-y-auto">
           <div className="space-y-4">
              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Dados Pessoais & Funcionais</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Dados Pessoais &amp; Funcionais</span>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-500 uppercase">Nome Completo</label>
                   <input type="text" placeholder="Nome do funcionário" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none" />
@@ -4157,7 +4752,25 @@ const NewColaboradorModal: React.FC<{
              </div>
 
              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Alocação & Unidade</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Alocação &amp; Unidade</span>
+                {tenants.length > 0 && (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Empresa Contratante</label>
+                    <select
+                      value={activeTenantId}
+                      onChange={e => {
+                        const nextTenantId = e.target.value;
+                        const nextEst = estabelecimentos.find(est => est.tenantId === nextTenantId) || estabelecimentos[0];
+                        setForm({ ...form, tenantId: nextTenantId, estabelecimentoId: nextEst?.id || '' });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 outline-none"
+                    >
+                      {tenants.map(t => (
+                        <option key={t.id} value={t.id}>{t.razaoSocial} ({t.cnpj})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-500 uppercase">Departamento</label>
                   <select value={form.departamentoId} onChange={e => setForm({...form, departamentoId: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
@@ -4211,17 +4824,26 @@ const NewColaboradorModal: React.FC<{
                 </div>
              </div>
 
-             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Estabelecimento de Lotação</span>
+             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block border-b border-slate-200 pb-2 mb-2">Estabelecimento / Local do Ponto</span>
                 <select value={form.estabelecimentoId} onChange={e => setForm({...form, estabelecimentoId: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
-                  {estabelecimentos.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                  {tenantEsts.length > 0 && (
+                    <optgroup label="Unidades da Empresa Selecionada">
+                      {tenantEsts.map(e => <option key={e.id} value={e.id}>{e.nome} ({e.municipio}/{e.uf})</option>)}
+                    </optgroup>
+                  )}
+                  {otherEsts.length > 0 && (
+                    <optgroup label="Outras Unidades">
+                      {otherEsts.map(e => <option key={e.id} value={e.id}>{e.nome} ({e.municipio}/{e.uf})</option>)}
+                    </optgroup>
+                  )}
                 </select>
              </div>
           </div>
         </div>
         <div className="p-6 bg-slate-50 border-t border-slate-200 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-100 transition-all">Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-500/20 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">
+          <button onClick={onClose} className="flex-1 py-3 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-100 transition-all cursor-pointer">Cancelar</button>
+          <button onClick={onConfirm} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-500/20 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2 cursor-pointer">
             <Check className="w-4 h-4" /> Finalizar Admissão
           </button>
         </div>

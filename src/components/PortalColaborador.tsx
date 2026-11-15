@@ -726,6 +726,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const userColab = colaboradores.find(
     (c) => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, '')
   );
+  const myAllocatedEst =
+    estabelecimentos.find((e) => e.id === userColab?.estabelecimentoId) ||
+    estabelecimentos.find((e) => e.tenantId === (userColab?.tenantId || user.tenantId)) ||
+    estabelecimentos[0] || {
+      id: 'est-default',
+      tenantId: userColab?.tenantId || user.tenantId || 'tenant-01',
+      codigo: '0001',
+      nome: userColab?.estabelecimentoNome || 'Sede Administrativa',
+      cnpj: '58.392.102/0001-44',
+      tipo: 'MATRIZ' as const,
+      fusoHorario: 'America/Sao_Paulo',
+      latitude: -23.561684,
+      longitude: -46.655981,
+      cercaRaioMetros: 100,
+      uf: 'SP',
+      municipio: 'São Paulo',
+      bloquearForaDoRaio: true
+    };
   const horarioInicioStr = userColab?.horarioInicio || '08:00';
   const maxAntecedenciaMin = userColab?.maxMinutosAntecedenciaPermitido ?? 15;
   const regraAntecedenciaAtiva = userColab?.regraAntecedenciaAtiva ?? true;
@@ -1135,12 +1153,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         (pos) => {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
-          const est = estabelecimentos[0] || {
-            latitude: -23.561684,
-            longitude: -46.655981,
-            cercaRaioMetros: 100,
-            nome: 'Sede Administrativa'
-          };
+          const est = myAllocatedEst;
           const dist = calculateDistanceMeters(lat, lng, est.latitude, est.longitude);
           const dentro = dist <= (est.cercaRaioMetros || 100);
           setGpsData({
@@ -1148,7 +1161,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             lng,
             dist,
             dentroCerca: dentro,
-            endereco: `Lat ${lat.toFixed(4)}, Long ${lng.toFixed(4)} (${dentro ? 'Dentro da Cerca' : 'Externo'})`
+            endereco: `Lat ${lat.toFixed(4)}, Long ${lng.toFixed(4)} · ${est.nome} (${dentro ? 'Dentro da Cerca' : `Externo: ${dist}m`})`
           });
           setGpsLoading(false);
         },
@@ -1357,34 +1370,29 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       hashCalc += ((i * 19 + nextNsr * 29 + user.cpf.charCodeAt(i % user.cpf.length)) % 16).toString(16);
     }
 
-    const est = estabelecimentos[0] || {
-      latitude: -23.561684,
-      longitude: -46.655981,
-      cercaRaioMetros: 100,
-      nome: 'Sede Administrativa'
-    };
+    const est = myAllocatedEst;
     const foraCerca = gpsData ? !gpsData.dentroCerca : false;
 
     const novo: RegistroPontoREPP = {
       nsr: nextNsr,
-      tenantId: user.tenantId,
+      tenantId: userColab?.tenantId || user.tenantId,
       empregadorRazaoSocial: user.tenantNome || 'Softcase Tecnologia e Sistemas Ltda',
-      empregadorCnpj: '58.392.102/0001-44',
-      colaboradorId: user.id,
+      empregadorCnpj: est.cnpj || '58.392.102/0001-44',
+      colaboradorId: userColab?.id || user.id,
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
-      colaboradorMatricula: `MAT-${user.cpf.replace(/\D/g, '').slice(0, 5)}`,
+      colaboradorMatricula: userColab?.matricula || `MAT-${user.cpf.replace(/\D/g, '').slice(0, 5)}`,
       dataHora: nowIso,
       dataHoraFormatada: dataHoraFmt,
       fusoHorario: '-03:00',
       coletorId: 'MOBILE-APP-INDIVIDUAL',
       tipoMarcacao: tipoPonto,
       hashSha256: hashCalc,
-      latitude: gpsData?.lat || -23.561684,
-      longitude: gpsData?.lng || -46.655981,
+      latitude: gpsData?.lat || est.latitude || -23.561684,
+      longitude: gpsData?.lng || est.longitude || -46.655981,
       distanciaCentroMetros: gpsData?.dist || 12,
       foraDoRaioGeofence: foraCerca,
-      localizacaoEndereco: gpsData?.endereco || 'Registro Mobile / Externo',
+      localizacaoEndereco: gpsData?.endereco || `${est.nome} - Registro Mobile`,
       modoDispositivo: 'MOBILE_GPS'
     };
 
@@ -1522,11 +1530,17 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              {user.cargoTitulo || 'Engenheira de Software Sênior'} · {user.departamentoNome || 'Engenharia de Software'} · CPF {user.cpf}
+              {userColab?.cargoTitulo || user.cargoTitulo || 'Engenheira de Software Sênior'} · {userColab?.departamentoNome || user.departamentoNome || 'Engenharia de Software'} · CPF {user.cpf}
             </p>
-            <div className="flex items-center gap-2 mt-1 text-xs text-slate-600">
-              <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-              <span>Gestor Imediato: <strong className="text-slate-800">{gestorEquipeNome}</strong> ({gestorEquipeEmail})</span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 text-blue-600" />
+                <span>Gestor Imediato: <strong className="text-slate-800">{gestorEquipeNome}</strong> ({gestorEquipeEmail})</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                <span>Unidade Alocada: <strong className="text-slate-800">{userColab?.estabelecimentoNome || myAllocatedEst.nome}</strong></span>
+              </span>
             </div>
           </div>
         </div>

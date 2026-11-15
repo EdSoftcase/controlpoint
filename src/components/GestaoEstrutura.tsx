@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Departamento, Cargo, Estabelecimento, Colaborador, Tenant } from '../types/operational';
 import { validateCNPJ, formatCNPJ } from '../utils/brazilianValidators';
+import { fetchAddressByCep, formatCep, geocodeBrazilianAddress } from '../utils/cepGeocoding';
 import { useAuth } from './AuthContext';
 
 interface GestaoEstruturaProps {
@@ -47,6 +48,9 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'departamentos' | 'cargos' | 'estabelecimentos'>('departamentos');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFeedback, setStatusFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [cepLoading, setCepLoading] = useState(false);
+  const [expandedEstId, setExpandedEstId] = useState<string | null>(null);
+  const [filterEstByActiveTenant, setFilterEstByActiveTenant] = useState<boolean>(false);
 
   // Modais de Criação / Edição
   const [isDeptoModalOpen, setIsDeptoModalOpen] = useState(false);
@@ -301,24 +305,37 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
       showNotification('Digite um CEP válido com 8 dígitos para consulta.', 'error');
       return;
     }
+    setCepLoading(true);
     try {
-      const res = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
-      const data = await res.json();
-      if (data.erro) {
-        showNotification('CEP não encontrado na base dos Correios (ViaCEP).', 'error');
-        return;
-      }
-      const enderecoCompleto = `${data.logradouro || ''}, ${data.bairro || ''} - ${data.localidade}/${data.uf}`;
+      const addr = await fetchAddressByCep(clean);
+      const geo = await geocodeBrazilianAddress({
+        logradouro: addr.logradouro,
+        bairro: addr.bairro,
+        municipio: addr.municipio,
+        uf: addr.uf,
+        cep: addr.cep
+      });
+
       setEstForm(prev => ({
         ...prev,
-        enderecoCompleto,
-        municipio: data.localidade || prev.municipio,
-        uf: data.uf || prev.uf
+        cep: addr.cep,
+        enderecoCompleto: addr.enderecoCompleto,
+        municipio: addr.municipio || prev.municipio,
+        uf: addr.uf || prev.uf,
+        latitude: geo ? geo.latitude : prev.latitude,
+        longitude: geo ? geo.longitude : prev.longitude
       }));
-      showNotification(`Endereço carregado via CEP ${clean}!`, 'success');
-    } catch (err) {
+
+      if (geo) {
+        showNotification(`Endereço e coordenadas (${geo.latitude.toFixed(5)}, ${geo.longitude.toFixed(5)}) carregados via CEP ${addr.cep}!`, 'success');
+      } else {
+        showNotification(`Endereço carregado via CEP ${addr.cep}! Ajuste as coordenadas GPS se necessário.`, 'success');
+      }
+    } catch (err: any) {
       console.warn('Erro ao consultar ViaCEP:', err);
-      showNotification('Falha ao consultar serviço de CEP.', 'error');
+      showNotification(err?.message || 'Falha ao consultar serviço de CEP.', 'error');
+    } finally {
+      setCepLoading(false);
     }
   };
 
@@ -477,11 +494,14 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     c.cboDescricao.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const filteredEsts = estabelecimentos.filter(e => 
-    e.nome.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    e.municipio.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    e.cnpj.includes(searchTerm)
-  );
+  const filteredEsts = estabelecimentos.filter(e => {
+    if (filterEstByActiveTenant && e.tenantId && e.tenantId !== activeTenant.id) return false;
+    return (
+      e.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      e.municipio.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      e.cnpj.includes(searchTerm)
+    );
+  });
 
   return (
     <div className="space-y-6">
@@ -757,9 +777,26 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         {/* ========================================================= */}
         {activeSubTab === 'estabelecimentos' && (
           <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs">
+              <span className="text-slate-600 font-medium">
+                Exibindo {filteredEsts.length} {filteredEsts.length === 1 ? 'unidade cadastrada' : 'unidades cadastradas'}
+              </span>
+              <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={filterEstByActiveTenant}
+                  onChange={(e) => setFilterEstByActiveTenant(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                />
+                <span>Filtrar apenas unidades de {activeTenant.nomeFantasia || activeTenant.razaoSocial}</span>
+              </label>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredEsts.map((est) => {
-                const countColabs = colaboradores.filter(c => c.estabelecimentoId === est.id).length;
+                const colabsInEst = colaboradores.filter(c => c.estabelecimentoId === est.id);
+                const countColabs = colabsInEst.length;
+                const isExpanded = expandedEstId === est.id;
                 return (
                   <div 
                     key={est.id} 
@@ -776,17 +813,17 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
                         }`}>
                           {est.tipo}
                         </span>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={() => handleOpenEstModal(est)}
-                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded"
+                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer"
                             title="Editar Unidade"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => handleDeleteEst(est.id, est.nome)}
-                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
                             title="Excluir Unidade"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -828,10 +865,37 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
                       </div>
                       <div className="flex items-center justify-between pt-1 font-bold text-slate-800">
                         <span>Colaboradores Lotados:</span>
-                        <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-mono text-[10px]">
-                          {countColabs} {countColabs === 1 ? 'vida' : 'vidas'}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedEstId(isExpanded ? null : est.id)}
+                          className="px-2.5 py-0.5 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-800 font-mono text-[10px] transition-colors cursor-pointer"
+                          title="Clique para visualizar os colaboradores alocados nesta unidade"
+                        >
+                          {countColabs} {countColabs === 1 ? 'vida' : 'vidas'} {countColabs > 0 ? (isExpanded ? '▲' : '▼') : ''}
+                        </button>
                       </div>
+
+                      {isExpanded && (
+                        <div className="mt-2 pt-2 border-t border-slate-200 space-y-1.5 max-h-44 overflow-y-auto">
+                          {colabsInEst.length === 0 ? (
+                            <p className="text-[10px] text-slate-400 italic">Nenhum colaborador alocado nesta unidade.</p>
+                          ) : (
+                            colabsInEst.map(col => (
+                              <div key={col.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-lg px-2 py-1.5 text-[10px]">
+                                <div className="min-w-0">
+                                  <div className="font-bold text-slate-800 truncate">{col.nome}</div>
+                                  <div className="text-slate-400 truncate">{col.cargoTitulo} · {col.cpf}</div>
+                                </div>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 ml-2 ${
+                                  col.status === 'ATIVO' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                                }`}>
+                                  {col.status}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1177,21 +1241,22 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">CEP (Consulta Automática ViaCEP)</label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">CEP (Consulta Automática ViaCEP + Coordenadas)</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="01310100"
+                    placeholder="01310-100"
                     value={estForm.cep}
-                    onChange={(e) => setEstForm({ ...estForm, cep: e.target.value })}
+                    onChange={(e) => setEstForm({ ...estForm, cep: formatCep(e.target.value) })}
                     className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
                   />
                   <button
                     type="button"
+                    disabled={cepLoading}
                     onClick={handleBuscaCep}
-                    className="px-3 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition-colors shadow-2xs whitespace-nowrap"
+                    className="px-3 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 disabled:opacity-60 transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
                   >
-                    Buscar CEP
+                    {cepLoading ? 'Buscando...' : 'Buscar CEP'}
                   </button>
                 </div>
               </div>
