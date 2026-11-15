@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Colaborador, RegistroPontoREPP } from '../types/operational';
+import { getBrasiliaYmd, getBrasiliaParts } from '../utils/brasiliaClock';
 import {
   verificarInterjornada11h,
   validarIntervaloIntrajornada
@@ -7,23 +8,18 @@ import {
 import {
   ShieldAlert,
   AlertTriangle,
-  CheckCircle2,
   TrendingDown,
-  FileSpreadsheet,
   Download,
   Flame,
   Clock,
-  Calendar,
-  Users,
-  ChevronRight,
   ShieldCheck,
-  Search,
-  Filter
+  Search
 } from 'lucide-react';
 
 interface DashboardRiscosRHProps {
   colaboradores: Colaborador[];
   registros: RegistroPontoREPP[];
+  tenantName?: string;
 }
 
 interface AlertaRiscoItem {
@@ -40,7 +36,7 @@ interface AlertaRiscoItem {
   passivoEstimadoReais: number;
 }
 
-export function DashboardRiscosRH({ colaboradores, registros }: DashboardRiscosRHProps) {
+export function DashboardRiscosRH({ colaboradores, registros, tenantName }: DashboardRiscosRHProps) {
   const [filtroGravidade, setFiltroGravidade] = useState<string>('TODAS');
   const [busca, setBusca] = useState<string>('');
 
@@ -137,51 +133,6 @@ export function DashboardRiscosRH({ colaboradores, registros }: DashboardRiscosR
       });
     });
 
-    // Se a base de testes estiver vazia ou com poucas batidas, garante exemplos pedagógicos de auditoria
-    if (lista.length === 0) {
-      lista.push(
-        {
-          id: 'mock-risco-01',
-          colaboradorId: 'colab-02',
-          colaboradorNome: 'Mariana Souza',
-          colaboradorCpf: '234.567.890-12',
-          departamento: 'Tecnologia & Inovação',
-          tipoRisco: 'INTERJORNADA_11H',
-          gravidade: 'CRITICA',
-          data: '2026-11-05',
-          detalhe: 'Saída às 23:45 e entrada às 08:00 no dia seguinte. Descansou 8h15m (mínimo legal: 11h00). Faltaram 2h45m.',
-          baseLegal: 'CLT Art. 66 e Súmula 110 TST',
-          passivoEstimadoReais: 144.50
-        },
-        {
-          id: 'mock-risco-02',
-          colaboradorId: 'colab-03',
-          colaboradorNome: 'Carlos Eduardo Oliveira',
-          colaboradorCpf: '345.678.901-23',
-          departamento: 'Operações & Logística',
-          tipoRisco: 'INTERVALO_INTRAJORNADA',
-          gravidade: 'ALTA',
-          data: '2026-11-04',
-          detalhe: 'Intervalo de almoço usufruído de apenas 35 minutos para jornada diária de 8h (mínimo obrigatório: 60 minutos).',
-          baseLegal: 'CLT Art. 71 § 4º',
-          passivoEstimadoReais: 65.00
-        },
-        {
-          id: 'mock-risco-03',
-          colaboradorId: 'colab-01',
-          colaboradorNome: 'Edson Freire',
-          colaboradorCpf: '123.456.789-00',
-          departamento: 'Diretoria de Operações',
-          tipoRisco: 'HORAS_EXTRAS_2H',
-          gravidade: 'MODERADA',
-          data: '2026-11-02',
-          detalhe: 'Realização de 3h15m extraordinárias no dia (ultrapassando o teto legal de 2h extras/dia previsto em lei).',
-          baseLegal: 'CLT Art. 59 caput',
-          passivoEstimadoReais: 180.00
-        }
-      );
-    }
-
     return lista;
   }, [colaboradores, registros]);
 
@@ -199,8 +150,8 @@ export function DashboardRiscosRH({ colaboradores, registros }: DashboardRiscosR
 
   const handleExportarRelatorioRiscos = () => {
     let relatorio = `RELATÓRIO EXECUTIVO DE AUDITORIA PREVENTIVA DE PASSIVOS TRABALHISTAS\r\n`;
-    relatorio += `EMPRESA: SOFTCASE TECNOLOGIA E SISTEMAS LTDA\r\n`;
-    relatorio += `DATA DA EXTRAÇÃO: ${new Date().toLocaleString('pt-BR')}\r\n`;
+    relatorio += `EMPRESA: ${tenantName || 'EMPRESA ATIVA'}\r\n`;
+    relatorio += `DATA DA EXTRAÇÃO (BRT): ${getBrasiliaParts().formatted}\r\n`;
     relatorio += `TOTAL DE APONTAMENTOS DE RISCO: ${riscosDetectados.length}\r\n`;
     relatorio += `PASSIVO INDENIZATÓRIO ESTIMADO: R$ ${totalPassivoReais.toFixed(2)}\r\n`;
     relatorio += `--------------------------------------------------------------------------------\r\n\r\n`;
@@ -216,7 +167,7 @@ export function DashboardRiscosRH({ colaboradores, registros }: DashboardRiscosR
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `RELATORIO_RISCOS_TRABALHISTAS_${new Date().toISOString().slice(0, 10)}.txt`;
+    a.download = `RELATORIO_RISCOS_TRABALHISTAS_${getBrasiliaYmd()}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -327,47 +278,53 @@ export function DashboardRiscosRH({ colaboradores, registros }: DashboardRiscosR
         </div>
 
         <div className="divide-y divide-slate-800/80">
-          {listaFiltrada.map((item) => (
-            <div key={item.id} className="py-4 flex flex-col md:flex-row md:items-start justify-between gap-4 hover:bg-slate-800/20 px-2 rounded-xl transition-colors">
-              <div className="space-y-1.5 flex-1">
-                <div className="flex items-center gap-3">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                    item.gravidade === 'CRITICA'
-                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                      : item.gravidade === 'ALTA'
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                      : 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
-                  }`}>
-                    {item.gravidade}
-                  </span>
-                  <span className="font-bold text-white text-xs">{item.colaboradorNome}</span>
-                  <span className="text-slate-500 text-[11px] font-mono">({item.colaboradorCpf})</span>
-                  <span className="text-slate-500 text-[11px]">| {item.departamento}</span>
-                </div>
-
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {item.detalhe}
-                </p>
-
-                <div className="flex items-center gap-4 text-[11px] text-slate-400">
-                  <span className="text-indigo-400 font-medium">Base: {item.baseLegal}</span>
-                  <span>•</span>
-                  <span>Data: {item.data.split('-').reverse().join('/')}</span>
-                </div>
-              </div>
-
-              <div className="flex flex-col md:items-end justify-center shrink-0">
-                <span className="text-[10px] text-slate-500">Passivo Indenizatório Previsto</span>
-                <span className="text-sm font-bold text-rose-400 font-mono">
-                  R$ {item.passivoEstimadoReais.toFixed(2)}
-                </span>
-                <span className="text-[10px] text-emerald-400 mt-0.5 flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3" />
-                  Ajustável no Espelho
-                </span>
-              </div>
+          {listaFiltrada.length === 0 ? (
+            <div className="py-10 text-center text-xs text-slate-400">
+              Nenhuma infração ou passivo trabalhista detectado nos registros de ponto atuais.
             </div>
-          ))}
+          ) : (
+            listaFiltrada.map((item) => (
+              <div key={item.id} className="py-4 flex flex-col md:flex-row md:items-start justify-between gap-4 hover:bg-slate-800/20 px-2 rounded-xl transition-colors">
+                <div className="space-y-1.5 flex-1">
+                  <div className="flex items-center gap-3">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      item.gravidade === 'CRITICA'
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                        : item.gravidade === 'ALTA'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
+                    }`}>
+                      {item.gravidade}
+                    </span>
+                    <span className="font-bold text-white text-xs">{item.colaboradorNome}</span>
+                    <span className="text-slate-500 text-[11px] font-mono">({item.colaboradorCpf})</span>
+                    <span className="text-slate-500 text-[11px]">| {item.departamento}</span>
+                  </div>
+
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {item.detalhe}
+                  </p>
+
+                  <div className="flex items-center gap-4 text-[11px] text-slate-400">
+                    <span className="text-indigo-400 font-medium">Base: {item.baseLegal}</span>
+                    <span>•</span>
+                    <span>Data: {item.data.split('-').reverse().join('/')}</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col md:items-end justify-center shrink-0">
+                  <span className="text-[10px] text-slate-500">Passivo Indenizatório Previsto</span>
+                  <span className="text-sm font-bold text-rose-400 font-mono">
+                    R$ {item.passivoEstimadoReais.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-emerald-400 mt-0.5 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" />
+                    Ajustável no Espelho
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

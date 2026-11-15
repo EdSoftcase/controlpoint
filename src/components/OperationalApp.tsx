@@ -127,6 +127,15 @@ import {
   Edit3
 } from 'lucide-react';
 import { fetchAddressByCep, formatCep, geocodeBrazilianAddress } from '../utils/cepGeocoding';
+import {
+  getBrasiliaNow,
+  getBrasiliaParts,
+  getBrasiliaYmd,
+  getBrasiliaMinutesOfDay,
+  getBrasiliaDayOfWeek,
+  formatBrasiliaTime
+} from '../utils/brasiliaClock';
+import { hasRealBiometricTemplate } from '../utils/biometricHelpers';
 
 export const DEFAULT_TENANT: Tenant = {
   id: 'tenant-01',
@@ -431,7 +440,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   operationalTab: propOperationalTab,
   onSelectOperationalTab: propOnSelectOperationalTab
 }) => {
-  const { session, updateSupabaseConfig, supabase } = useAuth();
+  const { session, authToken, updateSupabaseConfig, supabase } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
   
   // Inicializa listener de Background Sync para PWA Offline -> Supabase
   useEffect(() => {
@@ -469,9 +479,20 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               licencasContratadas: Number(t.licencas_contratadas) || 500,
               licencasEmUso: 0,
               status: (t.status as any) || 'ATIVO',
-              dataAdesao: t.created_at || new Date().toISOString(),
+              dataAdesao: t.created_at || getBrasiliaParts().iso,
               emailAdmin: t.email_admin || 'admin@softcase.com.br',
-              ...loc
+              cep: t.cep ?? loc.cep,
+              logradouro: t.logradouro ?? loc.logradouro,
+              numero: t.numero ?? loc.numero,
+              complemento: t.complemento ?? loc.complemento,
+              bairro: t.bairro ?? loc.bairro,
+              municipio: t.municipio ?? loc.municipio,
+              uf: t.uf ?? loc.uf,
+              enderecoCompleto: t.endereco_completo ?? loc.enderecoCompleto,
+              latitude: t.latitude != null ? Number(t.latitude) : loc.latitude,
+              longitude: t.longitude != null ? Number(t.longitude) : loc.longitude,
+              cercaRaioMetros: t.cerca_raio_metros != null ? Number(t.cerca_raio_metros) : loc.cercaRaioMetros,
+              bloquearForaDoRaio: t.bloquear_fora_do_raio ?? loc.bloquearForaDoRaio ?? true
             };
           }));
         } else {
@@ -481,36 +502,44 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         // Carrega Colaboradores
         const { data: colabsData } = await supabase.from('collaborators').select('*');
         if (colabsData && colabsData.length > 0) {
-          setColaboradores(colabsData.map(c => ({
-            id: c.collaborator_id,
-            tenantId: c.tenant_id,
-            nome: c.nome,
-            cpf: c.cpf,
-            matricula: c.matricula,
-            pis: c.pis,
-            dataAdmissao: c.data_admissao,
-            cargoId: c.cargo_id,
-            cargoTitulo: c.cargo_titulo,
-            departamentoId: c.departamento_id,
-            departamentoNome: c.departamento_nome,
-            gestorId: c.gestor_id,
-            gestorNome: c.gestor_nome,
-            estabelecimentoId: c.estabelecimento_id,
-            estabelecimentoNome: c.estabelecimento_nome,
-            regime: c.regime as any,
-            horarioInicio: c.horario_inicio,
-            horarioFim: c.horario_fim,
-            cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria),
-            intervaloMinutos: c.intervalo_minutos,
-            maxMinutosAntecedenciaPermitido: c.max_minutos_antecedencia,
-            regraAntecedenciaAtiva: c.regra_antecedencia_ativa,
-            pinColetor: c.pin_coletor,
-            status: c.status as any,
-            biometriaCadastrada: Boolean(c.biometric_template || c.biometria_cadastrada || c.biometria_hash_template || (typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${c.collaborator_id}`))),
-            biometriaHashTemplate: c.biometric_template || c.biometria_hash_template || 'ISO19794-5:AES-256',
-            limiarConfiancaMinimo: c.limiar_confianca_minimo || 95.0,
-            email: c.email || ''
-          })));
+          setColaboradores(colabsData.map(c => {
+            const localVecRaw = typeof window !== 'undefined' ? localStorage.getItem(`sc_bio_vec_${c.collaborator_id}`) : null;
+            const rawTemplate = c.biometric_template || c.biometria_hash_template || localVecRaw || undefined;
+            const hasBio = hasRealBiometricTemplate({
+              biometriaCadastrada: c.biometria_cadastrada,
+              biometriaHashTemplate: rawTemplate
+            });
+            return {
+              id: c.collaborator_id,
+              tenantId: c.tenant_id,
+              nome: c.nome,
+              cpf: c.cpf,
+              matricula: c.matricula,
+              pis: c.pis,
+              dataAdmissao: c.data_admissao,
+              cargoId: c.cargo_id,
+              cargoTitulo: c.cargo_titulo,
+              departamentoId: c.departamento_id,
+              departamentoNome: c.departamento_nome,
+              gestorId: c.gestor_id,
+              gestorNome: c.gestor_nome,
+              estabelecimentoId: c.estabelecimento_id,
+              estabelecimentoNome: c.estabelecimento_nome,
+              regime: c.regime as any,
+              horarioInicio: c.horario_inicio,
+              horarioFim: c.horario_fim,
+              cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria),
+              intervaloMinutos: c.intervalo_minutos,
+              maxMinutosAntecedenciaPermitido: c.max_minutos_antecedencia,
+              regraAntecedenciaAtiva: c.regra_antecedencia_ativa,
+              pinColetor: c.pin_coletor,
+              status: c.status as any,
+              biometriaCadastrada: hasBio,
+              biometriaHashTemplate: rawTemplate,
+              limiarConfiancaMinimo: c.limiar_confianca_minimo || 95.0,
+              email: c.email || ''
+            };
+          }));
         } else {
           setColaboradores(DEFAULT_COLABORADORES);
         }
@@ -523,13 +552,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             nome: e.nome,
             cnpj: e.cnpj,
             codigo: (e.establishment_id || '').split('-')[0] || 'EST',
-            tipo: (e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL',
+            tipo: (e.tipo as any) || ((e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL'),
             fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
             uf: e.uf || 'SP',
             municipio: e.municipio || 'São Paulo',
             enderecoCompleto: e.endereco_completo || '',
-            latitude: Number(e.latitude) || -23.561684,
-            longitude: Number(e.longitude) || -46.655981,
+            cep: e.cep || '',
+            latitude: e.latitude != null ? Number(e.latitude) : Number.NaN,
+            longitude: e.longitude != null ? Number(e.longitude) : Number.NaN,
             cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
             bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
         })));
@@ -548,12 +578,12 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 colaboradorCpf: detalhes?.colaboradorCpf || '000.000.000-00',
                 colaboradorMatricula: detalhes?.colaboradorMatricula || 'SC-0000',
                 dataHora: p.data_hora,
-                dataHoraFormatada: new Date(p.data_hora).toLocaleString('pt-BR'),
+                dataHoraFormatada: getBrasiliaParts(p.data_hora).formatted,
                 fusoHorario: '-03:00',
                 coletorId: detalhes?.coletorId || '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
                 tipoMarcacao: p.tipo_marcacao as any,
-                latitude: Number(p.latitude),
-                longitude: Number(p.longitude),
+                latitude: p.latitude != null ? Number(p.latitude) : 0,
+                longitude: p.longitude != null ? Number(p.longitude) : 0,
                 hashSha256: p.hash_sha256,
                 modoDispositivo: p.modo_dispositivo as any,
                 alertaAntecedencia: detalhes?.alertaAntecedencia,
@@ -567,7 +597,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
     
     fetchData();
-  }, [session, supabase]);
+  }, [session, authToken, supabase]);
   
   // Estado dos Dados Operacionais (com fallback local seguro)
   const [tenants, setTenants] = useState<Tenant[]>([DEFAULT_TENANT]);
@@ -584,8 +614,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         tenant_id: e.tenantId,
         nome: e.nome,
         cnpj: e.cnpj,
-        latitude: e.latitude,
-        longitude: e.longitude,
+        tipo: e.tipo || 'FILIAL',
+        cep: e.cep || null,
+        latitude: Number.isFinite(e.latitude) ? e.latitude : null,
+        longitude: Number.isFinite(e.longitude) ? e.longitude : null,
         cerca_raio_metros: e.cercaRaioMetros,
         bloquear_fora_do_raio: e.bloquearForaDoRaio,
         endereco_completo: e.enderecoCompleto,
@@ -593,7 +625,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         uf: e.uf,
         fuso_horario: e.fusoHorario
       }));
-      await supabase.from('establishments').upsert(dbEsts);
+      await supabase.from('establishments').upsert(dbEsts, { onConflict: 'establishment_id' });
     }
   };
 
@@ -662,10 +694,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     propOnSelectOperationalTab?.(tab);
   };
 
-  // Relógio em tempo real do Coletor Tablet
-  const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
+  // Relógio em tempo real do Coletor Tablet (Horário Oficial de Brasília)
+  const [currentDateTime, setCurrentDateTime] = useState<Date>(() => getBrasiliaNow());
   useEffect(() => {
-    const timer = setInterval(() => setCurrentDateTime(new Date()), 1000);
+    const timer = setInterval(() => setCurrentDateTime(getBrasiliaNow()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -719,9 +751,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       const res = await fetch('/api/status');
       const data = await res.json();
       setSystemStatus({
-        supabaseConnected: data.supabaseConnected,
-        env: data.env,
-        lastChecked: new Date().toLocaleTimeString(),
+        supabaseConnected: Boolean(data.supabaseConnected),
+        env: data.env ?? {
+          url: Boolean(data.supabaseConnected),
+          key: Boolean(data.supabaseConnected),
+          encryption: true
+        },
+        lastChecked: formatBrasiliaTime(undefined, true),
         loading: false
       });
     } catch (err) {
@@ -754,8 +790,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     bairro: '',
     municipio: '',
     uf: 'SP',
-    latitude: -23.561684,
-    longitude: -46.655981,
+    latitude: '' as unknown as number,
+    longitude: '' as unknown as number,
     cercaRaioMetros: 100,
     bloquearForaDoRaio: true
   });
@@ -763,6 +799,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   // Modal Novo Colaborador
   const [isNewColabModalOpen, setIsNewColabModalOpen] = useState(false);
+  const [newColabError, setNewColabError] = useState<string | null>(null);
+  const [pendingRejectColabId, setPendingRejectColabId] = useState<string | null>(null);
+  const [kioskPinError, setKioskPinError] = useState<string | null>(null);
   const [newColabForm, setNewColabForm] = useState({
     tenantId: '',
     nome: '',
@@ -843,11 +882,6 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       } catch (_) {}
     }
 
-    // 3. Contingência: caso seja o colaborador Edson Freire Santos
-    if (!email && colab.nome?.toLowerCase().includes('edson')) {
-      email = 'edsonfreire.santos@hotmail.com';
-    }
-
     return {
       email: email || 'Não informado',
       telefone: telefone || 'Não informado',
@@ -905,15 +939,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setColaboradores(novosColabs);
 
     try {
-      const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
-      await fetch('/api/save-collaborator', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(colabAtualizado)
-      });
+      if (bearerToken) {
+        await fetch('/api/save-collaborator', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(colabAtualizado)
+        });
+      }
 
       await supabase.from('collaborators').update({
         status: 'ATIVO',
@@ -924,7 +959,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         departamento_id: deptoObj.id,
         departamento_nome: deptoObj.nome,
         cargo_id: cargoObj.id,
-        cargo_titulo: cargoObj.titulo
+        cargo_titulo: cargoObj.titulo,
+        updated_at: getBrasiliaParts().iso
       }).eq('collaborator_id', colabId);
     } catch (err) {
       console.warn('Aviso ao sincronizar aprovação no Supabase:', err);
@@ -953,22 +989,23 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         cargo_titulo: updatedColab.cargoTitulo,
         regime: updatedColab.regime,
         status: updatedColab.status,
-        updated_at: new Date().toISOString()
+        updated_at: getBrasiliaParts().iso
       }).eq('collaborator_id', updatedColab.id);
 
       if (sbErr) {
         console.warn('Aviso ao atualizar alocação no Supabase:', sbErr);
       }
 
-      const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
-      await fetch('/api/save-collaborator', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(updatedColab)
-      });
+      if (bearerToken) {
+        await fetch('/api/save-collaborator', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(updatedColab)
+        });
+      }
     } catch (err) {
       console.warn('Aviso ao sincronizar alocação do colaborador:', err);
     }
@@ -979,28 +1016,47 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setTimeout(() => setColabApprovalNotice(null), 4500);
   };
 
-  const handleRecusarAutoCadastro = async (colabId: string) => {
-    const colab = colaboradores.find((c) => c.id === colabId);
-    if (!colab) return;
+  const executeRejectColabIds = async (ids: string[]) => {
+    const idSet = new Set(ids);
+    const removed = colaboradores.filter((c) => idSet.has(c.id));
+    if (removed.length === 0) return;
 
-    if (window.confirm(`Deseja recusar o auto-cadastro de ${colab.nome}?`)) {
-      const novosColabs = colaboradores.filter((c) => c.id !== colabId);
-      setColaboradores(novosColabs);
+    setColaboradores(colaboradores.filter((c) => !idSet.has(c.id)));
 
-      try {
-        await supabase.from('collaborators').delete().eq('collaborator_id', colabId);
-      } catch (err) {
-        console.warn('Aviso ao excluir no Supabase:', err);
-      }
-
-      setColabApprovalNotice(`Auto-cadastro de ${colab.nome} foi recusado.`);
-      setTimeout(() => setColabApprovalNotice(null), 3000);
+    try {
+      await supabase.from('collaborators').delete().in('collaborator_id', ids);
+    } catch (err) {
+      console.warn('Aviso ao excluir no Supabase:', err);
     }
+
+    setColabApprovalNotice(
+      removed.length === 1
+        ? `Auto-cadastro de ${removed[0].nome} foi recusado.`
+        : `${removed.length} auto-cadastros recusados.`
+    );
+    setTimeout(() => setColabApprovalNotice(null), 3000);
   };
 
-  // Data e Hora Oficial em Tempo Real (Modo Produção)
+  const handleRecusarAutoCadastro = (colabId: string, skipConfirm = false) => {
+    const colab = colaboradores.find((c) => c.id === colabId);
+    if (!colab) return;
+    if (skipConfirm) {
+      void executeRejectColabIds([colabId]);
+      return;
+    }
+    setPendingRejectColabId(colabId);
+  };
+
+  const confirmRecusarAutoCadastro = async () => {
+    if (!pendingRejectColabId) return;
+    const colabId = pendingRejectColabId;
+    setPendingRejectColabId(null);
+    await executeRejectColabIds([colabId]);
+  };
+
+  // Data e Hora Oficial em Tempo Real (Horário de Brasília Sincronizado)
   const getEffectiveClockTime = (): Date => {
-    return new Date();
+    return getBrasiliaNow();
   };
 
   // Estado da Biometria Facial no Coletor
@@ -1061,13 +1117,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     return () => clearTimeout(timer);
   }, [biometricCountdown, currentLivenessChallenge]);
 
-  // GPS Geolocation State
-  const [gpsData, setGpsData] = useState<{ lat: number; lng: number; address: string; inGeofence: boolean } | null>({
-    lat: -23.561684,
-    lng: -46.655981,
-    address: 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP',
-    inGeofence: true
-  });
+  // GPS Geolocation State (Sem fallback fictício)
+  const [gpsData, setGpsData] = useState<{ lat: number; lng: number; address: string; inGeofence: boolean } | null>(null);
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -1076,12 +1127,12 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           setGpsData({
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
-            address: `Lat: ${pos.coords.latitude.toFixed(4)}, Long: ${pos.coords.longitude.toFixed(4)} (Perímetro Validado)`,
+            address: `Lat: ${pos.coords.latitude.toFixed(4)}, Long: ${pos.coords.longitude.toFixed(4)} (GPS Capturado)`,
             inGeofence: true
           });
         },
         () => {
-          // Fallback seguro
+          setGpsData(null);
         }
       );
     }
@@ -1120,12 +1171,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setDetectedFaceBox(null);
     setCurrentLivenessChallenge(getRandomLivenessChallenge());
 
-    // 1. Validação Prévia: Colaborador possui biometria cadastrada?
-    const hasBiometry = Boolean(
-      biometricTargetColab.biometriaCadastrada || 
-      Boolean(biometricTargetColab.biometriaHashTemplate) ||
-      Boolean(typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${biometricTargetColab.id}`))
-    );
+    // 1. Validação Prévia: Colaborador possui template biométrico facial real?
+    const hasBiometry =
+      hasRealBiometricTemplate(biometricTargetColab) ||
+      (typeof window !== 'undefined' &&
+        hasRealBiometricTemplate(localStorage.getItem(`sc_bio_vec_${biometricTargetColab.id}`)));
 
     if (!hasBiometry) {
       setIsCameraActive(false);
@@ -1450,15 +1500,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    // Validação estrita de horário de permissão de Entrada (15 min antes até 1h depois)
+    // Validação estrita de horário de permissão de Entrada (15 min antes até 1h depois) - Horário de Brasília
     const targetType = forcedType || selectedPunchType;
-    const clockTime = new Date();
-    const hojeYMD = clockTime.toISOString().slice(0, 10);
-    const batidasHoje = registrosPonto.filter((r) => r.colaboradorId === colab.id && r.dataHora.startsWith(hojeYMD));
+    const clockTime = getBrasiliaNow();
+    const brParts = getBrasiliaParts(clockTime);
+    const hojeYMD = brParts.ymd;
+    const batidasHoje = registrosPonto.filter((r) => r.colaboradorId === colab.id && getBrasiliaYmd(r.dataHora) === hojeYMD);
     const isEntrada = targetType === 'ENTRADA' || (targetType === 'AUTO' && batidasHoje.length === 0);
 
     if (isEntrada && colab.regraAntecedenciaAtiva !== false) {
-      const dayOfWeek = clockTime.getDay();
+      const dayOfWeek = brParts.dayOfWeek;
       const diasNomes = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
       const diaAtualNome = diasNomes[dayOfWeek];
 
@@ -1466,7 +1517,17 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         ? [] 
         : (colab.tipoEscala === '6x1' ? [0] : (colab.tipoEscala === '5x2' ? [0, 6] : []));
       const diasFolgaEscala = colab.diasFolgaSemana ?? defaultFolgas;
-      const isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek);
+      const isFolgaAnual = Boolean(colab.anualFolgas?.[hojeYMD]);
+      let isFolga12x36 = false;
+      if (colab.tipoEscala === '12x36' && colab.dataBaseCiclo) {
+        const startMs = new Date(`${colab.dataBaseCiclo}T00:00:00-03:00`).getTime();
+        const currMs = new Date(`${hojeYMD}T00:00:00-03:00`).getTime();
+        if (Number.isFinite(startMs) && Number.isFinite(currMs)) {
+          const diffDays = Math.round((currMs - startMs) / (24 * 60 * 60 * 1000));
+          isFolga12x36 = Math.abs(diffDays % 2) === 1;
+        }
+      }
+      const isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek) || isFolgaAnual || isFolga12x36;
 
       if (isHojeDiaFolga) {
         setKioskFeedback({
@@ -1481,7 +1542,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       const minutosInicioContratado = hInicio * 60 + mInicio;
       const janelaInicioPermitida = minutosInicioContratado - (colab.maxMinutosAntecedenciaPermitido || 15);
       const janelaFimPermitida = minutosInicioContratado + 60; // 1 hora depois
-      const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
+      const minutosAtuais = brParts.minutesOfDay;
 
       const fmtStartHH = String(Math.floor(((janelaInicioPermitida + 1440) % 1440) / 60)).padStart(2, '0');
       const fmtStartMM = String(((janelaInicioPermitida + 1440) % 1440) % 60).padStart(2, '0');
@@ -1509,6 +1570,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     // Abre o Modal de Reconhecimento Facial com Prova de Vida Ativa
+    setKioskPinError(null);
+    setShowPinFallback(false);
+    setKioskPinInput('');
     setBiometricTargetColab(colab);
     setBiometricPendingType(targetType);
     setScanProgress(0);
@@ -1545,11 +1609,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    const hasBiometry = Boolean(
-      colab.biometriaCadastrada || 
-      Boolean(colab.biometriaHashTemplate) ||
-      Boolean(typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${colab.id}`))
-    );
+    const hasBiometry =
+      hasRealBiometricTemplate(colab) ||
+      (typeof window !== 'undefined' &&
+        hasRealBiometricTemplate(localStorage.getItem(`sc_bio_vec_${colab.id}`)));
     if (!hasBiometry) {
       setKioskFeedback({
         type: 'ERROR',
@@ -1560,9 +1623,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     const clockTime = getEffectiveClockTime();
-    const hojeYMD = clockTime.toISOString().slice(0, 10);
+    const brParts = getBrasiliaParts(clockTime);
+    const hojeYMD = brParts.ymd;
     const batidasHoje = registrosPonto.filter(
-      (r) => r.colaboradorId === colab.id && r.dataHora.startsWith(hojeYMD)
+      (r) => r.colaboradorId === colab.id && getBrasiliaYmd(r.dataHora) === hojeYMD
     );
 
     // Determina o tipo de marcação
@@ -1684,14 +1748,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const estColab =
       estabelecimentos.find((e) => e.id === colab.estabelecimentoId) ||
       estabelecimentos.find((e) => e.tenantId === colab.tenantId) ||
-      estabelecimentos[0] || {
-        id: 'est-01',
-        latitude: -23.561684,
-        longitude: -46.655981,
-        cercaRaioMetros: 100,
-        bloquearForaDoRaio: true,
-        nome: 'Sede Administrativa'
-      };
+      estabelecimentos[0];
+
+    const hasEstCoords = Boolean(
+      estColab &&
+      Number.isFinite(estColab.latitude) &&
+      Number.isFinite(estColab.longitude)
+    );
 
     let currentGps = gpsData;
     if (typeof window !== 'undefined' && navigator.geolocation) {
@@ -1713,28 +1776,44 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           );
         });
       } catch (e) {
-        // Fallback para gpsData existente
+        // Fallback para gpsData existente se já capturado
       }
     }
 
-    let distMetrosGeofence = 12;
-    if (currentGps) {
-      distMetrosGeofence = calculateDistanceMeters(currentGps.lat, currentGps.lng, estColab.latitude, estColab.longitude);
-    }
-
-    const foraDaCerca = distMetrosGeofence > estColab.cercaRaioMetros;
-
-    if (foraDaCerca) {
-      if (estColab.bloquearForaDoRaio !== false) {
-        setBiometricTargetColab(null);
-        setKioskFeedback({
-          type: 'ERROR',
-          msg: `Bloqueio de Geofencing: Ponto recusado para ${colab.nome}. Sua posição GPS atual está a ${distMetrosGeofence}m da unidade "${estColab.nome}" (raio máximo permitido: ${estColab.cercaRaioMetros}m).`
-        });
-        setTimeout(() => setKioskFeedback(null), 6000);
-        return;
+    if (hasEstCoords && estColab) {
+      if (!currentGps) {
+        if (estColab.bloquearForaDoRaio !== false) {
+          setBiometricTargetColab(null);
+          setKioskFeedback({
+            type: 'ERROR',
+            msg: `Localização GPS Obrigatória: Ative a permissão de geolocalização no navegador para validar o perímetro da unidade "${estColab.nome}".`
+          });
+          setTimeout(() => setKioskFeedback(null), 6000);
+          return;
+        } else {
+          alertaGeofence = `AVISO GEOFENCING AO RH: Marcação realizada sem sinal de GPS ativo no coletor para a unidade "${estColab.nome}".`;
+        }
       } else {
-        alertaGeofence = `AVISO GEOFENCING AO RH: Marcação realizada a ${distMetrosGeofence}m do centro da unidade "${estColab.nome}" (raio máximo cadastrado: ${estColab.cercaRaioMetros}m).`;
+        const distMetrosGeofence = calculateDistanceMeters(
+          currentGps.lat,
+          currentGps.lng,
+          estColab.latitude,
+          estColab.longitude
+        );
+        const raioMax = estColab.cercaRaioMetros || 100;
+        if (distMetrosGeofence > raioMax) {
+          if (estColab.bloquearForaDoRaio !== false) {
+            setBiometricTargetColab(null);
+            setKioskFeedback({
+              type: 'ERROR',
+              msg: `Bloqueio de Geofencing: Ponto recusado para ${colab.nome}. Sua posição GPS atual está a ${distMetrosGeofence}m da unidade "${estColab.nome}" (raio máximo permitido: ${raioMax}m).`
+            });
+            setTimeout(() => setKioskFeedback(null), 6000);
+            return;
+          } else {
+            alertaGeofence = `AVISO GEOFENCING AO RH: Marcação realizada a ${distMetrosGeofence}m do centro da unidade "${estColab.nome}" (raio máximo cadastrado: ${raioMax}m).`;
+          }
+        }
       }
     }
 
@@ -1746,7 +1825,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       const minutosInicioContratado = hInicio * 60 + mInicio;
       const janelaInicioPermitida = minutosInicioContratado - (colab.maxMinutosAntecedenciaPermitido || 15);
       const janelaFimPermitida = minutosInicioContratado + 60; // 1h depois
-      const minutosAtuais = clockTime.getHours() * 60 + clockTime.getMinutes();
+      const minutosAtuais = brParts.minutesOfDay;
 
       const fmtStartHH = String(Math.floor(((janelaInicioPermitida + 1440) % 1440) / 60)).padStart(2, '0');
       const fmtStartMM = String(((janelaInicioPermitida + 1440) % 1440) % 60).padStart(2, '0');
@@ -1798,10 +1877,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       tenantId: activeTenant.id,
       colaboradorId: colab.id,
       tipoMarcacao: tipo,
-      latitude: gpsData?.lat || -23.561684,
-      longitude: gpsData?.lng || -46.655981,
+      latitude: currentGps?.lat ?? null,
+      longitude: currentGps?.lng ?? null,
       modoDispositivo: isCameraActive ? 'WEB_CAM' : 'TABLET_KIOSK',
-      alertaAntecedencia: alertaAntecedencia || undefined,
+      alertaAntecedencia: alertaAntecedencia || alertaGeofence || undefined,
       alertaIntervalo: alertaIntervalo || undefined,
       biometricAudit: {
         similarity: parseFloat(biometricConfidence) || 0,
@@ -1817,8 +1896,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     // PERSISTÊNCIA SERVER-SIDE (REP-P PORTARIA 671) OU INDEXEDDB (OFFLINE)
     if (!navigator.onLine) {
       const tempNsr = registrosPonto.length + 1;
-      const nowIso = clockTime.toISOString();
-      const dataHoraFmt = `${String(clockTime.getDate()).padStart(2, '0')}/${String(clockTime.getMonth() + 1).padStart(2, '0')}/${clockTime.getFullYear()} ${String(clockTime.getHours()).padStart(2, '0')}:${String(clockTime.getMinutes()).padStart(2, '0')}:${String(clockTime.getSeconds()).padStart(2, '0')}`;
+      const nowIso = brParts.iso;
+      const dataHoraFmt = brParts.formatted;
       novoRegistro = {
         nsr: tempNsr,
         tenantId: activeTenant.id,
@@ -1833,37 +1912,51 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         fusoHorario: '-03:00',
         coletorId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
         tipoMarcacao: tipo,
-        alertaAntecedencia,
+        alertaAntecedencia: alertaAntecedencia || alertaGeofence,
         alertaIntervalo,
         hashSha256: 'OFFLINE_PENDING_SERVER_HASH',
-        latitude: punchPayload.latitude,
-        longitude: punchPayload.longitude,
+        latitude: punchPayload.latitude ?? 0,
+        longitude: punchPayload.longitude ?? 0,
         modoDispositivo: punchPayload.modoDispositivo as 'WEB_CAM' | 'TABLET_KIOSK'
       };
       await saveOfflinePunchToIDB(novoRegistro);
       console.warn('Dispositivo offline. Batida salva no IndexedDB para sincronização posterior.');
     } else {
+      if (!bearerToken) {
+        setBiometricTargetColab(null);
+        setKioskFeedback({
+          type: 'ERROR',
+          msg: 'Sessão expirada. Faça login novamente antes de registrar o ponto.'
+        });
+        setTimeout(() => setKioskFeedback(null), 5000);
+        return;
+      }
+
       try {
-        const token = session?.access_token || 'admin-session-token';
         const res = await fetch('/api/punch', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${bearerToken}`
           },
           body: JSON.stringify(punchPayload)
         });
         const data = await res.json();
-        if (data.success && data.registro) {
-          novoRegistro = data.registro;
-        } else {
-          throw new Error(data.error || 'Falha ao registrar ponto no servidor');
+        if (!res.ok || !data.success || !data.registro) {
+          setBiometricTargetColab(null);
+          setKioskFeedback({
+            type: 'ERROR',
+            msg: data.error || 'Marcação recusada pelo servidor REP-P.'
+          });
+          setTimeout(() => setKioskFeedback(null), 6000);
+          return;
         }
+        novoRegistro = data.registro;
       } catch (err) {
-        console.warn('Erro em /api/punch, salvando na fila offline:', err);
+        console.warn('Falha de rede em /api/punch, salvando na fila offline:', err);
         const tempNsr = registrosPonto.length + 1;
-        const nowIso = clockTime.toISOString();
-        const dataHoraFmt = `${String(clockTime.getDate()).padStart(2, '0')}/${String(clockTime.getMonth() + 1).padStart(2, '0')}/${clockTime.getFullYear()} ${String(clockTime.getHours()).padStart(2, '0')}:${String(clockTime.getMinutes()).padStart(2, '0')}:${String(clockTime.getSeconds()).padStart(2, '0')}`;
+        const nowIso = brParts.iso;
+        const dataHoraFmt = brParts.formatted;
         novoRegistro = {
           nsr: tempNsr,
           tenantId: activeTenant.id,
@@ -1878,11 +1971,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           fusoHorario: '-03:00',
           coletorId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
           tipoMarcacao: tipo,
-          alertaAntecedencia,
+          alertaAntecedencia: alertaAntecedencia || alertaGeofence,
           alertaIntervalo,
           hashSha256: 'OFFLINE_PENDING_SERVER_HASH',
-          latitude: punchPayload.latitude,
-          longitude: punchPayload.longitude,
+          latitude: punchPayload.latitude ?? 0,
+          longitude: punchPayload.longitude ?? 0,
           modoDispositivo: punchPayload.modoDispositivo as 'WEB_CAM' | 'TABLET_KIOSK'
         };
         await saveOfflinePunchToIDB(novoRegistro);
@@ -1903,11 +1996,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         ? 'Retorno do Intervalo'
         : '2ª Saída (Término)';
 
-    if (alertaAntecedencia || alertaIntervalo) {
+    if (alertaAntecedencia || alertaIntervalo || alertaGeofence) {
       setKioskFeedback({
         type: 'WARNING',
         msg: `Atenção: Ponto de ${labelTipo} (com Biometria Facial) registrado com observação legal! NSR ${String(novoRegistro.nsr).padStart(9, '0')}.`,
-        details: alertaAntecedencia || alertaIntervalo
+        details: alertaAntecedencia || alertaIntervalo || alertaGeofence
       });
     } else if (tipo === 'SAIDA') {
       const allToday = [...batidasHoje, novoRegistro];
@@ -1945,7 +2038,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `AFD_${activeTenant.cnpj.replace(/\D/g, '')}_${new Date().toISOString().slice(0, 10)}.txt`;
+    link.download = `AFD_${activeTenant.cnpj.replace(/\D/g, '')}_${getBrasiliaYmd()}.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1959,7 +2052,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `AEJ_${activeTenant.cnpj.replace(/\D/g, '')}_${new Date().toISOString().slice(0, 10)}.txt`;
+    link.download = `AEJ_${activeTenant.cnpj.replace(/\D/g, '')}_${getBrasiliaYmd()}.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1986,9 +2079,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const enderecoCompleto = [compPart, cityPart].filter(Boolean).join(' · ') || 'Endereço sede não informado';
 
     const tenantId = `tenant-${Date.now()}`;
-    const lat = Number(newTenantForm.latitude) || -23.561684;
-    const lng = Number(newTenantForm.longitude) || -46.655981;
+    const rawLat = String(newTenantForm.latitude ?? '').trim();
+    const rawLng = String(newTenantForm.longitude ?? '').trim();
+    const lat = rawLat !== '' && Number.isFinite(Number(rawLat)) ? Number(rawLat) : Number.NaN;
+    const lng = rawLng !== '' && Number.isFinite(Number(rawLng)) ? Number(rawLng) : Number.NaN;
     const raio = Number(newTenantForm.cercaRaioMetros) || 100;
+
+    if (!bearerToken) {
+      setNewTenantError('Sessão autenticada necessária para salvar empresa no Supabase.');
+      return;
+    }
 
     const novo: Tenant = {
       id: tenantId,
@@ -2000,7 +2100,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       licencasContratadas: Number(newTenantForm.licencas) || 100,
       licencasEmUso: 0,
       status: 'ATIVO',
-      dataAdesao: new Date().toISOString().slice(0, 10),
+      dataAdesao: getBrasiliaYmd(),
       emailAdmin: newTenantForm.emailAdmin || 'admin@cliente.com.br',
       cep: newTenantForm.cep,
       logradouro: newTenantForm.logradouro,
@@ -2010,33 +2110,29 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       municipio: newTenantForm.municipio || 'São Paulo',
       uf: (newTenantForm.uf || 'SP').toUpperCase(),
       enderecoCompleto,
-      latitude: lat,
-      longitude: lng,
+      latitude: Number.isFinite(lat) ? lat : undefined,
+      longitude: Number.isFinite(lng) ? lng : undefined,
       cercaRaioMetros: raio,
       bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio
     };
 
     // PERSISTÊNCIA NO SUPABASE (BLOQUEANTE)
-    if (session) {
-      try {
-        const response = await fetch('/api/save-tenant', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}` 
-          },
-          body: JSON.stringify(novo)
-        });
-        
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Falha ao salvar no Supabase');
-        
-        console.log('Tenant persistido no Supabase com sucesso.');
-      } catch (err) {
-        console.error('Erro de persistência:', err);
-        setNewTenantError(`ERRO DE SINCRONIZAÇÃO: A empresa não pôde ser salva no Supabase. O registro foi bloqueado. Erro: ${err instanceof Error ? err.message : 'Falha de rede'}`);
-        return; // BLOQUEIA A ATUALIZAÇÃO LOCAL
-      }
+    try {
+      const response = await fetch('/api/save-tenant', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${bearerToken}` 
+        },
+        body: JSON.stringify(novo)
+      });
+      
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Falha ao salvar no Supabase');
+    } catch (err) {
+      console.error('Erro de persistência:', err);
+      setNewTenantError(`ERRO DE SINCRONIZAÇÃO: A empresa não pôde ser salva no Supabase. O registro foi bloqueado. Erro: ${err instanceof Error ? err.message : 'Falha de rede'}`);
+      return;
     }
 
     // Cachear localização completa do Tenant no navegador para recarregamentos
@@ -2071,8 +2167,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       tipo: 'MATRIZ',
       fusoHorario: 'America/Sao_Paulo',
       cercaRaioMetros: raio,
-      latitude: lat,
-      longitude: lng,
+      latitude: Number.isFinite(lat) ? lat : Number.NaN,
+      longitude: Number.isFinite(lng) ? lng : Number.NaN,
       uf: (newTenantForm.uf || 'SP').toUpperCase(),
       municipio: newTenantForm.municipio || 'São Paulo',
       enderecoCompleto,
@@ -2086,15 +2182,17 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         tenant_id: novaMatriz.tenantId,
         nome: novaMatriz.nome,
         cnpj: novaMatriz.cnpj,
-        latitude: novaMatriz.latitude,
-        longitude: novaMatriz.longitude,
+        tipo: 'MATRIZ',
+        cep: novaMatriz.cep || null,
+        latitude: Number.isFinite(novaMatriz.latitude) ? novaMatriz.latitude : null,
+        longitude: Number.isFinite(novaMatriz.longitude) ? novaMatriz.longitude : null,
         cerca_raio_metros: novaMatriz.cercaRaioMetros,
         bloquear_fora_do_raio: novaMatriz.bloquearForaDoRaio,
         endereco_completo: novaMatriz.enderecoCompleto,
         municipio: novaMatriz.municipio,
         uf: novaMatriz.uf,
         fuso_horario: novaMatriz.fusoHorario
-      });
+      }, { onConflict: 'establishment_id' });
     } catch (err) {
       console.warn('Aviso ao criar estabelecimento matriz no Supabase:', err);
     }
@@ -2118,8 +2216,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       bairro: '',
       municipio: '',
       uf: 'SP',
-      latitude: -23.561684,
-      longitude: -46.655981,
+      latitude: '' as unknown as number,
+      longitude: '' as unknown as number,
       cercaRaioMetros: 100,
       bloquearForaDoRaio: true
     });
@@ -2128,14 +2226,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   // Ação: Criar Novo Colaborador
   const handleCreateColaborador = async () => {
+    setNewColabError(null);
     const cpfVal = validateCPF(newColabForm.cpf);
     if (!cpfVal.isValid) {
-      alert(cpfVal.error || 'CPF inválido');
+      setNewColabError(cpfVal.error || 'CPF inválido');
       return;
     }
 
     if (!newColabForm.nome.trim()) {
-      alert('Nome do colaborador é obrigatório');
+      setNewColabError('Nome do colaborador é obrigatório');
       return;
     }
 
@@ -2146,21 +2245,23 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const crg = (newColabForm.cargoId ? cargos.find((c) => c.id === newColabForm.cargoId) : null) || (cargos && cargos[0]) || DEFAULT_CRG;
     const est = (newColabForm.estabelecimentoId ? estabelecimentos.find((e) => e.id === newColabForm.estabelecimentoId) : null) || tenantEsts[0] || (estabelecimentos && estabelecimentos[0]) || DEFAULT_EST;
 
-    // Gerar credenciais se solicitado
+    // Gerar credenciais e PIN individual seguro (sem padrão fraco '123456')
     let generatedPass = '';
     const targetEmail = newColabForm.email.trim() || `${newColabForm.nome.split(' ')[0].toLowerCase()}.${newColabForm.cpf.replace(/\D/g, '').slice(0, 4)}@${currentTenant.slug || 'softcase'}.com`;
+    const pinFinal = newColabForm.pinColetor.trim() || String(Math.floor(100000 + Math.random() * 900000));
     
     if (newColabForm.gerarAcessoSistema) {
       generatedPass = Math.random().toString(36).slice(-8).toUpperCase() + '@' + Math.floor(100 + Math.random() * 900);
     }
 
+    const brNow = getBrasiliaParts();
     const novoColab: Colaborador = {
       id: `colab-${Date.now()}`,
       tenantId: currentTenant.id,
-      nome: newColabForm.nome,
+      nome: newColabForm.nome.trim(),
       cpf: newColabForm.cpf,
       matricula: newColabForm.matricula || `SC-${Math.floor(1000 + Math.random() * 9000)}`,
-      dataAdmissao: new Date().toISOString().slice(0, 10),
+      dataAdmissao: brNow.ymd,
       cargoId: crg.id,
       cargoTitulo: crg.titulo,
       departamentoId: dep.id,
@@ -2176,7 +2277,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       intervaloMinutos: dep.intervaloMinutos || 60,
       maxMinutosAntecedenciaPermitido: dep.maxMinutosAntecedenciaPermitido || 15,
       regraAntecedenciaAtiva: dep.regraAntecedenciaAtiva ?? true,
-      pinColetor: newColabForm.pinColetor || '123456',
+      pinColetor: pinFinal,
       status: 'ATIVO',
       email: targetEmail,
       senhaTemporaria: generatedPass
@@ -2184,7 +2285,6 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
     // PERSISTÊNCIA NO SUPABASE (DIRETA E ROBUSTA)
     try {
-      // 1. Salvar diretamente na tabela de colaboradores do Supabase
       const { error: sbColabError } = await supabase
         .from('collaborators')
         .upsert({
@@ -2211,26 +2311,26 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           max_minutos_antecedencia: novoColab.maxMinutosAntecedenciaPermitido,
           regra_antecedencia_ativa: novoColab.regraAntecedenciaAtiva,
           pin_coletor: novoColab.pinColetor,
+          email: novoColab.email,
           status: novoColab.status,
-          updated_at: new Date().toISOString()
+          updated_at: brNow.iso
         }, { onConflict: 'collaborator_id' });
 
       if (sbColabError) {
         console.warn('Aviso ao salvar direto no Supabase:', sbColabError);
       }
 
-      // 2. Chamar endpoint do backend para logging e auditoria
-      const token = session?.access_token || 'admin-session-token';
-      fetch('/api/save-collaborator', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify(novoColab)
-      }).catch(err => console.warn('Aviso backend save-collaborator:', err));
+      if (bearerToken) {
+        fetch('/api/save-collaborator', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}` 
+          },
+          body: JSON.stringify(novoColab)
+        }).catch(err => console.warn('Aviso backend save-collaborator:', err));
+      }
 
-      // 3. Criar usuário no Supabase Auth se solicitado
       if (newColabForm.gerarAcessoSistema && generatedPass) {
         supabase.auth.signUp({
           email: targetEmail,
@@ -2246,24 +2346,24 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           }
         }).catch(err => console.warn('Aviso signUp colaborador:', err));
 
-        fetch('/api/create-auth-user', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}` 
-          },
-          body: JSON.stringify({
-            email: targetEmail,
-            password: generatedPass,
-            nome: newColabForm.nome,
-            tenantId: currentTenant.id,
-            cpf: newColabForm.cpf,
-            role: 'COLABORADOR'
-          })
-        }).catch(() => {});
+        if (bearerToken) {
+          fetch('/api/create-auth-user', {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${bearerToken}` 
+            },
+            body: JSON.stringify({
+              email: targetEmail,
+              password: generatedPass,
+              nome: newColabForm.nome,
+              tenantId: currentTenant.id,
+              cpf: newColabForm.cpf,
+              role: 'COLABORADOR'
+            })
+          }).catch(() => {});
+        }
       }
-      
-      console.log('Colaborador persistido no Supabase com sucesso.');
     } catch (err) {
       console.warn('Erro de persistência:', err);
     }
@@ -2272,14 +2372,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     
     setGeneratedCredentials({ 
       email: targetEmail, 
-      senha: generatedPass || newColabForm.pinColetor || '123456', 
+      senha: generatedPass || pinFinal, 
       nome: newColabForm.nome,
       cpf: newColabForm.cpf,
-      pin: newColabForm.pinColetor || '123456',
+      pin: pinFinal,
       colabId: novoColab.id
     });
     
     setIsNewColabModalOpen(false);
+    setNewColabError(null);
     setNewColabForm({
       tenantId: '',
       nome: '',
@@ -2308,113 +2409,121 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     (h) => (h.tenantId === selectedTenantId || !h.tenantId) && h.status === 'PENDENTE'
   ).length;
 
-  // 3. Taxa de Pontualidade do Mês Atual (calculada sobre registros e ocorrências negativas)
+  const activeColabIds = useMemo(
+    () => new Set(activeColaboradores.map((c) => c.id)),
+    [activeColaboradores]
+  );
+
+  const activeOcorrencias = useMemo(
+    () => ocorrencias.filter((o) => activeColabIds.has(o.colaboradorId)),
+    [ocorrencias, activeColabIds]
+  );
+
+  const activeHorasExtras = useMemo(
+    () => horasExtras.filter((h) => h.tenantId === selectedTenantId || activeColabIds.has(h.colaboradorId)),
+    [horasExtras, selectedTenantId, activeColabIds]
+  );
+
+  // 3. Taxa de Pontualidade do Mês Atual (calculada apenas sobre dados reais)
   const taxaPontualidade = useMemo(() => {
-    const totalRegs = activeRegistros.length;
-    const totalAtrasosFaltas = ocorrencias.filter(
-      (o) => o.tipo === 'ATRASO' || o.tipo === 'FALTA_INJUSTIFICADA' || o.tipo === 'SAIDA_ANTECIPADA'
-    ).length;
+    const mesAtual = getBrasiliaParts().mesAno;
+    const regsMes = activeRegistros.filter((r) => getBrasiliaYmd(r.dataHora).startsWith(mesAtual));
+    const occMes = activeOcorrencias.filter(
+      (o) =>
+        o.data.startsWith(mesAtual) &&
+        (o.tipo === 'ATRASO' || o.tipo === 'FALTA_INJUSTIFICADA' || o.tipo === 'SAIDA_ANTECIPADA')
+    );
+
+    const totalRegs = regsMes.length;
+    const totalAtrasosFaltas = occMes.length;
 
     if (totalRegs === 0 && totalAtrasosFaltas === 0) {
-      return 96.8; // Taxa de conformidade nominal
+      return 100;
     }
-    const baseEsperada = Math.max(totalRegs, 24);
+    const baseEsperada = Math.max(totalRegs, totalAtrasosFaltas);
     const taxa = ((baseEsperada - totalAtrasosFaltas) / baseEsperada) * 100;
     return Math.min(100, Math.max(0, Number(taxa.toFixed(1))));
-  }, [activeRegistros.length, ocorrencias]);
+  }, [activeRegistros, activeOcorrencias]);
 
-  // Dados do Gráfico de Barras Recharts
+  // Dados do Gráfico de Barras Recharts (100% dados reais por dia da semana ou semanas do mês em Brasília)
   const dadosGraficoBarras = useMemo(() => {
+    const nowParts = getBrasiliaParts();
     if (chartPeriod === 'semana') {
-      const baseColabs = Math.max(totalColaboradoresAtivos, 12);
-      return [
-        {
-          periodo: 'Seg',
-          nomeCompleto: 'Segunda-feira',
-          pontuais: Math.max(1, baseColabs - 2),
-          atrasos: 2,
-          horasExtras: Math.max(1, Math.min(6, pendentesHeCount + 2)),
-          taxa: 95.7
-        },
-        {
-          periodo: 'Ter',
-          nomeCompleto: 'Terça-feira',
-          pontuais: Math.max(1, baseColabs - 1),
-          atrasos: 1,
-          horasExtras: Math.max(1, Math.min(8, pendentesHeCount + 3)),
-          taxa: 97.8
-        },
-        {
-          periodo: 'Qua',
-          nomeCompleto: 'Quarta-feira',
-          pontuais: Math.max(1, baseColabs - 2),
-          atrasos: 2,
-          horasExtras: Math.max(1, Math.min(5, pendentesHeCount + 1)),
-          taxa: 95.8
-        },
-        {
-          periodo: 'Qui',
-          nomeCompleto: 'Quinta-feira',
-          pontuais: baseColabs,
-          atrasos: 0,
-          horasExtras: Math.max(1, Math.min(9, pendentesHeCount + 4)),
-          taxa: 100
-        },
-        {
-          periodo: 'Sex',
-          nomeCompleto: 'Sexta-feira',
-          pontuais: Math.max(1, baseColabs - 3),
-          atrasos: 3,
-          horasExtras: Math.max(1, Math.min(7, pendentesHeCount + 2)),
-          taxa: 93.6
-        },
-        {
-          periodo: 'Sáb',
-          nomeCompleto: 'Sábado (Plantão)',
-          pontuais: Math.max(1, Math.round(baseColabs * 0.25)),
-          atrasos: 0,
-          horasExtras: 1,
-          taxa: 100
-        }
+      const dias = [
+        { dayIndex: 1, periodo: 'Seg', nomeCompleto: 'Segunda-feira' },
+        { dayIndex: 2, periodo: 'Ter', nomeCompleto: 'Terça-feira' },
+        { dayIndex: 3, periodo: 'Qua', nomeCompleto: 'Quarta-feira' },
+        { dayIndex: 4, periodo: 'Qui', nomeCompleto: 'Quinta-feira' },
+        { dayIndex: 5, periodo: 'Sex', nomeCompleto: 'Sexta-feira' },
+        { dayIndex: 6, periodo: 'Sáb', nomeCompleto: 'Sábado (Plantão)' }
       ];
+
+      return dias.map((d) => {
+        const regsDia = activeRegistros.filter((r) => getBrasiliaDayOfWeek(r.dataHora) === d.dayIndex).length;
+        const atrasosDia = activeOcorrencias.filter(
+          (o) =>
+            (o.tipo === 'ATRASO' || o.tipo === 'FALTA_INJUSTIFICADA' || o.tipo === 'SAIDA_ANTECIPADA') &&
+            getBrasiliaDayOfWeek(`${o.data}T12:00:00-03:00`) === d.dayIndex
+        ).length;
+        const heDia = activeHorasExtras.filter(
+          (h) => h.data && getBrasiliaDayOfWeek(`${h.data}T12:00:00-03:00`) === d.dayIndex
+        ).length;
+        const pontuaisDia = Math.max(0, regsDia - atrasosDia);
+        const total = pontuaisDia + atrasosDia;
+        const taxa = total > 0 ? Number(((pontuaisDia / total) * 100).toFixed(1)) : 100;
+
+        return {
+          periodo: d.periodo,
+          nomeCompleto: d.nomeCompleto,
+          pontuais: pontuaisDia,
+          atrasos: atrasosDia,
+          horasExtras: heDia,
+          taxa
+        };
+      });
     } else {
-      const baseSemana = Math.max(totalColaboradoresAtivos * 5, 50);
-      return [
-        {
-          periodo: 'Sem 01',
-          nomeCompleto: '1ª Semana do Mês',
-          pontuais: baseSemana - 5,
-          atrasos: 5,
-          horasExtras: Math.max(2, pendentesHeCount * 2 + 6),
-          taxa: 97.2
-        },
-        {
-          periodo: 'Sem 02',
-          nomeCompleto: '2ª Semana do Mês',
-          pontuais: baseSemana - 4,
-          atrasos: 4,
-          horasExtras: Math.max(3, pendentesHeCount * 3 + 9),
-          taxa: 98.1
-        },
-        {
-          periodo: 'Sem 03',
-          nomeCompleto: '3ª Semana do Mês',
-          pontuais: baseSemana - 6,
-          atrasos: 6,
-          horasExtras: Math.max(2, pendentesHeCount * 2 + 7),
-          taxa: 96.5
-        },
-        {
-          periodo: 'Sem 04',
-          nomeCompleto: '4ª Semana (Vigente)',
-          pontuais: Math.round(baseSemana * 0.85),
-          atrasos: 2,
-          horasExtras: Math.max(1, pendentesHeCount + 4),
-          taxa: taxaPontualidade
-        }
+      const mesAtual = nowParts.mesAno;
+      const semanas = [
+        { idx: 1, periodo: 'Sem 01', nomeCompleto: '1ª Semana do Mês', minDay: 1, maxDay: 7 },
+        { idx: 2, periodo: 'Sem 02', nomeCompleto: '2ª Semana do Mês', minDay: 8, maxDay: 14 },
+        { idx: 3, periodo: 'Sem 03', nomeCompleto: '3ª Semana do Mês', minDay: 15, maxDay: 21 },
+        { idx: 4, periodo: 'Sem 04', nomeCompleto: '4ª Semana do Mês', minDay: 22, maxDay: 31 }
       ];
+
+      return semanas.map((s) => {
+        const regsSem = activeRegistros.filter((r) => {
+          const p = getBrasiliaParts(r.dataHora);
+          return p.mesAno === mesAtual && p.day >= s.minDay && p.day <= s.maxDay;
+        }).length;
+        const atrasosSem = activeOcorrencias.filter((o) => {
+          const p = getBrasiliaParts(`${o.data}T12:00:00-03:00`);
+          return (
+            p.mesAno === mesAtual &&
+            p.day >= s.minDay &&
+            p.day <= s.maxDay &&
+            (o.tipo === 'ATRASO' || o.tipo === 'FALTA_INJUSTIFICADA' || o.tipo === 'SAIDA_ANTECIPADA')
+          );
+        }).length;
+        const heSem = activeHorasExtras.filter((h) => {
+          if (!h.data) return false;
+          const p = getBrasiliaParts(`${h.data}T12:00:00-03:00`);
+          return p.mesAno === mesAtual && p.day >= s.minDay && p.day <= s.maxDay;
+        }).length;
+        const pontuaisSem = Math.max(0, regsSem - atrasosSem);
+        const total = pontuaisSem + atrasosSem;
+        const taxa = total > 0 ? Number(((pontuaisSem / total) * 100).toFixed(1)) : 100;
+
+        return {
+          periodo: s.periodo,
+          nomeCompleto: s.nomeCompleto,
+          pontuais: pontuaisSem,
+          atrasos: atrasosSem,
+          horasExtras: heSem,
+          taxa
+        };
+      });
     }
-  }, [chartPeriod, totalColaboradoresAtivos, pendentesHeCount, taxaPontualidade]);
+  }, [chartPeriod, activeRegistros, activeOcorrencias, activeHorasExtras]);
 
   return (
     <div className="space-y-6">
@@ -3163,7 +3272,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                     // @ts-ignore
                     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                     if (!SpeechRecognition) {
-                      alert('Reconhecimento de voz não suportado neste navegador.');
+                      setKioskFeedback({
+                        type: 'ERROR',
+                        msg: 'Reconhecimento de voz não suportado neste navegador.'
+                      });
+                      setTimeout(() => setKioskFeedback(null), 4000);
                       return;
                     }
                     const recognition = new SpeechRecognition();
@@ -3227,11 +3340,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {activeColaboradores.map((colab) => {
-                  const hasBio = Boolean(
-                    colab.biometriaCadastrada || 
-                    colab.biometriaHashTemplate ||
-                    (typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${colab.id}`))
-                  );
+                  const hasBio =
+                    hasRealBiometricTemplate(colab) ||
+                    (typeof window !== 'undefined' &&
+                      hasRealBiometricTemplate(localStorage.getItem(`sc_bio_vec_${colab.id}`)));
                   return (
                     <button
                       key={colab.id}
@@ -3385,6 +3497,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           onUpdateColaborador={handleUpdateColaborador}
           onOpenNewColabModal={() => {
             const firstEst = estabelecimentos.find((e) => e.tenantId === selectedTenantId) || estabelecimentos[0];
+            setNewColabError(null);
             setNewColabForm((prev) => ({
               ...prev,
               tenantId: selectedTenantId || tenants[0]?.id || '',
@@ -3460,7 +3573,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 </p>
               </div>
               <button 
-                onClick={() => setIsNewTenantModalOpen(true)}
+                onClick={() => {
+                  setNewTenantError(null);
+                  setIsNewTenantModalOpen(true);
+                }}
                 className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
               >
                 <Plus className="w-4 h-4 text-emerald-400" /> Nova Empresa (com Endereço &amp; CEP)
@@ -4004,33 +4120,42 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   {showPinFallback ? (
                     <div className="p-3 bg-slate-900 border border-slate-700 rounded-xl space-y-2 animate-in fade-in duration-200">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                        Digitar PIN do Coletor ({biometricTargetColab?.pinColetor ? 'PIN configurado' : 'PIN padrão: 123456'})
+                        Digitar PIN do Coletor ({biometricTargetColab?.pinColetor ? 'PIN individual configurado' : 'Sem PIN configurado'})
                       </span>
                       <div className="flex gap-2">
                         <input
                           type="password"
                           maxLength={6}
-                          placeholder="Digite 123456"
+                          placeholder="Digite o PIN de 6 dígitos"
                           value={kioskPinInput}
-                          onChange={(e) => setKioskPinInput(e.target.value)}
+                          onChange={(e) => {
+                            setKioskPinInput(e.target.value);
+                            if (kioskPinError) setKioskPinError(null);
+                          }}
                           className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                         />
                         <button
                           onClick={() => {
+                            setKioskPinError(null);
                             const colabRegistros = registrosPonto.filter(r => r.colaboradorId === biometricTargetColab?.id);
                             const eligibility = checkPinUsageEligibility(biometricTargetColab || undefined, colabRegistros);
                             if (!eligibility.isEligible) {
-                              alert(`Bloqueio de Segurança: ${eligibility.reason}`);
+                              setKioskPinError(`Bloqueio de Segurança: ${eligibility.reason}`);
                               return;
                             }
-                            const expectedPin = biometricTargetColab?.pinColetor || '123456';
-                            if (kioskPinInput === expectedPin || kioskPinInput === '123456') {
+                            const expectedPin = biometricTargetColab?.pinColetor?.trim();
+                            if (!expectedPin) {
+                              setKioskPinError('Colaborador sem PIN individual cadastrado. Realize o cadastro facial.');
+                              return;
+                            }
+                            if (kioskPinInput.trim() === expectedPin) {
                               setBiometricState('verified');
                               setLivenessConfirmed(true);
                               setFaceStatusMessage('Identificação confirmada via PIN de Contingência (1º Dia)');
                               setShowPinFallback(false);
+                              setKioskPinError(null);
                             } else {
-                              alert(`PIN incorreto. O PIN cadastrado é "${expectedPin}".`);
+                              setKioskPinError('PIN incorreto. Verifique seu PIN individual ou procure o RH.');
                             }
                           }}
                           className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition-colors"
@@ -4038,6 +4163,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                           Validar
                         </button>
                       </div>
+                      {kioskPinError && (
+                        <div className="p-2 bg-rose-950/80 border border-rose-700 rounded-lg text-[11px] text-rose-200">
+                          {kioskPinError}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="flex flex-col gap-2">
@@ -4269,9 +4399,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       {/* ========================================================= */}
       {operationalTab === 'exportador' && (
         <ExportadorFolhaERP
-          tenant={tenants[0] || DEFAULT_TENANT}
-          colaboradores={colaboradores}
-          registros={registrosPonto}
+          tenant={activeTenant}
+          colaboradores={activeColaboradores}
+          registros={activeRegistros}
         />
       )}
 
@@ -4280,8 +4410,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       {/* ========================================================= */}
       {operationalTab === 'riscos' && (
         <DashboardRiscosRH
-          colaboradores={colaboradores}
-          registros={registrosPonto}
+          colaboradores={activeColaboradores}
+          registros={activeRegistros}
+          tenantName={activeTenant.razaoSocial}
         />
       )}
 
@@ -4292,9 +4423,49 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         <ModuloAppMobileKiosk />
       )}
 
+      {/* MODAL DE CONFIRMAÇÃO DE RECUSA DE AUTO-CADASTRO */}
+      {pendingRejectColabId && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-900">Recusar Auto-Cadastro</h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Deseja recusar e remover o pré-cadastro de{' '}
+                  <strong>{colaboradores.find((c) => c.id === pendingRejectColabId)?.nome || 'colaborador'}</strong>?
+                  Esta ação removerá o registro pendente do sistema.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingRejectColabId(null)}
+                className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmRecusarAutoCadastro}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Confirmar Recusa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <NewTenantModal 
         isOpen={isNewTenantModalOpen}
-        onClose={() => setIsNewTenantModalOpen(false)}
+        onClose={() => {
+          setIsNewTenantModalOpen(false);
+          setNewTenantError(null);
+        }}
         onConfirm={handleCreateTenant}
         form={newTenantForm}
         setForm={setNewTenantForm}
@@ -4303,7 +4474,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
       <NewColaboradorModal
         isOpen={isNewColabModalOpen}
-        onClose={() => setIsNewColabModalOpen(false)}
+        onClose={() => {
+          setIsNewColabModalOpen(false);
+          setNewColabError(null);
+        }}
         onConfirm={handleCreateColaborador}
         form={newColabForm}
         setForm={setNewColabForm}
@@ -4312,6 +4486,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         departamentos={departamentos}
         estabelecimentos={estabelecimentos}
         cargos={cargos}
+        error={newColabError}
       />
     </div>
   );
@@ -4715,7 +4890,8 @@ const NewColaboradorModal: React.FC<{
   departamentos: Departamento[];
   estabelecimentos: Estabelecimento[];
   cargos: Cargo[];
-}> = ({ isOpen, onClose, onConfirm, form, setForm, tenants, selectedTenantId, departamentos, estabelecimentos, cargos }) => {
+  error?: string | null;
+}> = ({ isOpen, onClose, onConfirm, form, setForm, tenants, selectedTenantId, departamentos, estabelecimentos, cargos, error }) => {
   if (!isOpen) return null;
   const activeTenantId = form.tenantId || selectedTenantId || tenants[0]?.id || '';
   const tenantEsts = estabelecimentos.filter(e => e.tenantId === activeTenantId);
@@ -4820,7 +4996,7 @@ const NewColaboradorModal: React.FC<{
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-500 uppercase">PIN do Coletor (Físico/Kiosk)</label>
-                  <input type="text" maxLength={6} placeholder="Ex: 123456" value={form.pinColetor} onChange={e => setForm({...form, pinColetor: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-mono" />
+                  <input type="text" maxLength={6} placeholder="6 dígitos (aleatório se vazio)" value={form.pinColetor} onChange={e => setForm({...form, pinColetor: e.target.value})} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-mono" />
                 </div>
              </div>
 
@@ -4840,6 +5016,11 @@ const NewColaboradorModal: React.FC<{
                 </select>
              </div>
           </div>
+          {error && (
+            <div className="md:col-span-2 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
+              {error}
+            </div>
+          )}
         </div>
         <div className="p-6 bg-slate-50 border-t border-slate-200 flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-100 transition-all cursor-pointer">Cancelar</button>

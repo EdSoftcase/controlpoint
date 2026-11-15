@@ -3,30 +3,18 @@ import {
   OcorrenciaDesconto, 
   Departamento, 
   Colaborador, 
-  TipoOcorrenciaDesconto, 
   StatusTratamentoOcorrencia 
 } from '../types/operational';
+import { getBrasiliaParts, getBrasiliaNow, getBrasiliaYmd, getMonthLabelPtBr } from '../utils/brasiliaClock';
 import {
-  FileText,
   Filter,
-  Calendar,
-  Building2,
   Clock,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  Download,
-  Printer,
   Search,
-  DollarSign,
-  TrendingDown,
   BarChart3,
   PieChart,
   ListFilter,
   FileSpreadsheet,
-  Check,
-  ShieldAlert,
-  HelpCircle,
+  Printer,
   X
 } from 'lucide-react';
 
@@ -40,15 +28,22 @@ interface ModuloRelatoriosOcorrenciasProps {
 export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasProps> = ({
   ocorrencias,
   onUpdateOcorrencias,
-  departamentos,
-  colaboradores
+  departamentos
 }) => {
-  // Modo de visualização do relatório: Sintético (Gerencial), Analítico (por Colaborador) ou Detalhado (Operacional)
   const [reportViewMode, setReportViewMode] = useState<'sintetico' | 'analitico' | 'detalhado'>('sintetico');
 
-  // Filtros Globais
-  const [dataInicio, setDataInicio] = useState<string>('2026-10-01');
-  const [dataFim, setDataFim] = useState<string>('2026-11-30');
+  const brtNow = getBrasiliaParts();
+  const currentMonthStart = `${brtNow.mesAno}-01`;
+  const lastDayCurrentMonth = new Date(brtNow.year, brtNow.month, 0).getDate();
+  const currentMonthEnd = `${brtNow.mesAno}-${String(lastDayCurrentMonth).padStart(2, '0')}`;
+
+  const prevMonthDate = new Date(brtNow.year, brtNow.month - 2, 1);
+  const prevMesAno = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+  const prevMonthLastDay = new Date(prevMonthDate.getFullYear(), prevMonthDate.getMonth() + 1, 0).getDate();
+
+  // Filtros Globais (padrão: mês anterior e mês atual)
+  const [dataInicio, setDataInicio] = useState<string>(`${prevMesAno}-01`);
+  const [dataFim, setDataFim] = useState<string>(currentMonthEnd);
   const [selectedDepartamentoId, setSelectedDepartamentoId] = useState<string>('TODOS');
   const [selectedTipoOcorrencia, setSelectedTipoOcorrencia] = useState<string>('TODOS');
   const [selectedStatus, setSelectedStatus] = useState<string>('TODOS');
@@ -60,20 +55,21 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
   const [justificativaTratamento, setJustificativaTratamento] = useState<string>('');
   const [cidInput, setCidInput] = useState<string>('');
 
-  // Atalhos Rápidos de Período
+  // Atalhos Rápidos de Período (Horário Oficial de Brasília)
   const handleSetPeriodo = (preset: 'mes_atual' | 'mes_anterior' | 'ultimos_30' | 'tudo') => {
     if (preset === 'mes_atual') {
-      setDataInicio('2026-11-01');
-      setDataFim('2026-11-30');
+      setDataInicio(currentMonthStart);
+      setDataFim(currentMonthEnd);
     } else if (preset === 'mes_anterior') {
-      setDataInicio('2026-10-01');
-      setDataFim('2026-10-31');
+      setDataInicio(`${prevMesAno}-01`);
+      setDataFim(`${prevMesAno}-${String(prevMonthLastDay).padStart(2, '0')}`);
     } else if (preset === 'ultimos_30') {
-      setDataInicio('2026-10-05');
-      setDataFim('2026-11-03');
+      const d30 = new Date(getBrasiliaNow().getTime() - 29 * 86400000);
+      setDataInicio(getBrasiliaYmd(d30));
+      setDataFim(brtNow.ymd);
     } else {
-      setDataInicio('2026-01-01');
-      setDataFim('2026-12-31');
+      setDataInicio(`${brtNow.year}-01-01`);
+      setDataFim(`${brtNow.year}-12-31`);
     }
   };
 
@@ -284,7 +280,7 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
   const handleSalvarTratamento = () => {
     if (!tratandoOcorrencia) return;
 
-    const agora = new Date().toLocaleString('pt-BR');
+    const agora = getBrasiliaParts().formatted;
     const novas = ocorrencias.map((item) => {
       if (item.id === tratandoOcorrencia.id) {
         const isAbonado = novoStatusTratamento === 'ABONADO_ATESTADO';
@@ -297,7 +293,7 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
           valorEstimadoDesconto: isAbonado ? 0 : item.valorEstimadoDesconto,
           perdeDsr: isAbonado ? false : item.perdeDsr,
           dataTratamento: agora,
-          operadorTratamento: 'Luciana Mendonça (Coord. RH)'
+          operadorTratamento: 'Operador RH'
         };
       }
       return item;
@@ -389,13 +385,13 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
               onClick={() => handleSetPeriodo('mes_atual')}
               className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium whitespace-nowrap"
             >
-              Nov/2026
+              {getMonthLabelPtBr(brtNow.mesAno)}
             </button>
             <button
               onClick={() => handleSetPeriodo('mes_anterior')}
               className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium whitespace-nowrap"
             >
-              Out/2026
+              {getMonthLabelPtBr(prevMesAno)}
             </button>
             <button
               onClick={() => handleSetPeriodo('ultimos_30')}

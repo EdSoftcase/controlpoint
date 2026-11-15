@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Colaborador, Departamento, Cargo, Tenant, Estabelecimento } from '../../types/operational';
 import { UserPlus, CheckCircle2, Search, Plus, UserCheck, UserX, FileSpreadsheet, FileText, Building2, MapPin, Edit3, X } from 'lucide-react';
+import { useAuth } from '../AuthContext';
+import { getBrasiliaMonthYear, getMonthLabelPtBr, formatBrasiliaDate, getBrasiliaNow } from '../../utils/brasiliaClock';
 
 interface GestaoColaboradoresTabProps {
   activeColaboradores: Colaborador[];
@@ -11,7 +13,7 @@ interface GestaoColaboradoresTabProps {
   departamentos: Departamento[];
   cargos: Cargo[];
   onAprovarAutoCadastro: (colabId: string, deptoId?: string, cargoId?: string, tenantId?: string, estabelecimentoId?: string) => void;
-  onRecusarAutoCadastro: (colabId: string) => void;
+  onRecusarAutoCadastro: (colabId: string, skipConfirm?: boolean) => void;
   onUpdateColaborador?: (updated: Colaborador) => Promise<void> | void;
   onOpenNewColabModal: () => void;
   colabApprovalNotice: string | null;
@@ -42,6 +44,8 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
   onCloseApprovalNotice,
   getColabContactInfo
 }) => {
+  const { session, authToken } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
   const sourceColaboradores = (allColaboradores && allColaboradores.length > 0) ? allColaboradores : activeColaboradores;
 
   const [colabFilterStatus, setColabFilterStatus] = useState<'TODOS' | 'ATIVO' | 'PENDENTE' | 'DESLIGADO'>('TODOS');
@@ -53,6 +57,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
   const [pendingTenantSelection, setPendingTenantSelection] = useState<Record<string, string>>({});
   const [pendingEstSelection, setPendingEstSelection] = useState<Record<string, string>>({});
   const [selectedPendentes, setSelectedPendentes] = useState<string[]>([]);
+  const [confirmingBulkReject, setConfirmingBulkReject] = useState<boolean>(false);
 
   // Modal de Edição / Alocação de Empresa e Unidade
   const [editModalColab, setEditModalColab] = useState<Colaborador | null>(null);
@@ -119,17 +124,19 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
   };
 
   // Estados para Emissão / Anexo de Holerite pelo RH
+  const currentMesAno = getBrasiliaMonthYear();
+  const currentAno = String(getBrasiliaNow().getFullYear());
   const [holeriteModalColab, setHoleriteModalColab] = useState<Colaborador | null>(null);
-  const [holeriteMesAno, setHoleriteMesAno] = useState<string>('2026-10');
-  const [holeriteCompetencia, setHoleriteCompetencia] = useState<string>('Outubro / 2026');
+  const [holeriteMesAno, setHoleriteMesAno] = useState<string>(currentMesAno);
+  const [holeriteCompetencia, setHoleriteCompetencia] = useState<string>(getMonthLabelPtBr(currentMesAno));
   const [holeriteSalarioBruto, setHoleriteSalarioBruto] = useState<string>('5200.00');
   const [holeriteDescontos, setHoleriteDescontos] = useState<string>('680.00');
-  const [holeriteArquivoNome, setHoleriteArquivoNome] = useState<string>('contracheque_outubro_2026.pdf');
+  const [holeriteArquivoNome, setHoleriteArquivoNome] = useState<string>(`contracheque_${currentMesAno}.pdf`);
   const [holeriteArquivoUrl, setHoleriteArquivoUrl] = useState<string | undefined>(undefined);
   const [holeriteObservacao, setHoleriteObservacao] = useState<string>('');
   const [holeriteNotice, setHoleriteNotice] = useState<string | null>(null);
 
-  const handleSaveHoleriteRH = () => {
+  const handleSaveHoleriteRH = async () => {
     if (!holeriteModalColab) return;
     const bruto = parseFloat(holeriteSalarioBruto) || 0;
     const desc = parseFloat(holeriteDescontos) || 0;
@@ -148,7 +155,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
       liquido: liq,
       arquivoNome: holeriteArquivoNome || `holerite_${holeriteModalColab.cpf.replace(/\D/g, '')}.pdf`,
       arquivoUrl: holeriteArquivoUrl,
-      dataUpload: new Date().toLocaleDateString('pt-BR'),
+      dataUpload: formatBrasiliaDate(),
       status: 'EMITIDO_EMPRESA',
       observacao: holeriteObservacao
     };
@@ -167,17 +174,18 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
       localStorage.setItem(`sc_holerites_${holeriteModalColab.id}`, JSON.stringify(updatedColab));
     } catch (_) {}
 
-    // Persistência no Supabase Backend
     try {
-      fetch('/api/save-holerite', {
+      await fetch('/api/save-holerite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer admin-session-token`
+          'Authorization': `Bearer ${bearerToken}`
         },
         body: JSON.stringify(newHolerite)
-      }).catch(err => console.warn('Aviso Supabase save-holerite:', err));
-    } catch (_) {}
+      });
+    } catch (err) {
+      console.warn('Aviso Supabase save-holerite:', err);
+    }
 
     setHoleriteNotice(`Holerite de "${holeriteModalColab.nome}" (Competência ${holeriteCompetencia}) cadastrado com sucesso pelo RH! Persistido no banco de dados e disponível no Portal do Colaborador.`);
     setHoleriteModalColab(null);
@@ -185,14 +193,14 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
 
   // Estados para Publicação de Informe de Rendimentos (IRPF) pelo RH
   const [irpfModalColab, setIrpfModalColab] = useState<Colaborador | null>(null);
-  const [irpfAnoCalendario, setIrpfAnoCalendario] = useState<string>('2025');
+  const [irpfAnoCalendario, setIrpfAnoCalendario] = useState<string>(String(Number(currentAno) - 1));
   const [irpfRendimentos, setIrpfRendimentos] = useState<string>('62400.00');
   const [irpfPrevidencia, setIrpfPrevidencia] = useState<string>('6864.00');
   const [irpfImpostoFonte, setIrpfImpostoFonte] = useState<string>('4320.00');
-  const [irpfArquivoNome, setIrpfArquivoNome] = useState<string>('informe_rendimentos_2025.pdf');
+  const [irpfArquivoNome, setIrpfArquivoNome] = useState<string>(`informe_rendimentos_${Number(currentAno) - 1}.pdf`);
   const [irpfArquivoUrl, setIrpfArquivoUrl] = useState<string | undefined>(undefined);
 
-  const handleSaveInformeIrpfRH = () => {
+  const handleSaveInformeIrpfRH = async () => {
     if (!irpfModalColab) return;
 
     const newInforme = {
@@ -201,13 +209,13 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
       colaboradorId: irpfModalColab.id,
       colaboradorNome: irpfModalColab.nome,
       colaboradorCpf: irpfModalColab.cpf,
-      anoCalendario: irpfAnoCalendario || '2025',
+      anoCalendario: irpfAnoCalendario || String(Number(currentAno) - 1),
       rendimentosTributaveis: parseFloat(irpfRendimentos) || 0,
       contribuicaoPrevidenciaria: parseFloat(irpfPrevidencia) || 0,
       impostoRetidoFonte: parseFloat(irpfImpostoFonte) || 0,
       arquivoNome: irpfArquivoNome || `informe_irpf_${irpfAnoCalendario}_${irpfModalColab.cpf.replace(/\D/g, '')}.pdf`,
       arquivoUrl: irpfArquivoUrl,
-      dataUpload: new Date().toLocaleDateString('pt-BR'),
+      dataUpload: formatBrasiliaDate(),
       status: 'DISPONIVEL'
     };
 
@@ -226,15 +234,17 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     } catch (_) {}
 
     try {
-      fetch('/api/save-informe-irpf', {
+      await fetch('/api/save-informe-irpf', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer admin-session-token`
+          'Authorization': `Bearer ${bearerToken}`
         },
         body: JSON.stringify(newInforme)
-      }).catch(err => console.warn('Aviso Supabase save-informe-irpf:', err));
-    } catch (_) {}
+      });
+    } catch (err) {
+      console.warn('Aviso Supabase save-informe-irpf:', err);
+    }
 
     setHoleriteNotice(`Informe de Rendimentos IRPF (${irpfAnoCalendario}) de "${irpfModalColab.nome}" publicado com sucesso! Disponibilizado no Portal do Colaborador.`);
     setIrpfModalColab(null);
@@ -357,20 +367,40 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                     <UserCheck className="w-3.5 h-3.5" />
                     Aprovar Selecionados ({selectedPendentes.length})
                   </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Deseja recusar os ${selectedPendentes.length} cadastros selecionados?`)) {
-                        selectedPendentes.forEach(id => {
-                          onRecusarAutoCadastro(id);
-                        });
-                        setSelectedPendentes([]);
-                      }
-                    }}
-                    className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-                  >
-                    <UserX className="w-3.5 h-3.5" />
-                    Recusar Lote
-                  </button>
+                  {confirmingBulkReject ? (
+                    <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-300 rounded-lg px-2.5 py-1">
+                      <span className="text-[11px] font-bold text-rose-800">
+                        Recusar {selectedPendentes.length}?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectedPendentes.forEach(id => onRecusarAutoCadastro(id, true));
+                          setSelectedPendentes([]);
+                          setConfirmingBulkReject(false);
+                        }}
+                        className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                      >
+                        Confirmar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingBulkReject(false)}
+                        className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded text-[10px] font-bold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingBulkReject(true)}
+                      className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                      Recusar Lote
+                    </button>
+                  )}
                 </div>
               )}
             </div>

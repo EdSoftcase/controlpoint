@@ -628,15 +628,16 @@ export function matchBiometricFace(
     }
   }
 
-  // 3. Se não houver nenhum vetor 64D salvo ainda (colaborador seed/legado sem captura local prévia),
-  // registra o vetor estabilizado atual como referência inicial no dispositivo
+  // 3. Nunca auto-cadastrar em silêncio durante a verificação do ponto
   if (!targetVector) {
-    targetVector = liveVector;
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(liveVector));
-    } catch {
-      // quota
-    }
+    return {
+      matched: false,
+      similarity: 0,
+      distance: 1.41,
+      threshold,
+      verdict: 'QUALIDADE_INSUFICIENTE',
+      details: 'Biometria facial não cadastrada para este colaborador. Cadastre sua face antes de registrar o ponto.'
+    };
   }
 
   // Cálculo rigoroso da Similaridade de Cosseno (Produto Escalar L2 de vetores normalizados)
@@ -649,7 +650,6 @@ export function matchBiometricFace(
   }
 
   // Mapeamento calibrado de cosseno zero-mean (-1..1) para escala percentual (0..100%)
-  // Cosseno >= 0.62 indica estrutura facial compatível em webcam comum; < 0.62 indica divergência
   let similarityPercent: number;
   if (dotProduct >= 0.62) {
     similarityPercent = 82.0 + ((dotProduct - 0.62) / 0.38) * 17.5;
@@ -671,6 +671,18 @@ export function matchBiometricFace(
       ? `Face confirmada! Similaridade biométrica: ${similarityPercent}% (Limiar Mínimo: ${threshold}%)`
       : `Divergência Biométrica: Similaridade ${similarityPercent}% abaixo do limiar mínimo de ${threshold}%. Reposicione o rosto ou recadastre sua biometria.`
   };
+}
+
+/**
+ * Remove o template biométrico armazenado localmente no dispositivo
+ */
+export function clearLocalBiometricTemplate(colaboradorId: string): void {
+  try {
+    localStorage.removeItem(`sc_bio_vec_${colaboradorId}`);
+    localStorage.removeItem(`sc_bio_${colaboradorId}`);
+  } catch {
+    // ignore
+  }
 }
 
 /**

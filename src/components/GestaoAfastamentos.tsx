@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Colaborador, ProgramacaoFerias } from '../types/operational';
 import { AfastamentoColaborador, TipoAfastamento } from '../types/rhAvancado';
 import { useAuth } from './AuthContext';
+import { getBrasiliaYmd, getBrasiliaNow } from '../utils/brasiliaClock';
 import {
   FileText,
   Calendar,
@@ -27,125 +28,9 @@ interface GestaoAfastamentosProps {
   colaboradores: Colaborador[];
 }
 
-export const INITIAL_AFASTAMENTOS: AfastamentoColaborador[] = [
-  {
-    id: 'afast-01',
-    tenantId: 'tenant-01',
-    colaboradorId: 'colab-02',
-    colaboradorNome: 'Mariana Souza',
-    colaboradorCpf: '234.567.890-12',
-    colaboradorMatricula: 'MAT-002',
-    departamentoId: 'dep-02',
-    departamentoNome: 'Tecnologia & Inovação',
-    tipo: 'FERIAS',
-    dataInicio: '2026-11-10',
-    dataFim: '2026-11-24',
-    totalDias: 15,
-    abonaMarcacoesPonto: true,
-    status: 'HOMOLOGADO',
-    observacoes: 'Período regulamentar de férias - 1º período de 15 dias (CLT Art. 134 § 1º).',
-    criadoEm: '2026-10-15',
-    homologadoPor: 'Diretoria de RH'
-  },
-  {
-    id: 'afast-02',
-    tenantId: 'tenant-01',
-    colaboradorId: 'colab-03',
-    colaboradorNome: 'Carlos Eduardo Oliveira',
-    colaboradorCpf: '345.678.901-23',
-    colaboradorMatricula: 'MAT-003',
-    departamentoId: 'dep-03',
-    departamentoNome: 'Operações & Logística',
-    tipo: 'ATESTADO_MEDICO',
-    dataInicio: '2026-11-06',
-    dataFim: '2026-11-07',
-    totalDias: 2,
-    abonaMarcacoesPonto: true,
-    cid10: 'J06.9 - Infecção aguda das vias aéreas superiores',
-    nomeMedicoOuEmissor: 'Dr. Roberto Silveira',
-    crmMedico: 'CRM-SP 182.904',
-    comprovanteAnexoNome: 'atestado_medico_carlos_oliveira.pdf',
-    status: 'HOMOLOGADO',
-    observacoes: 'Atestado emitido por pronto atendimento credenciado. Abonado integralmente.',
-    criadoEm: '2026-11-06',
-    homologadoPor: 'Ambulatório Médico Ocupacional'
-  }
-];
-
-export const INITIAL_PROGRAMACAO_FERIAS: ProgramacaoFerias[] = [
-  {
-    id: 'ferias-01',
-    tenantId: 'tenant-01',
-    colaboradorId: 'colab-demo-01',
-    colaboradorNome: 'Demonstração RH',
-    colaboradorCpf: '999.888.777-66',
-    periodoAquisitivoInicio: '2025-05-10',
-    periodoAquisitivoFim: '2026-05-09',
-    periodoConcessivoInicio: '2026-05-10',
-    periodoConcessivoFim: '2027-05-09',
-    dataInicioFerias: '2026-12-01',
-    dataFimFerias: '2026-12-20',
-    diasGozo: 20,
-    diasAbonoPecuniario: 10,
-    status: 'PROGRAMADO',
-    observacao: 'Férias regulares com abono pecuniário de 10 dias (venda de 1/3).'
-  },
-  {
-    id: 'ferias-02',
-    tenantId: 'tenant-01',
-    colaboradorId: 'colab-02',
-    colaboradorNome: 'Mariana Souza',
-    colaboradorCpf: '234.567.890-12',
-    periodoAquisitivoInicio: '2024-03-15',
-    periodoAquisitivoFim: '2025-03-14',
-    periodoConcessivoInicio: '2025-03-15',
-    periodoConcessivoFim: '2026-03-14',
-    dataInicioFerias: '2025-11-10',
-    dataFimFerias: '2025-11-24',
-    diasGozo: 15,
-    diasAbonoPecuniario: 0,
-    status: 'EM_GOZO',
-    observacao: '1º período de férias usufruído.'
-  },
-  {
-    id: 'ferias-03',
-    tenantId: 'tenant-01',
-    colaboradorId: 'colab-03',
-    colaboradorNome: 'Carlos Eduardo Oliveira',
-    colaboradorCpf: '345.678.901-23',
-    periodoAquisitivoInicio: '2023-08-10',
-    periodoAquisitivoFim: '2024-08-09',
-    periodoConcessivoInicio: '2024-08-10',
-    periodoConcessivoFim: '2025-08-09',
-    dataInicioFerias: '2025-07-10',
-    dataFimFerias: '2025-08-08',
-    diasGozo: 30,
-    diasAbonoPecuniario: 0,
-    status: 'VENCIDO',
-    observacao: 'Período concessivo ultrapassado sem gozo integral (Risco de pagamento em dobro conforme CLT Art. 137).'
-  }
-];
-
-const STORAGE_KEY_FERIAS = 'sc_programacao_ferias';
-
-const loadSavedFerias = (): ProgramacaoFerias[] => {
-  try {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_FERIAS) : null;
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Remove mock residual com CPF legado 123.456.789-00
-        const filtrado = parsed.filter((f: any) => f.colaboradorCpf !== '123.456.789-00');
-        if (filtrado.length > 0) return filtrado;
-      }
-    }
-  } catch {}
-  return INITIAL_PROGRAMACAO_FERIAS;
-};
-
 export function calcularPeriodosFerias(dataAdmissaoStr: string) {
-  const adm = new Date(dataAdmissaoStr || '2025-01-01');
-  const hoje = new Date();
+  const adm = new Date(dataAdmissaoStr || getBrasiliaYmd());
+  const hoje = getBrasiliaNow();
   
   const anoAtual = hoje.getFullYear();
   const mesAdmissao = adm.getMonth();
@@ -155,24 +40,26 @@ export function calcularPeriodosFerias(dataAdmissaoStr: string) {
   if (aquisitivoInicio > hoje) {
     aquisitivoInicio.setFullYear(anoAtual - 1);
   }
-  let aquisitivoFim = new Date(aquisitivoInicio);
+  const aquisitivoFim = new Date(aquisitivoInicio);
   aquisitivoFim.setFullYear(aquisitivoFim.getFullYear() + 1);
   aquisitivoFim.setDate(aquisitivoFim.getDate() - 1);
 
-  let concessivoInicio = new Date(aquisitivoFim);
+  const concessivoInicio = new Date(aquisitivoFim);
   concessivoInicio.setDate(concessivoInicio.getDate() + 1);
-  let concessivoFim = new Date(concessivoInicio);
+  const concessivoFim = new Date(concessivoInicio);
   concessivoFim.setFullYear(concessivoFim.getFullYear() + 1);
   concessivoFim.setDate(concessivoFim.getDate() - 1);
 
   const diasAteFimConcessao = Math.round((concessivoFim.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
   const vencido = hoje > concessivoFim;
 
+  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
   return {
-    aquisitivoInicio: aquisitivoInicio.toISOString().slice(0, 10),
-    aquisitivoFim: aquisitivoFim.toISOString().slice(0, 10),
-    concessivoInicio: concessivoInicio.toISOString().slice(0, 10),
-    concessivoFim: concessivoFim.toISOString().slice(0, 10),
+    aquisitivoInicio: fmt(aquisitivoInicio),
+    aquisitivoFim: fmt(aquisitivoFim),
+    concessivoInicio: fmt(concessivoInicio),
+    concessivoFim: fmt(concessivoFim),
     diasAteFimConcessao,
     vencido
   };
@@ -180,72 +67,101 @@ export function calcularPeriodosFerias(dataAdmissaoStr: string) {
 
 export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
   const { supabase } = useAuth();
+  const hojeYmd = getBrasiliaYmd();
   const [activeTab, setActiveTab] = useState<'afastamentos' | 'ferias'>('afastamentos');
-  const [afastamentos, setAfastamentos] = useState<AfastamentoColaborador[]>(INITIAL_AFASTAMENTOS);
-  const [programacoesFerias, setProgramacoesFerias] = useState<ProgramacaoFerias[]>(loadSavedFerias);
+  const [afastamentos, setAfastamentos] = useState<AfastamentoColaborador[]>([]);
+  const [programacoesFerias, setProgramacoesFerias] = useState<ProgramacaoFerias[]>([]);
   const [filtroTipo, setFiltroTipo] = useState<string>('TODOS');
   const [buscaTexto, setBuscaTexto] = useState<string>('');
   const [modalNovoAberto, setModalNovoAberto] = useState<boolean>(false);
   const [modalFeriasAberto, setModalFeriasAberto] = useState<boolean>(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
-  const saveAndSetFerias = (next: ProgramacaoFerias[]) => {
-    setProgramacoesFerias(next);
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY_FERIAS, JSON.stringify(next));
-      }
-    } catch {}
-  };
-
-  // Load vacations from Supabase on mount with localStorage fallback
+  // Load real absences & vacations from Supabase on mount
   useEffect(() => {
-    async function fetchVacations() {
+    async function fetchRealData() {
+      if (!supabase) return;
       try {
-        const { data, error } = await supabase.from('vacations').select('*');
-        if (data && data.length > 0) {
-          const mapped = data.map((v: any) => ({
-            id: v.id,
+        const [{ data: vacData }, { data: absData }] = await Promise.all([
+          supabase.from('vacations').select('*').order('created_at', { ascending: false }),
+          supabase.from('absences').select('*').order('data_registro', { ascending: false })
+        ]);
+
+        if (vacData) {
+          const mappedVacs: ProgramacaoFerias[] = vacData.map((v: any) => ({
+            id: v.vacation_id || v.id,
             tenantId: v.tenant_id,
             colaboradorId: v.collaborator_id,
-            colaboradorNome: v.collaborator_name,
-            colaboradorCpf: v.collaborator_cpf,
+            colaboradorNome: v.collaborator_name || '',
+            colaboradorCpf: v.collaborator_cpf || '',
             periodoAquisitivoInicio: v.periodo_aquisitivo_inicio,
             periodoAquisitivoFim: v.periodo_aquisitivo_fim,
             periodoConcessivoInicio: v.periodo_concessivo_inicio,
             periodoConcessivoFim: v.periodo_concessivo_fim,
             dataInicioFerias: v.data_inicio_ferias,
             dataFimFerias: v.data_fim_ferias,
-            diasGozo: Number(v.dias_gozo),
-            diasAbonoPecuniario: Number(v.dias_abono_pecuniario),
+            diasGozo: Number(v.dias_gozo || 30),
+            diasAbonoPecuniario: Number(v.dias_abono_pecuniario || 0),
             status: v.status,
             observacao: v.observacao
           }));
-          saveAndSetFerias(mapped);
+          setProgramacoesFerias(mappedVacs);
+        }
+
+        if (absData) {
+          const mappedAbs: AfastamentoColaborador[] = absData.map((a: any) => {
+            const colab = colaboradores.find(c => c.id === a.collaborator_id);
+            return {
+              id: a.absence_id || a.id,
+              tenantId: a.tenant_id,
+              colaboradorId: a.collaborator_id,
+              colaboradorNome: a.collaborator_name || colab?.nome || 'Colaborador',
+              colaboradorCpf: colab?.cpf || '',
+              colaboradorMatricula: colab?.matricula || '',
+              departamentoId: colab?.departamentoId || '',
+              departamentoNome: a.departamento_nome || colab?.departamentoNome || '',
+              tipo: a.tipo,
+              dataInicio: a.data_inicio,
+              dataFim: a.data_fim,
+              totalDias: Number(a.dias_totais || 1),
+              abonaMarcacoesPonto: a.abona_ponto ?? true,
+              cid10: a.cid10 || undefined,
+              crmMedico: a.crm_medico || undefined,
+              status: a.status || 'HOMOLOGADO',
+              observacoes: a.observacao || undefined,
+              criadoEm: a.data_registro ? String(a.data_registro).slice(0, 10) : hojeYmd,
+              homologadoPor: 'Recursos Humanos'
+            };
+          });
+          setAfastamentos(mappedAbs);
         }
       } catch (err) {
-        console.warn('Supabase vacations table not accessible yet, using robust local storage cache:', err);
+        console.warn('Falha ao carregar afastamentos/férias do Supabase:', err);
       }
     }
-    fetchVacations();
-  }, [supabase]);
+    fetchRealData();
+  }, [supabase, colaboradores, hojeYmd]);
 
   // Form State Afastamento
   const [colaboradorIdForm, setColaboradorIdForm] = useState<string>(colaboradores[0]?.id || '');
   const [tipoForm, setTipoForm] = useState<TipoAfastamento>('ATESTADO_MEDICO');
-  const [dataInicioForm, setDataInicioForm] = useState<string>('2026-11-07');
-  const [dataFimForm, setDataFimForm] = useState<string>('2026-11-07');
+  const [dataInicioForm, setDataInicioForm] = useState<string>(hojeYmd);
+  const [dataFimForm, setDataFimForm] = useState<string>(hojeYmd);
   const [cid10Form, setCid10Form] = useState<string>('');
   const [crmForm, setCrmForm] = useState<string>('');
   const [medicoForm, setMedicoForm] = useState<string>('');
   const [obsForm, setObsForm] = useState<string>('');
 
-  // Form State Férias (com cálculo automático de data fim)
+  // Form State Férias
   const [colabFeriasId, setColabFeriasId] = useState<string>(colaboradores[0]?.id || '');
-  const [inicioFeriasForm, setInicioFeriasForm] = useState<string>('2027-01-01');
+  const [inicioFeriasForm, setInicioFeriasForm] = useState<string>(hojeYmd);
   const [diasGozoForm, setDiasGozoForm] = useState<number>(30);
   const [diasAbonoForm, setDiasAbonoForm] = useState<number>(0);
-  const [fimFeriasForm, setFimFeriasForm] = useState<string>('2027-01-30');
+  const [fimFeriasForm, setFimFeriasForm] = useState<string>(() => {
+    const d = new Date(hojeYmd + 'T12:00:00');
+    d.setDate(d.getDate() + 29);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   const [obsFeriasForm, setObsFeriasForm] = useState<string>('');
 
   // Função para recalcular automaticamente a data fim ao alterar início ou dias de gozo
@@ -269,18 +185,18 @@ export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
 
   const diasPendentes = Math.max(0, 30 - Number(diasGozoForm) - Number(diasAbonoForm));
 
-  const handleSalvarAfastamento = (e: React.FormEvent) => {
+  const handleSalvarAfastamento = async (e: React.FormEvent) => {
     e.preventDefault();
     const colab = colaboradores.find(c => c.id === colaboradorIdForm);
     if (!colab) return;
 
-    const dIni = new Date(dataInicioForm);
-    const dFim = new Date(dataFimForm);
+    const dIni = new Date(dataInicioForm + 'T12:00:00');
+    const dFim = new Date(dataFimForm + 'T12:00:00');
     const diffDias = Math.max(1, Math.round((dFim.getTime() - dIni.getTime()) / (1000 * 3600 * 24)) + 1);
 
     const novo: AfastamentoColaborador = {
       id: `afast-${Date.now()}`,
-      tenantId: 'tenant-01',
+      tenantId: colab.tenantId,
       colaboradorId: colab.id,
       colaboradorNome: colab.nome,
       colaboradorCpf: colab.cpf,
@@ -297,13 +213,34 @@ export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
       nomeMedicoOuEmissor: medicoForm.trim() || undefined,
       status: 'HOMOLOGADO',
       observacoes: obsForm.trim() || undefined,
-      criadoEm: new Date().toISOString().slice(0, 10),
+      criadoEm: hojeYmd,
       homologadoPor: 'Gestor de Recursos Humanos'
     };
 
+    try {
+      await supabase.from('absences').upsert({
+        absence_id: novo.id,
+        tenant_id: novo.tenantId,
+        collaborator_id: novo.colaboradorId,
+        collaborator_name: novo.colaboradorNome,
+        departamento_nome: novo.departamentoNome,
+        tipo: novo.tipo,
+        data_inicio: novo.dataInicio,
+        data_fim: novo.dataFim,
+        dias_totais: novo.totalDias,
+        cid10: novo.cid10 || null,
+        crm_medico: novo.crmMedico || null,
+        observacao: novo.observacoes || null,
+        status: novo.status,
+        abona_ponto: novo.abonaMarcacoesPonto
+      }, { onConflict: 'absence_id' });
+    } catch (err) {
+      console.warn('Falha ao salvar afastamento no Supabase:', err);
+    }
+
     setAfastamentos([novo, ...afastamentos]);
     setModalNovoAberto(false);
-    setFeedbackMsg(`Afastamento de ${novo.colaboradorNome} registrado e homologado com sucesso!`);
+    setFeedbackMsg(`Afastamento de ${novo.colaboradorNome} registrado e homologado com sucesso no Supabase!`);
     setTimeout(() => setFeedbackMsg(null), 4000);
 
     setCid10Form('');
@@ -317,11 +254,11 @@ export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
     const colab = colaboradores.find(c => c.id === colabFeriasId);
     if (!colab) return;
 
-    const periodos = calcularPeriodosFerias(colab.dataAdmissao || '2025-01-10');
+    const periodos = calcularPeriodosFerias(colab.dataAdmissao || hojeYmd);
 
     const novaFerias: ProgramacaoFerias = {
       id: `ferias-${Date.now()}`,
-      tenantId: 'tenant-01',
+      tenantId: colab.tenantId,
       colaboradorId: colab.id,
       colaboradorNome: colab.nome,
       colaboradorCpf: colab.cpf,
@@ -337,10 +274,9 @@ export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
       observacao: obsFeriasForm.trim() || (diasPendentes > 0 ? `Férias fracionadas (${diasGozoForm}d gozo, restam ${diasPendentes}d pendentes)` : 'Férias regulares (30 dias)')
     };
 
-    // Save to Supabase
     try {
       await supabase.from('vacations').upsert({
-        id: novaFerias.id,
+        vacation_id: novaFerias.id,
         tenant_id: novaFerias.tenantId,
         collaborator_id: novaFerias.colaboradorId,
         collaborator_name: novaFerias.colaboradorNome,
@@ -355,17 +291,16 @@ export function GestaoAfastamentos({ colaboradores }: GestaoAfastamentosProps) {
         dias_abono_pecuniario: novaFerias.diasAbonoPecuniario,
         status: novaFerias.status,
         observacao: novaFerias.observacao
-      });
+      }, { onConflict: 'vacation_id' });
     } catch (err) {
-      console.warn('Failed to persist vacation to Supabase table:', err);
+      console.warn('Falha ao persistir férias no Supabase:', err);
     }
 
-    // Atualiza lista removendo duplicatas do mesmo colaborador e adicionando a nova
     const updatedList = [novaFerias, ...programacoesFerias.filter(f => f.colaboradorId !== novaFerias.colaboradorId)];
-    saveAndSetFerias(updatedList);
+    setProgramacoesFerias(updatedList);
 
     setModalFeriasAberto(false);
-    setFeedbackMsg(`Férias de ${colab.nome} programadas e salvas com sucesso (${diasGozoForm} dias de gozo${diasPendentes > 0 ? `, ${diasPendentes}d pendentes` : ''})!`);
+    setFeedbackMsg(`Férias de ${colab.nome} programadas e salvas com sucesso no Supabase (${diasGozoForm} dias de gozo${diasPendentes > 0 ? `, ${diasPendentes}d pendentes` : ''})!`);
     setTimeout(() => setFeedbackMsg(null), 4000);
     setObsFeriasForm('');
   };

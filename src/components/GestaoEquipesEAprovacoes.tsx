@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Departamento, Colaborador, SolicitacaoHoraExtra, SolicitacaoAjustePonto } from '../types/operational';
 import { AuthUser } from '../types/auth';
+import { useAuth } from './AuthContext';
+import { getBrasiliaYmd, getBrasiliaParts } from '../utils/brasiliaClock';
 import {
   Users,
   Clock,
   CheckCircle2,
   XCircle,
-  AlertCircle,
   ShieldCheck,
   UserCheck,
   Edit2,
@@ -15,10 +16,11 @@ import {
   Filter,
   Plus,
   Send,
-  Calendar,
-  Briefcase,
-  PenTool
+  PenTool,
+  Paperclip,
+  Megaphone
 } from 'lucide-react';
+import { GestaoMuralEAtendimento } from './rh/GestaoMuralEAtendimento';
 
 interface GestaoEquipesEAprovacoesProps {
   departamentos: Departamento[];
@@ -32,9 +34,6 @@ interface GestaoEquipesEAprovacoesProps {
   currentUser: AuthUser;
 }
 
-import { GestaoMuralEAtendimento } from './rh/GestaoMuralEAtendimento';
-import { Megaphone } from 'lucide-react';
-
 export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> = ({
   departamentos,
   onUpdateDepartamentos,
@@ -46,6 +45,7 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   onUpdateSolicitacoesAjuste,
   currentUser
 }) => {
+  const { supabase } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes' | 'ajustes' | 'mural_atendimento'>('aprovacoes');
   
   // Filtros de Aprovação de Horas Extras
@@ -70,65 +70,143 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   const [isNovaHeModalOpen, setIsNovaHeModalOpen] = useState(false);
   const [novaHeForm, setNovaHeForm] = useState({
     colaboradorId: colaboradores[0]?.id || '',
-    data: new Date().toISOString().slice(0, 10),
+    data: getBrasiliaYmd(),
     minutosExtras: 120,
     tipoHoraExtra: 'NORMAL_50' as 'NORMAL_50' | 'FERIADO_100',
     justificativa: ''
   });
 
-  // Lista de Gestores Disponíveis para Atribuição
-  const gestoresDisponiveis = [
-    { id: 'user-03', nome: 'Roberto Albuquerque', email: 'gestor@softcase.com.br', dept: 'Engenharia de Software' },
-    { id: 'user-02', nome: 'Luciana Mendonça', email: 'rh@softcase.com.br', dept: 'Recursos Humanos & DP' },
-    { id: 'user-06', nome: 'Marcelo Vieira', email: 'marcelo.gestor@softcase.com.br', dept: 'Operações & Logística' }
-  ];
+  // Lista dinâmica de Gestores derivados dos departamentos, colaboradores e usuário logado
+  const gestoresDisponiveis = useMemo(() => {
+    const map = new Map<string, { id: string; nome: string; email: string; dept: string }>();
 
-  // Filtra as solicitações conforme o perfil logado e filtros
+    departamentos.forEach((d) => {
+      if (d.gestorId || d.gestorNome) {
+        const key = d.gestorId || d.gestorNome;
+        map.set(key, {
+          id: key,
+          nome: d.gestorNome || 'Gestor Responsável',
+          email: d.gestorEmail || '',
+          dept: d.nome
+        });
+      }
+    });
+
+    colaboradores.forEach((c) => {
+      if (c.gestorId || c.gestorNome) {
+        const key = c.gestorId || c.gestorNome || '';
+        if (key && !map.has(key)) {
+          map.set(key, {
+            id: key,
+            nome: c.gestorNome || 'Gestor',
+            email: '',
+            dept: c.departamentoNome || 'Equipe'
+          });
+        }
+      }
+      if (
+        (c.cargoTitulo || '').toLowerCase().includes('gestor') ||
+        (c.cargoTitulo || '').toLowerCase().includes('gerente') ||
+        (c.cargoTitulo || '').toLowerCase().includes('coordenador') ||
+        (c.cargoTitulo || '').toLowerCase().includes('diretor')
+      ) {
+        if (!map.has(c.id)) {
+          map.set(c.id, {
+            id: c.id,
+            nome: c.nome,
+            email: c.email || '',
+            dept: c.departamentoNome || 'Liderança'
+          });
+        }
+      }
+    });
+
+    if (currentUser && !map.has(currentUser.id)) {
+      map.set(currentUser.id, {
+        id: currentUser.id,
+        nome: currentUser.nome,
+        email: currentUser.email,
+        dept: currentUser.tenantNome || 'Administração RH'
+      });
+    }
+
+    return Array.from(map.values());
+  }, [departamentos, colaboradores, currentUser]);
+
   const filteredHorasExtras = horasExtras.filter((he) => {
-    // Filtro por status
     if (statusFilter !== 'TODOS' && he.status !== statusFilter) return false;
-    
-    // Filtro por gestor
     if (selectedGestorFilter !== 'TODOS' && he.gestorId !== selectedGestorFilter) return false;
-
     return true;
   });
 
   const pendentesCount = horasExtras.filter((h) => h.status === 'PENDENTE').length;
 
   // Ação: Aprovar Hora Extra
-  const handleConfirmAprovar = () => {
+  const handleConfirmAprovar = async () => {
     if (!approvingHeId) return;
 
-    const agora = new Date().toLocaleString('pt-BR');
+    const brtNow = getBrasiliaParts();
+    const decisaoStr = `${brtNow.formatted} · Destino: ${destinoAprovacao === 'BANCO_HORAS' ? 'Banco de Horas (Compensação)' : 'Folha de Pagamento'}`;
+    let approvedItem: SolicitacaoHoraExtra | null = null;
+
     const atualizadas = horasExtras.map((he) => {
       if (he.id === approvingHeId) {
-        return {
+        approvedItem = {
           ...he,
           status: 'APROVADO' as const,
-          dataDecisao: `${agora} · Destino: ${destinoAprovacao === 'BANCO_HORAS' ? 'Banco de Horas (Compensação)' : 'Folha de Pagamento'}`
+          dataDecisao: decisaoStr
         };
+        return approvedItem;
       }
       return he;
     });
 
     onUpdateHorasExtras(atualizadas);
     setApprovingHeId(null);
+
+    if (approvedItem && supabase) {
+      try {
+        await supabase.from('overtime_requests').upsert({
+          request_id: (approvedItem as SolicitacaoHoraExtra).id,
+          tenant_id: (approvedItem as SolicitacaoHoraExtra).tenantId,
+          collaborator_id: (approvedItem as SolicitacaoHoraExtra).colaboradorId,
+          collaborator_name: (approvedItem as SolicitacaoHoraExtra).colaboradorNome,
+          collaborator_cpf: (approvedItem as SolicitacaoHoraExtra).colaboradorCpf,
+          departamento_id: (approvedItem as SolicitacaoHoraExtra).departamentoId,
+          departamento_nome: (approvedItem as SolicitacaoHoraExtra).departamentoNome,
+          gestor_id: (approvedItem as SolicitacaoHoraExtra).gestorId,
+          gestor_nome: (approvedItem as SolicitacaoHoraExtra).gestorNome,
+          data: (approvedItem as SolicitacaoHoraExtra).data,
+          horario_contratado: (approvedItem as SolicitacaoHoraExtra).horarioContratado,
+          horario_realizado: (approvedItem as SolicitacaoHoraExtra).horarioRealizado,
+          minutos_extras: (approvedItem as SolicitacaoHoraExtra).minutosExtras,
+          horas_extras_formatadas: (approvedItem as SolicitacaoHoraExtra).horasExtrasFormatadas,
+          tipo_hora_extra: (approvedItem as SolicitacaoHoraExtra).tipoHoraExtra,
+          justificativa: (approvedItem as SolicitacaoHoraExtra).justificativa,
+          status: 'APROVADO',
+          data_decisao: brtNow.iso
+        }, { onConflict: 'request_id' });
+      } catch (err) {
+        console.warn('Aviso ao salvar aprovação H.E. no Supabase:', err);
+      }
+    }
   };
 
   // Ação: Rejeitar Hora Extra
-  const handleConfirmRejeitar = () => {
+  const handleConfirmRejeitar = async () => {
     if (!rejectingHeId || !motivoRejeicao.trim()) return;
 
-    const agora = new Date().toLocaleString('pt-BR');
+    const brtNow = getBrasiliaParts();
+    let rejectedItem: SolicitacaoHoraExtra | null = null;
     const atualizadas = horasExtras.map((he) => {
       if (he.id === rejectingHeId) {
-        return {
+        rejectedItem = {
           ...he,
           status: 'REJEITADO' as const,
           motivoRecusa: motivoRejeicao.trim(),
-          dataDecisao: agora
+          dataDecisao: brtNow.formatted
         };
+        return rejectedItem;
       }
       return he;
     });
@@ -136,17 +214,62 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
     onUpdateHorasExtras(atualizadas);
     setRejectingHeId(null);
     setMotivoRejeicao('');
+
+    if (rejectedItem && supabase) {
+      try {
+        await supabase.from('overtime_requests').upsert({
+          request_id: (rejectedItem as SolicitacaoHoraExtra).id,
+          tenant_id: (rejectedItem as SolicitacaoHoraExtra).tenantId,
+          collaborator_id: (rejectedItem as SolicitacaoHoraExtra).colaboradorId,
+          collaborator_name: (rejectedItem as SolicitacaoHoraExtra).colaboradorNome,
+          collaborator_cpf: (rejectedItem as SolicitacaoHoraExtra).colaboradorCpf,
+          departamento_id: (rejectedItem as SolicitacaoHoraExtra).departamentoId,
+          departamento_nome: (rejectedItem as SolicitacaoHoraExtra).departamentoNome,
+          gestor_id: (rejectedItem as SolicitacaoHoraExtra).gestorId,
+          gestor_nome: (rejectedItem as SolicitacaoHoraExtra).gestorNome,
+          data: (rejectedItem as SolicitacaoHoraExtra).data,
+          horario_contratado: (rejectedItem as SolicitacaoHoraExtra).horarioContratado,
+          horario_realizado: (rejectedItem as SolicitacaoHoraExtra).horarioRealizado,
+          minutos_extras: (rejectedItem as SolicitacaoHoraExtra).minutosExtras,
+          horas_extras_formatadas: (rejectedItem as SolicitacaoHoraExtra).horasExtrasFormatadas,
+          tipo_hora_extra: (rejectedItem as SolicitacaoHoraExtra).tipoHoraExtra,
+          justificativa: (rejectedItem as SolicitacaoHoraExtra).justificativa,
+          status: 'REJEITADO',
+          motivo_recusa: (rejectedItem as SolicitacaoHoraExtra).motivoRecusa,
+          data_decisao: brtNow.iso
+        }, { onConflict: 'request_id' });
+      } catch (err) {
+        console.warn('Aviso ao salvar rejeição H.E. no Supabase:', err);
+      }
+    }
   };
 
   // Ação: Salvar Configurações da Equipe
-  const handleSaveDeptConfig = () => {
+  const handleSaveDeptConfig = async () => {
     if (!editingDept) return;
 
-    // Atualiza a lista de departamentos
     const novosDepts = departamentos.map((d) => (d.id === editingDept.id ? editingDept : d));
     onUpdateDepartamentos(novosDepts);
 
-    // Replica as configurações de início de jornada, carga diária, intervalo e regra de 15 minutos para todos os colaboradores da equipe
+    try {
+      await supabase.from('departments').upsert({
+        department_id: editingDept.id,
+        tenant_id: editingDept.tenantId,
+        nome: editingDept.nome,
+        codigo: editingDept.codigo,
+        gestor_id: editingDept.gestorId,
+        gestor_nome: editingDept.gestorNome,
+        gestor_email: editingDept.gestorEmail,
+        horario_inicio_padrao: editingDept.horarioInicioPadrao,
+        carga_horaria_diaria: editingDept.cargaHorariaDiariaHoras,
+        intervalo_minutos: editingDept.intervaloMinutos,
+        max_minutos_antecedencia: editingDept.maxMinutosAntecedenciaPermitido,
+        regra_antecedencia_ativa: editingDept.regraAntecedenciaAtiva
+      }, { onConflict: 'department_id' });
+    } catch (err) {
+      console.warn('Aviso ao salvar departamento no Supabase:', err);
+    }
+
     const novosColabs = colaboradores.map((c) => {
       if (c.departamentoId === editingDept.id) {
         return {
@@ -172,7 +295,7 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   };
 
   // Ação: Submeter Nova Hora Extra
-  const handleCriarNovaHe = () => {
+  const handleCriarNovaHe = async () => {
     const colab = colaboradores.find((c) => c.id === novaHeForm.colaboradorId);
     if (!colab) return;
 
@@ -188,11 +311,11 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
       colaboradorCpf: colab.cpf,
       departamentoId: colab.departamentoId,
       departamentoNome: colab.departamentoNome,
-      gestorId: colab.gestorId || 'user-03',
-      gestorNome: colab.gestorNome || 'Roberto Albuquerque',
+      gestorId: colab.gestorId || currentUser.id,
+      gestorNome: colab.gestorNome || currentUser.nome,
       data: novaHeForm.data,
       horarioContratado: `${colab.horarioInicio} às ${colab.horarioFim} (${colab.cargaHorariaDiariaHoras}h diárias, ${colab.intervaloMinutos}min intervalo)`,
-      horarioRealizado: `${colab.horarioInicio} às ${String(17 + horas).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
+      horarioRealizado: `${colab.horarioInicio} às ${String(Math.min(23, 17 + horas)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
       minutosExtras: novaHeForm.minutosExtras,
       horasExtrasFormatadas: formatada,
       tipoHoraExtra: novaHeForm.tipoHoraExtra,
@@ -200,11 +323,35 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
       status: 'PENDENTE'
     };
 
+    try {
+      await supabase.from('overtime_requests').upsert({
+        request_id: nova.id,
+        tenant_id: nova.tenantId,
+        collaborator_id: nova.colaboradorId,
+        collaborator_name: nova.colaboradorNome,
+        collaborator_cpf: nova.colaboradorCpf,
+        departamento_id: nova.departamentoId,
+        departamento_nome: nova.departamentoNome,
+        gestor_id: nova.gestorId,
+        gestor_nome: nova.gestorNome,
+        data: nova.data,
+        horario_contratado: nova.horarioContratado,
+        horario_realizado: nova.horarioRealizado,
+        minutos_extras: nova.minutosExtras,
+        horas_extras_formatadas: nova.horasExtrasFormatadas,
+        tipo_hora_extra: nova.tipoHoraExtra,
+        justificativa: nova.justificativa,
+        status: 'PENDENTE'
+      }, { onConflict: 'request_id' });
+    } catch (err) {
+      console.warn('Aviso ao salvar H.E. no Supabase:', err);
+    }
+
     onUpdateHorasExtras([nova, ...horasExtras]);
     setIsNovaHeModalOpen(false);
     setNovaHeForm({
       colaboradorId: colaboradores[0]?.id || '',
-      data: new Date().toISOString().slice(0, 10),
+      data: getBrasiliaYmd(),
       minutosExtras: 120,
       tipoHoraExtra: 'NORMAL_50',
       justificativa: ''
@@ -558,20 +705,45 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
                       </div>
                    </div>
 
-                   <div className="space-y-1">
+                   <div className="space-y-2">
                       <span className="text-[10px] font-bold text-slate-700 uppercase">Explicação do Colaborador:</span>
                       <p className="text-xs text-slate-600 bg-blue-50/30 p-3 rounded-lg border border-blue-100 italic">
                          "{ajuste.justificativa}"
                       </p>
+                      {(ajuste.nomeDocumentoAnexo || ajuste.anexoUrl) && (
+                        <div className="flex items-center justify-between p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-lg text-xs">
+                          <span className="flex items-center gap-1.5 text-indigo-900 font-semibold truncate">
+                            <Paperclip className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            Anexo: {ajuste.nomeDocumentoAnexo || 'Comprovante anexado'}
+                          </span>
+                          {ajuste.anexoUrl && (
+                            <a
+                              href={ajuste.anexoUrl}
+                              download={ajuste.nomeDocumentoAnexo || `anexo-${ajuste.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-[10px] shrink-0 ml-2"
+                            >
+                              Baixar / Visualizar
+                            </a>
+                          )}
+                        </div>
+                      )}
                    </div>
 
                    {ajuste.status === 'PENDENTE' && (
                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                         <button 
-                          onClick={() => {
+                          onClick={async () => {
+                            const brtNow = getBrasiliaParts();
                             if (onUpdateSolicitacoesAjuste) {
-                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'REJEITADO' as any, dataDecisao: new Date().toLocaleString()} : s);
+                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'REJEITADO' as any, dataDecisao: brtNow.formatted} : s);
                               onUpdateSolicitacoesAjuste(novas);
+                            }
+                            if (supabase) {
+                              try {
+                                await supabase.from('adjustment_requests').update({ status: 'REJEITADO', data_decisao: brtNow.iso }).eq('request_id', ajuste.id);
+                              } catch {}
                             }
                           }}
                           className="px-3 py-1.5 bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
@@ -579,10 +751,16 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
                            <XCircle className="w-3.5 h-3.5" /> Negar
                         </button>
                         <button 
-                          onClick={() => {
+                          onClick={async () => {
+                            const brtNow = getBrasiliaParts();
                             if (onUpdateSolicitacoesAjuste) {
-                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'APROVADO' as any, dataDecisao: new Date().toLocaleString()} : s);
+                              const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'APROVADO' as any, dataDecisao: brtNow.formatted} : s);
                               onUpdateSolicitacoesAjuste(novas);
+                            }
+                            if (supabase) {
+                              try {
+                                await supabase.from('adjustment_requests').update({ status: 'APROVADO', data_decisao: brtNow.iso }).eq('request_id', ajuste.id);
+                              } catch {}
                             }
                           }}
                           className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"

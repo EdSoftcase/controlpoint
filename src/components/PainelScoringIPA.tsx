@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { getBrasiliaMonthYear, getMonthLabelPtBr } from '../utils/brasiliaClock';
 import {
   Colaborador,
   RegistroPontoREPP,
@@ -92,7 +93,7 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
   const [filtroNivel, setFiltroNivel] = useState<string>('TODOS');
   const [filtroElegibilidade, setFiltroElegibilidade] = useState<string>('TODOS');
   const [buscaTermo, setBuscaTermo] = useState<string>('');
-  const [periodoSelecionado, setPeriodoSelecionado] = useState<string>('MES_ATUAL');
+  const [periodoSelecionado] = useState<string>(() => getBrasiliaMonthYear());
 
   // Modal de Detalhes (Raio-X)
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState<ScoringIPAItem | null>(null);
@@ -597,7 +598,7 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
               <p className="text-xs text-slate-500">Colaboradores com as maiores pontuações no ciclo de avaliação</p>
             </div>
             <div className="text-xs font-semibold px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg">
-              Período: Outubro / 2026
+              Período: {getMonthLabelPtBr(periodoSelecionado)}
             </div>
           </div>
 

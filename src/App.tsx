@@ -59,9 +59,12 @@ import {
   Sparkles
 } from 'lucide-react';
 import { useAuth } from './components/AuthContext';
+import { syncBrasiliaClock, formatBrasiliaDate, formatBrasiliaTime } from './utils/brasiliaClock';
+import { hasRealBiometricTemplate } from './utils/biometricHelpers';
 
 export default function App() {
-  const { session, supabase } = useAuth();
+  const { session, authToken, supabase, clearAuthToken } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
   const [testFeedback, setTestFeedback] = useState<{ loading: boolean; message: string | null; success?: boolean }>({ loading: false, message: null });
 
   const handleTestSupabase = async () => {
@@ -106,14 +109,29 @@ export default function App() {
   const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'welcome' | 'spec' | 'prototype' | 'legal' | 'plan'>('colaborador');
   const [prototypeTargetScreen, setPrototypeTargetScreen] = useState<string>('adm-02');
 
-  // Enforce colaborador view for non-super-admins (unless viewing welcome guide)
+  const handleLogout = () => {
+    clearAuthToken();
+    supabase.auth.signOut().catch(() => {});
+    setCurrentUser(null);
+    setIsMobileMenuOpen(false);
+  };
+
   React.useEffect(() => {
-    if (currentUser && currentUser.role !== 'SUPER_ADMIN') {
+    syncBrasiliaClock(true);
+    const interval = setInterval(() => syncBrasiliaClock(true), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isOperatorAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN';
+
+  // Enforce colaborador view for non-admin users (unless viewing welcome guide)
+  React.useEffect(() => {
+    if (currentUser && !isOperatorAdmin) {
       if (activeView !== 'welcome') {
         setActiveView('colaborador');
       }
     }
-  }, [currentUser]);
+  }, [currentUser, isOperatorAdmin]);
   // Estado do Menu Hambúrguer Responsivo (Mobile & Tablet)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -135,6 +153,7 @@ export default function App() {
     async function fetchGlobalData() {
       try {
         const { data: colabs } = await supabase.from('collaborators').select('*');
+        let mappedColabs: Colaborador[] = [];
         if (colabs && colabs.length > 0) {
           let contactsMap: Record<string, any> = {};
           if (typeof window !== 'undefined') {
@@ -143,14 +162,13 @@ export default function App() {
             } catch (_) {}
           }
 
-          setColaboradores(colabs.map(c => {
+          mappedColabs = colabs.map(c => {
             const cleanCpf = (c.cpf || '').replace(/\D/g, '');
             let parsedEmail = c.email || '';
             let parsedTelefone = c.telefone || '';
             let parsedPretensaoDepto = '';
             let parsedPretensaoCargo = '';
 
-            // 1. Tentar extrair do biometric_template (que armazena JSON com email, telefone e pretensões de auto-cadastros)
             if (c.biometric_template) {
               try {
                 let bioData = typeof c.biometric_template === 'string' ? JSON.parse(c.biometric_template) : c.biometric_template;
@@ -166,7 +184,6 @@ export default function App() {
               } catch (_) {}
             }
 
-            // 2. Tentar recuperar do localStorage caso tenha sido registrado no mesmo browser
             if (typeof window !== 'undefined') {
               try {
                 const specificMeta = localStorage.getItem(`sc_colab_meta_${cleanCpf}`) || localStorage.getItem(`sc_colab_meta_${c.cpf}`);
@@ -187,13 +204,13 @@ export default function App() {
               } catch (_) {}
             }
 
-            // Contingência: caso seja a conta do usuário
-            if (!parsedEmail && c.nome?.toLowerCase().includes('edson')) {
-              parsedEmail = 'edsonfreire.santos@hotmail.com';
-            }
-
             const deptoFinal = c.departamento_nome || parsedPretensaoDepto || 'Geral';
             const cargoFinal = c.cargo_titulo || parsedPretensaoCargo || 'Colaborador';
+            const rawBio = c.biometric_template || c.biometria_hash_template;
+            const realBio = hasRealBiometricTemplate({
+              biometriaHashTemplate: rawBio,
+              biometriaCadastrada: c.biometria_cadastrada
+            });
 
             return {
               id: c.collaborator_id || c.id,
@@ -216,19 +233,24 @@ export default function App() {
               horarioFim: c.horario_fim || '17:00',
               cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria) || 8,
               intervaloMinutos: Number(c.intervalo_minutos) || 60,
-              maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia) || 15,
+              maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia) ?? 15,
               regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
-              pinColetor: c.pin_coletor || '123456',
+              pinColetor: c.pin_coletor || '',
               status: (c.status as any) || 'ATIVO',
-              biometriaCadastrada: Boolean(c.biometric_template || c.biometria_cadastrada || c.biometria_hash_template || (typeof window !== 'undefined' && localStorage.getItem(`sc_bio_${c.collaborator_id}`))),
-              biometriaHashTemplate: c.biometric_template || c.biometria_hash_template || 'ISO19794-5:AES-256',
-              limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 95.0,
+              biometriaCadastrada: realBio,
+              biometriaHashTemplate: rawBio || undefined,
+              limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 82.0,
+              tipoEscala: (c.tipo_escala as any) || '5x2',
+              turmaEscala: (c.turma_escala as any) || 'A',
+              diasFolgaSemana: Array.isArray(c.dias_folga_semana) ? c.dias_folga_semana : undefined,
+              anualFolgas: c.anual_folgas && typeof c.anual_folgas === 'object' ? c.anual_folgas : undefined,
               email: parsedEmail,
               telefone: parsedTelefone,
               pretensaoDepto: parsedPretensaoDepto,
               pretensaoCargo: parsedPretensaoCargo
             } as any;
-          }));
+          });
+          setColaboradores(mappedColabs);
         }
 
         const { data: ests } = await supabase.from('establishments').select('*');
@@ -239,16 +261,78 @@ export default function App() {
             nome: e.nome,
             cnpj: e.cnpj,
             codigo: (e.establishment_id || '').split('-')[0] || 'EST',
-            tipo: 'MATRIZ',
-            fusoHorario: e.fuso_horario || '-0300',
-            cidade: e.cidade || 'São Paulo',
+            tipo: (e.tipo as any) || 'MATRIZ',
+            fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
+            cep: e.cep || '',
             uf: e.uf || 'SP',
             municipio: e.municipio || e.cidade || 'São Paulo',
-            enderecoCompleto: e.endereco_completo || 'Av. Paulista, 1000 - Bela Vista',
+            enderecoCompleto: e.endereco_completo || '',
             latitude: Number(e.latitude) || -23.5615,
             longitude: Number(e.longitude) || -46.6559,
             cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
-            bloquearForaDoRaio: Boolean(e.bloquear_fora_do_raio)
+            bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
+          })));
+        }
+
+        const { data: depts } = await supabase.from('departments').select('*');
+        if (depts && depts.length > 0) {
+          setDepartamentos(depts.map(d => ({
+            id: d.department_id || d.id,
+            tenantId: d.tenant_id,
+            nome: d.nome,
+            codigo: d.codigo,
+            gestorId: d.gestor_id || '',
+            gestorNome: d.gestor_nome || '',
+            gestorEmail: d.gestor_email || '',
+            horarioInicioPadrao: d.horario_inicio_padrao || '08:00',
+            cargaHorariaDiariaHoras: Number(d.carga_horaria_diaria) || 8,
+            intervaloMinutos: Number(d.intervalo_minutos) || 60,
+            maxMinutosAntecedenciaPermitido: Number(d.max_minutos_antecedencia) ?? 15,
+            regraAntecedenciaAtiva: d.regra_antecedencia_ativa ?? true
+          })));
+        }
+
+        const { data: holis } = await supabase.from('holidays').select('*').order('data', { ascending: true });
+        if (holis && holis.length > 0) {
+          setFeriados(holis.map(h => ({
+            id: h.holiday_id || h.id,
+            tenantId: h.tenant_id,
+            nome: h.nome,
+            data: h.data,
+            tipo: h.tipo as any,
+            uf: h.uf,
+            municipio: h.municipio,
+            estabelecimentoId: h.estabelecimento_id,
+            recorrenteAnual: Boolean(h.recorrente_anual),
+            legislacaoBase: h.legislacao_base || '',
+            adicionalHoraExtraPercentual: Number(h.adicional_hora_extra_percentual) || 100,
+            geraFolgaCompensatoria: Boolean(h.gera_folga_compensatoria),
+            afetaDSR: Boolean(h.afeta_dsr)
+          })));
+        }
+
+        const { data: overtimes } = await supabase.from('overtime_requests').select('*').order('data', { ascending: false });
+        if (overtimes && overtimes.length > 0) {
+          setHorasExtras(overtimes.map(o => ({
+            id: o.request_id || o.id,
+            tenantId: o.tenant_id,
+            colaboradorId: o.collaborator_id,
+            colaboradorNome: o.collaborator_name || '',
+            colaboradorCpf: o.collaborator_cpf || '',
+            departamentoId: o.departamento_id || '',
+            departamentoNome: o.departamento_nome || '',
+            gestorId: o.gestor_id || '',
+            gestorNome: o.gestor_nome || '',
+            data: o.data,
+            horarioContratado: o.horario_contratado || '',
+            horarioRealizado: o.horario_realizado || '',
+            minutosExtras: Number(o.minutos_extras) || 0,
+            horasExtrasFormatadas: o.horas_extras_formatadas || '00:00h',
+            tipoHoraExtra: (o.tipo_hora_extra as any) || 'NORMAL_50',
+            justificativa: o.justificativa || '',
+            status: o.status as any,
+            motivoRecusa: o.motivo_recusa,
+            dataDecisao: o.data_decisao
           })));
         }
 
@@ -266,31 +350,40 @@ export default function App() {
               colaboradorCpf: parsed.colaboradorCpf || '',
               colaboradorMatricula: parsed.colaboradorMatricula || '',
               dataHora: p.data_hora,
-              dataHoraFormatada: parsed.dataHoraFormatada || new Date(p.data_hora).toLocaleString('pt-BR'),
-              fusoHorario: '-0300',
+              dataHoraFormatada: parsed.dataHoraFormatada || `${formatBrasiliaDate(p.data_hora)} ${formatBrasiliaTime(p.data_hora, true)}`,
+              fusoHorario: parsed.fusoHorario || '-03:00',
               coletorId: parsed.coletorId || 'COL-MOBILE',
               tipoMarcacao: p.tipo_marcacao,
-              hashSha256: p.hash_sha256 || 'HASH_DEFAULT'
+              hashSha256: p.hash_sha256 || 'HASH_DEFAULT',
+              latitude: p.latitude !== null && p.latitude !== undefined ? Number(p.latitude) : parsed.latitude,
+              longitude: p.longitude !== null && p.longitude !== undefined ? Number(p.longitude) : parsed.longitude,
+              distanciaCentroMetros: parsed.distanciaCentroMetros,
+              foraDoRaioGeofence: parsed.foraDoRaioGeofence,
+              localizacaoEndereco: parsed.localizacaoEndereco,
+              modoDispositivo: p.modo_dispositivo || parsed.modoDispositivo
             };
           }));
         }
 
         const { data: sigs } = await supabase.from('point_signatures').select('*').order('created_at', { ascending: false });
         if (sigs && sigs.length > 0) {
-          setAssinaturasEspelho(sigs.map(s => ({
-            id: s.id,
-            tenantId: s.tenant_id,
-            colaboradorId: s.collaborator_id,
-            colaboradorNome: '', // Will be matched via ID if needed, but PortalColaborador filters by CPF
-            colaboradorCpf: '', // Need to ensure we have CPF or filter by ID
-            mesAno: s.mes_ano,
-            dataHoraAssinatura: s.data_hora_assinatura,
-            hashAssinaturaSha256: s.hash_assinatura_sha256,
-            ipAddress: s.ip_address || '',
-            dispositivoInfo: s.dispositivo_info || '',
-            rubricaDataUrl: s.rubrica_data_url || '',
-            status: s.status as any
-          })));
+          setAssinaturasEspelho(sigs.map(s => {
+            const matchedColab = mappedColabs.find(c => c.id === s.collaborator_id);
+            return {
+              id: s.id,
+              tenantId: s.tenant_id,
+              colaboradorId: s.collaborator_id,
+              colaboradorNome: matchedColab?.nome || 'Colaborador',
+              colaboradorCpf: matchedColab?.cpf || '',
+              mesAno: s.mes_ano,
+              dataHoraAssinatura: s.data_hora_assinatura,
+              hashAssinaturaSha256: s.hash_assinatura_sha256,
+              ipAddress: s.ip_address || '',
+              dispositivoInfo: s.dispositivo_info || '',
+              rubricaDataUrl: s.rubrica_data_url || '',
+              status: s.status as any
+            };
+          }));
         }
 
         const { data: adjs } = await supabase.from('adjustment_requests').select('*').order('created_at', { ascending: false });
@@ -313,6 +406,7 @@ export default function App() {
               tipoMarcacaoAjuste: a.tipo_marcacao_ajuste as any,
               cid10: a.cid10,
               nomeDocumentoAnexo: a.nome_documento_anexo,
+              anexoUrl: a.anexo_url || details.anexoUrl,
               dataHoraEnvio: a.data_hora_envio,
               justificativa: a.justificativa,
               status: a.status as any,
@@ -328,22 +422,26 @@ export default function App() {
     fetchGlobalData();
   }, [supabase]);
 
-  // Sync currentUser with session metadata if session exists
+  // Sync currentUser with session metadata if Supabase session exists
   React.useEffect(() => {
     if (session && session.user && !currentUser) {
       const meta = session.user.user_metadata;
-      const isSuper = session.user.email === 'admin@softcase.com.br' || session.user.email === 'edsonfreire.santos@hotmail.com';
+      const isSuper = session.user.email === 'admin@softcase.com.br';
+      const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
       setCurrentUser({
         id: session.user.id,
         nome: meta.nome || 'Usuário Supabase',
         email: session.user.email || '',
         cpf: meta.cpf || '',
-        role: isSuper ? 'SUPER_ADMIN' : 'COLABORADOR',
-        roleLabel: isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT',
+        role,
+        roleLabel: meta.roleLabel || (isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT'),
         tenantId: meta.tenantId || 'tenant-01',
         tenantNome: meta.tenantNome || 'Empresa',
         mfaHabilitado: false
       });
+      if (role === 'SUPER_ADMIN' || role === 'RH_ADMIN') {
+        setActiveView('operational');
+      }
     }
   }, [session, currentUser]);
 
@@ -397,14 +495,14 @@ export default function App() {
                <ShieldCheck className="w-4 h-4" />
              </div>
              <div>
-               <h1 className="text-sm font-extrabold tracking-tight text-slate-900 leading-none">Control Point</h1>
+               <h1 className="text-sm font-extrabold tracking-tight text-slate-900 leading-none">Point Control</h1>
                <span className="text-[9px] font-semibold text-emerald-600 tracking-wider uppercase">REP-P Secure</span>
              </div>
            </div>
         </div>
         
         <nav className="flex-1 p-4 space-y-1">
-          {currentUser.role === 'SUPER_ADMIN' ? (
+          {isOperatorAdmin ? (
             <>
               <div className="space-y-1">
                 <button
@@ -562,10 +660,10 @@ export default function App() {
         {/* Top Header (Global Actions) */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
             <div className="flex items-center gap-4">
-              <span className="lg:hidden text-lg font-bold">Control Point</span>
+              <span className="lg:hidden text-lg font-bold">Point Control</span>
               <div className="hidden lg:block">
                  <span className="text-sm font-medium text-slate-500">
-                   {currentUser.role === 'SUPER_ADMIN' 
+                   {isOperatorAdmin
                      ? (activeView === 'operational' ? 'Painel Administrativo' : 'Portal Colaborador') 
                      : 'Portal do Colaborador (Meu Espelho)'}
                  </span>
@@ -573,7 +671,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-3 ml-auto shrink-0">
-                {currentUser.role === 'SUPER_ADMIN' && (
+                {isOperatorAdmin && (
                   <>
                     <button 
                       onClick={handleTestSupabase}
@@ -622,7 +720,7 @@ export default function App() {
                 </div>
 
                 <button 
-                  onClick={() => setCurrentUser(null)} 
+                  onClick={handleLogout} 
                   className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
                   title="Sair"
                 >
@@ -665,7 +763,7 @@ export default function App() {
 
         {/* Main Content Viewport */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-28 lg:pb-8">
-          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'operational') && (
+          {(isOperatorAdmin && activeView === 'operational') && (
             <OperationalApp
               currentUser={currentUser}
               departamentos={departamentos}
@@ -683,17 +781,15 @@ export default function App() {
               solicitacoesAjuste={solicitacoesAjuste}
               onUpdateSolicitacoesAjuste={async (novas) => {
                 setSolicitacoesAjuste(novas);
-                // Persiste a mudança de status/resposta no Supabase
                 const alterado = novas.find(n => {
                   const anterior = solicitacoesAjuste.find(s => s.id === n.id);
                   return anterior && JSON.stringify(n) !== JSON.stringify(anterior);
                 });
                 if (alterado) {
                   try {
-                    const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
                     await fetch('/api/save-adjustment', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearerToken}` },
                       body: JSON.stringify(alterado)
                     });
                   } catch (err) {
@@ -710,23 +806,47 @@ export default function App() {
             />
           )}
 
-          {(((currentUser.role !== 'SUPER_ADMIN' && activeView !== 'welcome') || activeView === 'colaborador')) && (
+          {(((!isOperatorAdmin && activeView !== 'welcome') || activeView === 'colaborador')) && (
             <PortalColaborador
               user={currentUser}
               registros={registros}
               feriados={feriados}
               horasExtras={horasExtras}
-              onAddHoraExtra={(nova) => setHorasExtras([nova, ...horasExtras])}
+              onAddHoraExtra={async (nova) => {
+                setHorasExtras([nova, ...horasExtras]);
+                try {
+                  await supabase.from('overtime_requests').upsert({
+                    request_id: nova.id,
+                    tenant_id: nova.tenantId,
+                    collaborator_id: nova.colaboradorId,
+                    collaborator_name: nova.colaboradorNome,
+                    collaborator_cpf: nova.colaboradorCpf,
+                    departamento_id: nova.departamentoId,
+                    departamento_nome: nova.departamentoNome,
+                    gestor_id: nova.gestorId,
+                    gestor_nome: nova.gestorNome,
+                    data: nova.data,
+                    horario_contratado: nova.horarioContratado,
+                    horario_realizado: nova.horarioRealizado,
+                    minutos_extras: nova.minutosExtras,
+                    horas_extras_formatadas: nova.horasExtrasFormatadas,
+                    tipo_hora_extra: nova.tipoHoraExtra,
+                    justificativa: nova.justificativa,
+                    status: nova.status
+                  }, { onConflict: 'request_id' });
+                } catch (err) {
+                  console.warn('Erro ao persistir hora extra:', err);
+                }
+              }}
               solicitacoesAjuste={solicitacoesAjuste}
               onAddSolicitacaoAjuste={async (nova) => {
                 setSolicitacoesAjuste([nova, ...solicitacoesAjuste]);
                 try {
-                  const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
                   await fetch('/api/save-adjustment', {
                     method: 'POST',
                     headers: { 
                       'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${token}`
+                      'Authorization': `Bearer ${bearerToken}`
                     },
                     body: JSON.stringify(nova)
                   });
@@ -738,12 +858,11 @@ export default function App() {
               onAddAssinaturaEspelho={async (nova) => {
                 setAssinaturasEspelho([nova, ...assinaturasEspelho]);
                 try {
-                  const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || '';
                   await fetch('/api/save-signature', {
                     method: 'POST',
                     headers: { 
                       'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${token}`
+                      'Authorization': `Bearer ${bearerToken}`
                     },
                     body: JSON.stringify(nova)
                   });
@@ -752,12 +871,15 @@ export default function App() {
                 }
               }}
               onRegistrarPonto={() => {
-                if (currentUser.role === 'SUPER_ADMIN') {
+                if (isOperatorAdmin) {
                   setOperationalTab('coletor');
                   setActiveView('operational');
                 }
               }}
               onAddRegistroPonto={(novo) => setRegistros([novo, ...registros])}
+              onUpdateColaboradorBiometria={(colabId, updatedFields) => {
+                setColaboradores(prev => prev.map(c => c.id === colabId ? { ...c, ...updatedFields } : c));
+              }}
               estabelecimentos={estabelecimentos}
               colaboradores={colaboradores}
               onOpenGuia={() => setActiveView('welcome')}
@@ -766,7 +888,7 @@ export default function App() {
 
           {activeView === 'welcome' && (
             <GuiaBoasVindas
-              initialAudience={currentUser.role === 'SUPER_ADMIN' ? 'rh' : 'colaborador'}
+              initialAudience={isOperatorAdmin ? 'rh' : 'colaborador'}
               currentUserRole={currentUser.role}
               onNavigateToTab={(tab) => {
                 setActiveView('operational');
@@ -778,31 +900,29 @@ export default function App() {
             />
           )}
 
-          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'spec') && (
+          {(isOperatorAdmin && activeView === 'spec') && (
             <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
           )}
 
-          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'prototype') && (
+          {(isOperatorAdmin && activeView === 'prototype') && (
             <InteractivePrototype initialScreenId={prototypeTargetScreen} />
           )}
 
-          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'legal') && <LegalMatrixViewer />}
+          {(isOperatorAdmin && activeView === 'legal') && <LegalMatrixViewer />}
 
-          {(currentUser.role === 'SUPER_ADMIN' && activeView === 'plan') && <ProjectPlanViewer />}
+          {(isOperatorAdmin && activeView === 'plan') && <ProjectPlanViewer />}
         </main>
 
-        {/* Footer */}
-        {/* Footer */}
         <footer className="border-t border-slate-200 bg-white py-6 mt-auto pb-24 lg:pb-6">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
             <div>
-              <strong>Control Point</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
+              <strong>Point Control</strong> — Sistema de Registro Eletrônico de Ponto (REP-P / PTRP) conforme Portaria MTP nº 671/2021.
             </div>
             <div className="flex items-center gap-4 text-slate-600 font-medium">
               <span>Sessão: {currentUser.nome} ({currentUser.roleLabel})</span>
               <span>·</span>
               <button
-                onClick={() => setCurrentUser(null)}
+                onClick={handleLogout}
                 className="text-blue-600 hover:underline font-bold"
               >
                 Sair (Logout)
@@ -816,7 +936,7 @@ export default function App() {
       {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (MOBILE & TABLETS)       */}
       {/* ========================================================= */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 shadow-[0_-8px_30px_rgba(0,0,0,0.5)] px-2 py-1 flex items-center justify-around safe-area-pb">
-        {currentUser.role === 'SUPER_ADMIN' ? (
+        {isOperatorAdmin ? (
           <>
             {/* 1. Ponto / Relatórios */}
             <button
@@ -1016,7 +1136,7 @@ export default function App() {
 
             {/* Área Scrollável de Módulos Agrupados */}
             <div className="overflow-y-auto p-4 space-y-5 flex-1">
-              {currentUser.role === 'SUPER_ADMIN' ? (
+              {isOperatorAdmin ? (
                 <>
                   {/* Seção 1: Operação e Controle de Ponto */}
                   <div className="space-y-2">
@@ -1564,10 +1684,7 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={() => {
-                    setCurrentUser(null);
-                    setIsMobileMenuOpen(false);
-                  }}
+                  onClick={handleLogout}
                   className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/70 text-rose-300 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-colors"
                 >
                   <LogOut className="w-3.5 h-3.5" />
@@ -1575,7 +1692,7 @@ export default function App() {
                 </button>
               </div>
 
-              {currentUser.role === 'SUPER_ADMIN' && (
+              {isOperatorAdmin && (
                 <button
                   onClick={() => {
                     setIsExportModalOpen(true);

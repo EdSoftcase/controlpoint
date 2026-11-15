@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { RegistroPontoREPP, Colaborador } from '../../types/operational';
 import { Download, ShieldCheck, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 interface GestaoRegistrosPontoTabProps {
   activeRegistros: RegistroPontoREPP[];
@@ -9,12 +10,81 @@ interface GestaoRegistrosPontoTabProps {
   onDownloadAEJ: () => void;
 }
 
+interface BiometricAuditStat {
+  total: number;
+  success: number;
+  failed: number;
+  avgSimilarity: number;
+  lastVerdict: string;
+}
+
 export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = ({
   activeRegistros,
   activeColaboradores,
   onDownloadAFD,
   onDownloadAEJ
 }) => {
+  const { supabase } = useAuth();
+  const [auditStats, setAuditStats] = useState<Record<string, BiometricAuditStat>>({});
+
+  useEffect(() => {
+    let active = true;
+    async function loadAuditStats() {
+      const tenantId = activeColaboradores[0]?.tenantId || activeRegistros[0]?.tenantId;
+      if (!tenantId) return;
+      try {
+        const { data, error } = await supabase
+          .from('biometric_audit_logs')
+          .select('collaborator_id, similarity, liveness_score, verdict, timestamp')
+          .eq('tenant_id', tenantId)
+          .order('timestamp', { ascending: false })
+          .limit(1000);
+
+        if (error || !data || !active) return;
+
+        const map: Record<string, { total: number; success: number; failed: number; sumSim: number; lastVerdict: string }> = {};
+        for (const row of data) {
+          const cid = row.collaborator_id;
+          if (!map[cid]) {
+            map[cid] = {
+              total: 0,
+              success: 0,
+              failed: 0,
+              sumSim: 0,
+              lastVerdict: row.verdict || ''
+            };
+          }
+          map[cid].total += 1;
+          map[cid].sumSim += Number(row.similarity || 0);
+          const isOk =
+            row.verdict === 'APROVADO' ||
+            row.verdict === 'MATCH' ||
+            row.verdict === 'SELFIE_CONTINGENCIA_AUDITADA';
+          if (isOk) map[cid].success += 1;
+          else map[cid].failed += 1;
+        }
+
+        const formatted: Record<string, BiometricAuditStat> = {};
+        for (const [cid, st] of Object.entries(map)) {
+          formatted[cid] = {
+            total: st.total,
+            success: st.success,
+            failed: st.failed,
+            avgSimilarity: st.total > 0 ? Math.round((st.sumSim / st.total) * 10) / 10 : 0,
+            lastVerdict: st.lastVerdict
+          };
+        }
+        if (active) setAuditStats(formatted);
+      } catch {
+        // ignore
+      }
+    }
+    loadAuditStats();
+    return () => {
+      active = false;
+    };
+  }, [supabase, activeColaboradores, activeRegistros.length]);
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
@@ -59,8 +129,8 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
                   </td>
                 </tr>
               ) : (
-                activeRegistros.map((reg) => (
-                  <tr key={reg.nsr} className="hover:bg-slate-50 transition-colors">
+                activeRegistros.map((reg, idx) => (
+                  <tr key={`${reg.id || reg.nsr}-${reg.hashSha256 || idx}`} className="hover:bg-slate-50 transition-colors">
                     <td className="py-2.5 px-2 font-mono font-bold text-slate-900">{String(reg.nsr).padStart(6, '0')}</td>
                     <td className="py-2.5 px-2 text-slate-600">{reg.dataHoraFormatada}</td>
                     <td className="py-2.5 px-2 font-medium text-slate-700">{reg.colaboradorNome}</td>
@@ -82,15 +152,15 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
           </table>
         </div>
 
-        {/* Seção de Auditoria de Liveness / Prova de Vida por Colaborador */}
+        {/* Seção de Auditoria de Liveness / Prova de Vida Real por Colaborador */}
         <div className="pt-6 border-t border-slate-200 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                Auditoria de Taxa de Sucesso & Prova de Vida (Liveness Detection)
+                Auditoria de Taxa de Sucesso & Prova de Vida (biometric_audit_logs)
               </h3>
-              <p className="text-[11px] text-slate-500">Métricas de verificação biométrica e detecção de tentativas suspeitas por colaborador.</p>
+              <p className="text-[11px] text-slate-500">Métricas reais de verificação biométrica e vivacidade auditadas no Supabase.</p>
             </div>
           </div>
 
@@ -107,12 +177,13 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {activeColaboradores.map((colab, idx) => {
-                  const totalAttempts = Math.max(2, (colab.nome.length % 5) + 8);
-                  const failedAttempts = colab.id === 'colab-03' ? 2 : (idx === 1 ? 1 : 0);
-                  const successAttempts = totalAttempts - failedAttempts;
-                  const successRate = Math.round((successAttempts / totalAttempts) * 100);
-                  const isSuspicious = successRate < 85;
+                {activeColaboradores.map((colab) => {
+                  const stat = auditStats[colab.id];
+                  const totalAttempts = stat?.total || 0;
+                  const successAttempts = stat?.success || 0;
+                  const failedAttempts = stat?.failed || 0;
+                  const successRate = totalAttempts > 0 ? Math.round((successAttempts / totalAttempts) * 100) : null;
+                  const isSuspicious = successRate !== null && successRate < 85;
 
                   return (
                     <tr key={colab.id} className="hover:bg-slate-50 transition-colors">
@@ -124,15 +195,23 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
                       <td className="py-3 px-2 font-mono text-emerald-600 font-semibold">{successAttempts}</td>
                       <td className="py-3 px-2 font-mono text-rose-600 font-semibold">{failedAttempts}</td>
                       <td className="py-3 px-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-20 bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div className={`h-full ${successRate >= 90 ? 'bg-emerald-500' : successRate >= 80 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${successRate}%` }}></div>
+                        {successRate !== null ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-20 bg-slate-100 h-2 rounded-full overflow-hidden">
+                              <div className={`h-full ${successRate >= 90 ? 'bg-emerald-500' : successRate >= 80 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${successRate}%` }}></div>
+                            </div>
+                            <span className="font-mono font-bold text-slate-800">{successRate}%</span>
                           </div>
-                          <span className="font-mono font-bold text-slate-800">{successRate}%</span>
-                        </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">Sem auditorias registradas</span>
+                        )}
                       </td>
                       <td className="py-3 px-2">
-                        {isSuspicious ? (
+                        {successRate === null ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 w-fit inline-block">
+                            Aguardando 1º registro
+                          </span>
+                        ) : isSuspicious ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1 w-fit">
                             <AlertCircle className="w-3 h-3" /> Suspeito / Alerta
                           </span>

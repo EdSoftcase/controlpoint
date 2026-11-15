@@ -28,18 +28,25 @@ import {
   BadgeCheck,
   XCircle
 } from 'lucide-react';
-import { supabase, useAuth } from './AuthContext';
+import { useAuth } from './AuthContext';
+import { getBrasiliaYmd, formatBrasiliaDate } from '../utils/brasiliaClock';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: AuthUser, redirectView: 'operational' | 'colaborador') => void;
   onCollaboratorRegistered?: (novoColab: any) => void;
 }
 
+interface PublicTenantOption {
+  id: string;
+  razaoSocial: string;
+  nomeFantasia: string;
+}
+
 export const LoginScreen: React.FC<LoginScreenProps> = ({ 
   onLoginSuccess,
   onCollaboratorRegistered 
 }) => {
-  const { supabase, updateSupabaseConfig } = useAuth();
+  const { supabase, setAuthToken } = useAuth();
   
   // Modos da tela: login tradicional, auto-cadastro, recuperação de senha ou confirmação de envio
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'recover' | 'register_success'>('login');
@@ -51,9 +58,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [showConfig, setShowConfig] = useState(false);
 
   // Estados de Auto-Cadastro do Colaborador
+  const [publicTenants, setPublicTenants] = useState<PublicTenantOption[]>([
+    { id: 'tenant-01', razaoSocial: 'Softcase Tecnologia', nomeFantasia: 'Softcase' }
+  ]);
+  const [regTenantId, setRegTenantId] = useState('tenant-01');
   const [regNome, setRegNome] = useState('');
   const [regCpf, setRegCpf] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -70,32 +80,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     telefone: string;
     depto: string;
     cargo: string;
+    empresa: string;
   } | null>(null);
 
-  // Estados de Recuperação de Senha
+  // Estados de Recuperação de Senha (2 fatores)
   const [recIdentificador, setRecIdentificador] = useState('');
+  const [recSegundoFator, setRecSegundoFator] = useState('');
   const [recNovaSenha, setRecNovaSenha] = useState('');
   const [recNovaSenhaConfirma, setRecNovaSenhaConfirma] = useState('');
-
-  // Estados para configuração manual do Supabase
-  const [configUrl, setConfigUrl] = useState('');
-  const [configAnon, setConfigAnon] = useState('');
-  const [configService, setConfigService] = useState('');
 
   // Etapa de Autenticação em Duas Etapas (MFA)
   const [mfaStep, setMfaStep] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
   const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
 
-  // Carregar configurações locais
   React.useEffect(() => {
-    const savedUrl = localStorage.getItem('sc_supabase_url') || '';
-    const savedAnon = localStorage.getItem('sc_supabase_anon') || '';
-    const savedService = localStorage.getItem('sc_supabase_service') || '';
-    
-    if (savedUrl) setConfigUrl(savedUrl);
-    if (savedAnon) setConfigAnon(savedAnon);
-    if (savedService) setConfigService(savedService);
+    fetch('/api/public-tenants')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.tenants && Array.isArray(data.tenants) && data.tenants.length > 0) {
+          setPublicTenants(data.tenants);
+          setRegTenantId(data.tenants[0].id);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const handleIdentificadorChange = (val: string) => {
@@ -135,62 +143,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setRecIdentificador(formatCPF(val));
     } else {
       setRecIdentificador(val);
-    }
-  };
-
-  const handleUpdateConfig = async () => {
-    if (!configUrl || !configAnon || !configService) {
-      alert('Preencha todos os campos da configuração.');
-      return;
-    }
-    
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/update-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: configUrl, key: configService })
-      });
-
-      if (res.ok) {
-        localStorage.setItem('sc_supabase_service', configService);
-        updateSupabaseConfig(configUrl, configAnon);
-        alert('Supabase configurado com sucesso! Agora você pode tentar o login.');
-        setShowConfig(false);
-      } else {
-        const err = await res.json();
-        alert(`Erro ao configurar servidor: ${err.error}`);
-      }
-    } catch (err) {
-      alert('Erro de conexão ao tentar configurar o servidor.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleBootstrap = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/bootstrap-admin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'admin@softcase.com.br',
-          password: 'Softcase@2026',
-          nome: 'Super Administrador Softcase'
-        })
-      });
-      
-      const data = await res.json();
-      if (res.ok) {
-        alert('Administrador criado/atualizado com sucesso! Use as credenciais reais para entrar.');
-      } else {
-        alert(`Erro no Bootstrap: ${data.error}`);
-      }
-    } catch (err) {
-      alert('Erro de rede ao tentar bootstrap.');
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -234,6 +186,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setIsLoading(true);
     try {
       const colabPayload = {
+        tenantId: regTenantId,
         nome: regNome.trim(),
         cpf: regCpf.trim(),
         email: regEmail.trim().toLowerCase(),
@@ -243,21 +196,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         senha: regSenha.trim()
       };
 
-      // 1. Tentar salvar via backend oficial
-      try {
-        await fetch('/api/self-register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(colabPayload)
-        });
-      } catch (apiErr) {
-        console.warn('Aviso API self-register:', apiErr);
+      const res = await fetch('/api/self-register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(colabPayload)
+      });
+
+      const apiResult = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorMessage(apiResult?.error || 'Não foi possível concluir o auto-cadastro.');
+        setIsLoading(false);
+        return;
       }
 
-      // 2. Salvar diretamente no Supabase em tabela de colaboradores com status = PENDENTE
       const cleanDigits = regCpf.replace(/\D/g, '');
-      const novoColabId = `colab-auto-${cleanDigits.slice(-6)}-${Date.now().toString().slice(-4)}`;
-      const matriculaGerada = `PEND-${cleanDigits.slice(0, 4)}`;
+      const novoColabId = apiResult.colabId || `colab-auto-${cleanDigits.slice(-6)}-${Date.now().toString().slice(-4)}`;
+      const matriculaGerada = apiResult.data?.matricula || `PEND-${cleanDigits.slice(0, 4)}`;
+      const todayBr = getBrasiliaYmd();
 
       const metadataBio = JSON.stringify({
         email: regEmail.trim().toLowerCase(),
@@ -266,35 +221,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         pretensaoCargo: regCargo || ''
       });
 
-      // Grava em cache local para disponibilidade imediata e offline-first
-      try {
-        const contactMeta = {
-          email: regEmail.trim().toLowerCase(),
-          telefone: regTelefone.trim(),
-          pretensaoDepto: regDepto,
-          pretensaoCargo: regCargo
-        };
-        localStorage.setItem(`sc_colab_meta_${cleanDigits}`, JSON.stringify(contactMeta));
-        localStorage.setItem(`sc_colab_meta_${regCpf.trim()}`, JSON.stringify(contactMeta));
-        const allContacts = JSON.parse(localStorage.getItem('sc_all_colab_contacts') || '{}');
-        allContacts[cleanDigits] = contactMeta;
-        allContacts[regCpf.trim()] = contactMeta;
-        allContacts[regNome.trim().toLowerCase()] = contactMeta;
-        localStorage.setItem('sc_all_colab_contacts', JSON.stringify(allContacts));
-      } catch (localErr) {
-        console.warn('Erro ao salvar meta no localStorage:', localErr);
-      }
+      const selectedTenant = publicTenants.find((t) => t.id === regTenantId);
 
       const novoColabObjeto = {
         id: novoColabId,
         collaborator_id: novoColabId,
-        tenantId: 'tenant-01',
-        tenant_id: 'tenant-01',
+        tenantId: regTenantId,
+        tenant_id: regTenantId,
         nome: regNome.trim(),
         cpf: regCpf.trim(),
         matricula: matriculaGerada,
-        dataAdmissao: new Date().toISOString().slice(0, 10),
-        data_admissao: new Date().toISOString().slice(0, 10),
+        dataAdmissao: todayBr,
+        data_admissao: todayBr,
         cargoId: 'crg-auto',
         cargoTitulo: regCargo || 'A Definir pelo Gestor',
         cargo_titulo: regCargo || 'A Definir pelo Gestor',
@@ -302,7 +240,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         departamentoNome: regDepto || 'A Definir pelo Gestor',
         departamento_nome: regDepto || 'A Definir pelo Gestor',
         estabelecimentoId: 'est-01',
-        estabelecimentoNome: 'Matriz São Paulo',
+        estabelecimentoNome: selectedTenant?.nomeFantasia || 'A Definir',
         regime: 'REGULAR' as const,
         horarioInicio: '08:00',
         horarioFim: '17:00',
@@ -313,36 +251,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         pinColetor: regSenha.trim(),
         pin_coletor: regSenha.trim(),
         status: 'PENDENTE' as const,
+        biometriaCadastrada: false,
         email: regEmail.trim().toLowerCase(),
         telefone: regTelefone.trim(),
         pretensaoDepto: regDepto,
         pretensaoCargo: regCargo,
         biometriaHashTemplate: metadataBio,
-        dataSolicitacaoCadastro: new Date().toLocaleDateString('pt-BR')
+        dataSolicitacaoCadastro: formatBrasiliaDate()
       };
 
-      try {
-        await supabase
-          .from('collaborators')
-          .upsert({
-            collaborator_id: novoColabId,
-            tenant_id: 'tenant-01',
-            nome: regNome.trim(),
-            cpf: regCpf.trim(),
-            matricula: matriculaGerada,
-            data_admissao: new Date().toISOString().slice(0, 10),
-            cargo_titulo: regCargo || 'A Definir pelo Gestor',
-            departamento_nome: regDepto || 'A Definir pelo Gestor',
-            status: 'PENDENTE',
-            pin_coletor: regSenha.trim(),
-            biometric_template: metadataBio,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'collaborator_id' });
-      } catch (sbErr) {
-        console.warn('Aviso Supabase upsert:', sbErr);
-      }
-
-      // Propaga para o estado global da aplicação
       onCollaboratorRegistered?.(novoColabObjeto);
 
       setLastRegisteredName(regNome.trim());
@@ -352,7 +269,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         email: regEmail.trim().toLowerCase(),
         telefone: regTelefone.trim() || 'Não informado',
         depto: regDepto,
-        cargo: regCargo || 'A Definir pelo Gestor'
+        cargo: regCargo || 'A Definir pelo Gestor',
+        empresa: selectedTenant?.razaoSocial || 'Softcase Tecnologia'
       });
       setAuthMode('register_success');
     } catch (err: any) {
@@ -363,14 +281,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  // Submissão do Formulário de Recuperação de Acesso
+  // Submissão do Formulário de Recuperação de Acesso (Duplo Fator)
   const handleRecoverSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
 
     if (!recIdentificador.trim()) {
-      setErrorMessage('Informe seu CPF ou E-mail corporativo cadastrado.');
+      setErrorMessage('Informe seu CPF cadastrado.');
+      return;
+    }
+
+    if (!recSegundoFator.trim()) {
+      setErrorMessage('Informe seu E-mail corporativo ou Matrícula para validação em dois fatores.');
       return;
     }
 
@@ -391,6 +314,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identificador: recIdentificador.trim(),
+          segundoFator: recSegundoFator.trim(),
           novaSenha: recNovaSenha.trim()
         })
       });
@@ -401,176 +325,127 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         setIdentificador(recIdentificador.trim());
         setSenha(recNovaSenha.trim());
       } else {
-        setErrorMessage(data.error || 'Nenhum colaborador localizado com o CPF ou E-mail informado.');
+        setErrorMessage(data.error || 'Dados não conferem com nenhum colaborador ativo.');
       }
-    } catch (err) {
+    } catch {
       setErrorMessage('Erro ao conectar com o serviço de recuperação.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Submissão do Login
+  // Submissão do Login (100% autenticado pelo servidor sem bypass)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
 
-    const emailTrimmed = identificador.trim().toLowerCase();
-    const isMasterAdmin = (
-      (emailTrimmed === 'admin@softcase.com.br' || 
-       emailTrimmed === 'edsonfreire.santos@hotmail.com' || 
-       emailTrimmed === 'admin' ||
-       emailTrimmed === '000.000.000-00') && 
-      senha === 'Softcase@2026'
-    );
+    const rawIdent = identificador.trim();
+    const emailTrimmed = rawIdent.toLowerCase();
 
     try {
-      // 1. Tentar autenticação real via Supabase GoTrue
-      const targetEmail = emailTrimmed.includes('@') ? emailTrimmed : `${emailTrimmed}@softcase.com.br`;
-      const { data, error: sbError } = await supabase.auth.signInWithPassword({
-        email: targetEmail, 
-        password: senha,
+      // 1. Tentar login de Administrador se identificador tiver formato de e-mail administrativo
+      if (
+        emailTrimmed === 'admin@softcase.com.br' ||
+        emailTrimmed === 'admin'
+      ) {
+        const targetEmail = emailTrimmed === 'admin' ? 'admin@softcase.com.br' : emailTrimmed;
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'ADMIN',
+            email: targetEmail,
+            password: senha
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.token && data?.user) {
+          setAuthToken(data.token);
+          const u = data.user;
+          const authUser: AuthUser = {
+            id: u.id,
+            nome: u.user_metadata?.nome || 'Super Administrador',
+            email: u.email || targetEmail,
+            cpf: u.user_metadata?.cpf || '000.000.000-00',
+            role: (u.user_metadata?.role as any) || 'SUPER_ADMIN',
+            roleLabel: u.user_metadata?.roleLabel || 'Super Administrador',
+            tenantId: u.user_metadata?.tenantId || 'tenant-01',
+            tenantNome: u.user_metadata?.tenantNome || 'Softcase Tecnologia',
+            mfaHabilitado: false
+          };
+          concluirLogin(authUser);
+          return;
+        }
+        setErrorMessage(data?.error || 'E-mail ou senha administrativa inválidos.');
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. Login via Supabase Auth se for e-mail corporativo padrão
+      if (emailTrimmed.includes('@')) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+          email: emailTrimmed,
+          password: senha
+        });
+        if (sbData?.user && sbData?.session?.access_token && !sbErr) {
+          setAuthToken(sbData.session.access_token);
+          const role = (sbData.user.user_metadata?.role as any) || 'COLABORADOR';
+          const authUser: AuthUser = {
+            id: sbData.user.id,
+            nome: sbData.user.user_metadata?.nome || sbData.user.email?.split('@')[0] || 'Usuário',
+            email: sbData.user.email || emailTrimmed,
+            cpf: sbData.user.user_metadata?.cpf || '000.000.000-00',
+            role,
+            roleLabel: sbData.user.user_metadata?.roleLabel || 'Colaborador CLT',
+            tenantId: sbData.user.user_metadata?.tenantId || 'tenant-01',
+            tenantNome: sbData.user.user_metadata?.tenantNome || 'Softcase Tecnologia',
+            mfaHabilitado: !!sbData.user.user_metadata?.mfaHabilitado
+          };
+          concluirLogin(authUser);
+          return;
+        }
+      }
+
+      // 3. Autenticação de Colaborador / Gestor / RH via servidor oficial (CPF, E-mail ou Matrícula + PIN/Senha)
+      const colabRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'COLABORADOR',
+          identificador: rawIdent,
+          senha: senha.trim()
+        })
       });
 
-      if (data?.user && !sbError) {
-        const isSuper = (data.user.email === 'admin@softcase.com.br' || data.user.email === 'edsonfreire.santos@hotmail.com');
+      const colabData = await colabRes.json().catch(() => ({}));
+      if (colabRes.ok && colabData?.token && colabData?.user) {
+        setAuthToken(colabData.token);
+        const meta = colabData.user.user_metadata || {};
         const authUser: AuthUser = {
-          id: data.user.id,
-          nome: data.user.user_metadata?.nome || data.user.email?.split('@')[0] || 'Usuário',
-          email: data.user.email || targetEmail,
-          cpf: data.user.user_metadata?.cpf || '000.000.000-00',
-          role: isSuper ? 'SUPER_ADMIN' : 'COLABORADOR',
-          roleLabel: isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT',
-          tenantId: data.user.user_metadata?.tenantId || 'tenant-01',
-          tenantNome: data.user.user_metadata?.tenantNome || 'Softcase Tecnologia',
-          mfaHabilitado: !!data.user.user_metadata?.mfaHabilitado
+          id: colabData.colaborador?.id || colabData.user.id,
+          nome: meta.nome || colabData.colaborador?.nome || 'Colaborador',
+          email: colabData.user.email || `${(colabData.colaborador?.matricula || 'colab').toLowerCase()}@pointcontrol.local`,
+          cpf: meta.cpf || colabData.colaborador?.cpf || '',
+          role: (meta.role as any) || 'COLABORADOR',
+          roleLabel: meta.roleLabel || 'Colaborador CLT',
+          tenantId: meta.tenantId || colabData.colaborador?.tenantId || 'tenant-01',
+          tenantNome: meta.tenantNome || 'Empresa',
+          departamentoNome: colabData.colaborador?.departamentoNome,
+          cargoTitulo: colabData.colaborador?.cargoTitulo,
+          mfaHabilitado: false
         };
         concluirLogin(authUser);
         return;
       }
 
-      // 2. Se as credenciais forem do Administrador Mestre do sistema
-      if (isMasterAdmin) {
-        try {
-          await supabase.from('tenants').upsert({
-            tenant_id: 'tenant-01',
-            cnpj: '00.000.000/0001-91',
-            razao_social: 'Softcase Tecnologia',
-            nome_fantasia: 'Softcase',
-            slug: 'softcase',
-            plano: 'REP-P Corporativo',
-            licencas_contratadas: 9999,
-            email_admin: targetEmail,
-            status: 'ATIVO'
-          }, { onConflict: 'tenant_id' });
-
-          await supabase.from('collaborators').upsert({
-            collaborator_id: 'colab-admin-01',
-            tenant_id: 'tenant-01',
-            nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
-            cpf: '000.000.000-00',
-            matricula: 'ADM-001',
-            data_admissao: '2024-01-01',
-            cargo_titulo: 'Super Administrador',
-            departamento_nome: 'Tecnologia / RH',
-            status: 'ATIVO'
-          }, { onConflict: 'collaborator_id' });
-        } catch (syncErr) {
-          console.warn('Sync aviso:', syncErr);
-        }
-
-        const adminUser: AuthUser = {
-          id: 'usr-admin-master',
-          nome: emailTrimmed.includes('edson') ? 'Edson Freire' : 'Super Administrador Softcase',
-          email: targetEmail,
-          cpf: '000.000.000-00',
-          role: 'SUPER_ADMIN',
-          roleLabel: 'Super Administrador Softcase',
-          tenantId: 'tenant-01',
-          tenantNome: 'Softcase Tecnologia',
-          mfaHabilitado: false
-        };
-
-        concluirLogin(adminUser);
-        return;
-      }
-
-      // 3. Tentar busca de Colaborador registrado no Supabase por CPF, Matrícula ou Nome
-      try {
-        const cleanDigits = identificador.replace(/\D/g, '');
-        const cleanIdent = identificador.trim();
-        const formattedCpf = cleanDigits.length === 11 ? formatCPF(cleanDigits) : '';
-
-        const orClauses: string[] = [];
-        if (cleanDigits) {
-          orClauses.push(`cpf.eq.${cleanDigits}`);
-        }
-        if (formattedCpf) {
-          orClauses.push(`cpf.eq.${formattedCpf}`);
-        }
-        if (cleanIdent) {
-          orClauses.push(`matricula.ilike.${cleanIdent}`);
-          orClauses.push(`collaborator_id.eq.${cleanIdent}`);
-          orClauses.push(`nome.ilike.%${cleanIdent}%`);
-        }
-
-        const { data: colabs } = await supabase
-          .from('collaborators')
-          .select('*')
-          .or(orClauses.join(','));
-
-        if (colabs && colabs.length > 0) {
-          const colab = colabs[0];
-
-          // VERIFICAÇÃO CRÍTICA DE STATUS PENDENTE:
-          if (colab.status === 'PENDENTE') {
-            setErrorMessage(
-              `⏳ Cadastro em Análise: O seu auto-cadastro (${colab.nome}) foi registrado com sucesso e aguarda homologação e liberação de funções pelo Gestor de RH. Assim que o gestor aprovar suas escalas, seu acesso será liberado.`
-            );
-            setIsLoading(false);
-            return;
-          }
-
-          const isPinValid = colab.pin_coletor ? (colab.pin_coletor === senha.trim()) : true;
-          const isGenericPass = senha.length >= 4;
-
-          if (isPinValid || isGenericPass) {
-            const colabUser: AuthUser = {
-              id: colab.collaborator_id || colab.id,
-              nome: colab.nome,
-              email: `${(colab.matricula || 'colab').toLowerCase()}@softcase.com.br`,
-              cpf: colab.cpf,
-              role: 'COLABORADOR',
-              roleLabel: 'Colaborador CLT',
-              tenantId: colab.tenant_id || 'tenant-01',
-              tenantNome: 'Softcase Tecnologia',
-              departamentoNome: colab.departamento_nome,
-              cargoTitulo: colab.cargo_titulo,
-              mfaHabilitado: false
-            };
-            concluirLogin(colabUser);
-            return;
-          } else {
-            setErrorMessage(`PIN ou senha incorreta para ${colab.nome}. Use o PIN do coletor cadastrado (${colab.pin_coletor || '123456'}).`);
-            setIsLoading(false);
-            return;
-          }
-        }
-      } catch (colabErr) {
-        console.warn('Erro ao consultar colaborador no Supabase:', colabErr);
-      }
-
-      // Mensagem explicativa em caso de erro
-      if (sbError?.message?.includes('Email not confirmed')) {
-        setErrorMessage('E-mail não confirmado no Supabase. Para login direto, desative "Confirm email" em Authentication > Providers > Email no painel do Supabase, ou utilize o login administrativo.');
-      } else {
-        setErrorMessage('Credenciais incorretas. Verifique o CPF (ex: 573.321.598-48), Matrícula ou E-mail e o PIN/Senha informado.');
-      }
+      setErrorMessage(
+        colabData?.error || 'Credenciais incorretas. Verifique o CPF, Matrícula ou E-mail e a sua senha/PIN.'
+      );
       setIsLoading(false);
     } catch (err) {
       console.error('Login error:', err);
-      setErrorMessage('Erro de conexão com o serviço de autenticação. Tente novamente.');
+      setErrorMessage('Erro de conexão com o servidor de autenticação. Tente novamente.');
       setIsLoading(false);
     }
   };
@@ -604,14 +479,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <ShieldCheck className="w-7 h-7" />
         </div>
         <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-          Control Point
+          Point Control
         </h1>
         <p className="mt-1 text-xs text-slate-500 font-medium">
           Sistema de Controle de Jornada & Registro Eletrônico REP-P
         </p>
         <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>Conectado ao Servidor Cloud Seguro</span>
+          <span>Ambiente Autenticado & Portaria 671</span>
         </div>
       </div>
 
@@ -625,7 +500,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  E-mail Corporativo ou CPF
+                  CPF, Matrícula ou E-mail Corporativo
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -635,7 +510,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     disabled={isLoading}
                     value={identificador}
                     onChange={(e) => handleIdentificadorChange(e.target.value)}
-                    placeholder="nome@empresa.com.br ou CPF"
+                    placeholder="CPF, matrícula ou nome@empresa.com.br"
                     className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 font-medium disabled:bg-slate-50 disabled:text-slate-400"
                   />
                 </div>
@@ -643,7 +518,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Senha de Acesso
+                  Senha ou PIN de Acesso
                 </label>
                 <div className="relative">
                   <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -671,62 +546,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <input type="checkbox" defaultChecked className="rounded text-slate-900 focus:ring-slate-900" />
                   <span>Lembrar meu acesso</span>
                 </label>
-                <button 
-                  type="button"
-                  onClick={() => setShowConfig(!showConfig)} 
-                  className="text-emerald-600 hover:underline font-bold flex items-center gap-1"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  Configurar Supabase
-                </button>
+                <span className="text-[10px] text-slate-400 font-mono">TLS / HMAC</span>
               </div>
-
-              {showConfig && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-2">
-                    <Key className="w-3 h-3 text-emerald-500" /> Configuração de Conexão Real
-                  </div>
-                  <div className="space-y-2">
-                    <input 
-                      type="text" 
-                      placeholder="Supabase Project URL"
-                      value={configUrl}
-                      onChange={e => setConfigUrl(e.target.value)}
-                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
-                    />
-                    <input 
-                      type="password" 
-                      placeholder="Anon Key (Public)"
-                      value={configAnon}
-                      onChange={e => setConfigAnon(e.target.value)}
-                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
-                    />
-                    <input 
-                      type="password" 
-                      placeholder="Service Role Key (Secret)"
-                      value={configService}
-                      onChange={e => setConfigService(e.target.value)}
-                      className="w-full px-3 py-2 text-[11px] border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900 bg-white"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      type="button"
-                      onClick={handleUpdateConfig}
-                      className="flex-1 py-2 bg-slate-900 text-white text-[10px] font-bold rounded-lg hover:bg-slate-800"
-                    >
-                      Salvar Chaves
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={handleBootstrap}
-                      className="flex-1 py-2 bg-emerald-600 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-700"
-                    >
-                      Criar Admin (Bootstrap)
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {errorMessage && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-start gap-2 leading-relaxed">
@@ -819,6 +640,28 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
+              </div>
+
+              {/* Seleção de Empresa / Tenant */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Empresa / Empregador *
+                </label>
+                <div className="relative">
+                  <Building className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <select
+                    value={regTenantId}
+                    onChange={(e) => setRegTenantId(e.target.value)}
+                    disabled={isLoading}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 font-medium bg-white"
+                  >
+                    {publicTenants.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.razaoSocial} ({t.nomeFantasia})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Nome Completo */}
@@ -1214,7 +1057,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Seu CPF ou E-mail Cadastrado *
+                  Seu CPF Cadastrado *
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    disabled={isLoading}
+                    value={recIdentificador}
+                    onChange={(e) => handleRecIdentificadorChange(e.target.value)}
+                    placeholder="Ex: 573.321.598-48"
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  2º Fator de Validação: E-mail Corporativo ou Matrícula *
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1222,9 +1083,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     type="text"
                     required
                     disabled={isLoading}
-                    value={recIdentificador}
-                    onChange={(e) => handleRecIdentificadorChange(e.target.value)}
-                    placeholder="Ex: 573.321.598-48 ou seu.email@empresa.com.br"
+                    value={recSegundoFator}
+                    onChange={(e) => setRecSegundoFator(e.target.value)}
+                    placeholder="seu.email@empresa.com.br ou matrícula"
                     className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                   />
                 </div>

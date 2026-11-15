@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Settings,
   RefreshCw,
@@ -7,8 +7,11 @@ import {
   Key,
   AlertTriangle,
   UserCheck,
-  Globe
+  Globe,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 export interface SystemStatusData {
   supabaseConnected: boolean;
@@ -28,8 +31,32 @@ export const GestaoConfiguracoesTab: React.FC<GestaoConfiguracoesTabProps> = ({
   checkSystemStatus,
   updateSupabaseConfig,
 }) => {
+  const { authToken, session } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [isBootstrapping, setIsBootstrapping] = useState(false);
+
   return (
     <div className="space-y-6">
+      {feedback && (
+        <div className={`p-4 rounded-xl border flex items-center justify-between text-xs font-semibold ${
+          feedback.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          <div className="flex items-center gap-2">
+            {feedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{feedback.text}</span>
+          </div>
+          <button onClick={() => setFeedback(null)} className="ml-4 opacity-60 hover:opacity-100 font-bold">✕</button>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">
@@ -116,35 +143,46 @@ export const GestaoConfiguracoesTab: React.FC<GestaoConfiguracoesTabProps> = ({
                 </div>
               </div>
               <button 
+                disabled={isSavingConfig}
                 onClick={async () => {
-                  const url = (document.getElementById('ui_supabase_url') as HTMLInputElement).value;
-                  const key = (document.getElementById('ui_supabase_key') as HTMLInputElement).value;
-                  const anon = (document.getElementById('ui_supabase_anon') as HTMLInputElement).value;
-                  if (!url || !key || !anon) return alert('Preencha URL, Anon Key e Service Key');
+                  const url = (document.getElementById('ui_supabase_url') as HTMLInputElement).value.trim();
+                  const key = (document.getElementById('ui_supabase_key') as HTMLInputElement).value.trim();
+                  const anon = (document.getElementById('ui_supabase_anon') as HTMLInputElement).value.trim();
+                  if (!url || !key || !anon) {
+                    setFeedback({ type: 'error', text: 'Preencha URL, Anon Key e Service Key.' });
+                    return;
+                  }
+                  setIsSavingConfig(true);
+                  setFeedback(null);
                   try {
                     const res = await fetch('/api/update-config', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
+                      },
                       body: JSON.stringify({ url, key })
                     });
                     if (res.ok) {
                       updateSupabaseConfig(url, anon);
-                      alert('Configuração atualizada com sucesso!');
+                      setFeedback({ type: 'success', text: 'Configuração atualizada com sucesso!' });
                       checkSystemStatus();
                     } else {
-                      const err = await res.json();
-                      alert(`Erro: ${err.error}`);
+                      const err = await res.json().catch(() => ({}));
+                      setFeedback({ type: 'error', text: `Erro: ${err.error || 'Acesso negado (somente Super Admin).'}` });
                     }
-                  } catch (e) {
-                    alert('Erro de conexão com o servidor.');
+                  } catch {
+                    setFeedback({ type: 'error', text: 'Erro de conexão com o servidor.' });
+                  } finally {
+                    setIsSavingConfig(false);
                   }
                 }}
-                className="w-full py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer"
+                className="w-full py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer disabled:opacity-50"
               >
-                Aplicar Estas Chaves Agora
+                {isSavingConfig ? 'Aplicando...' : 'Aplicar Estas Chaves Agora'}
               </button>
               <p className="text-[9px] text-slate-500 italic">
-                * Chaves inseridas aqui valem apenas para a sessão atual do servidor. Para persistir, use o menu "Secrets" do AI Studio.
+                * Chaves inseridas aqui valem apenas para a sessão atual do servidor. Para persistir, use as variáveis de ambiente do servidor.
               </p>
             </div>
           </div>
@@ -157,7 +195,7 @@ export const GestaoConfiguracoesTab: React.FC<GestaoConfiguracoesTabProps> = ({
             <div className="space-y-2">
               <h4 className="text-sm font-bold text-amber-900">Importante: Supabase não está pronto</h4>
               <p className="text-xs text-amber-800 leading-relaxed">
-                Você precisa configurar as chaves corretamente acima. Após conectar, você poderá criar seu usuário "Super Admin" real para parar de usar os usuários Mock e começar a salvar dados de verdade no Supabase.
+                Configure as variáveis de ambiente ou aplique as chaves acima para habilitar a persistência em banco de dados.
               </p>
             </div>
           </div>
@@ -165,44 +203,56 @@ export const GestaoConfiguracoesTab: React.FC<GestaoConfiguracoesTabProps> = ({
           <div className="p-6 bg-emerald-900 text-white rounded-2xl space-y-4 shadow-xl">
             <div className="flex items-center gap-2">
               <UserCheck className="w-6 h-6 text-emerald-400" />
-              <h3 className="font-bold text-lg">Criar Primeiro Super-Admin (Real)</h3>
+              <h3 className="font-bold text-lg">Provisionar Super-Admin (Supabase Auth)</h3>
             </div>
             <p className="text-xs text-emerald-100 opacity-80">
-              O Supabase está conectado! Crie agora sua conta de administrador oficial. Com ela, você poderá logar no sistema "para valer" e todos os dados criados serão persistidos nas tabelas do seu projeto.
+              O Supabase está conectado. Crie uma conta oficial de administrador vinculada ao Supabase Auth e ao perfil corporativo.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-emerald-950/40 p-4 rounded-xl border border-emerald-700/50">
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-emerald-400 uppercase">E-mail</label>
-                <input type="email" id="boot_email" defaultValue="admin@suaempresa.com.br" className="w-full px-3 py-2 bg-emerald-950 border border-emerald-800 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-400" />
+                <input type="email" id="boot_email" placeholder="admin@suaempresa.com.br" className="w-full px-3 py-2 bg-emerald-950 border border-emerald-800 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-400" />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-emerald-400 uppercase">Senha</label>
-                <input type="password" id="boot_pass" defaultValue="Softcase@2026" className="w-full px-3 py-2 bg-emerald-950 border border-emerald-800 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-400" />
+                <label className="text-[10px] font-bold text-emerald-400 uppercase">Senha Forte</label>
+                <input type="password" id="boot_pass" placeholder="Mínimo 8 caracteres" className="w-full px-3 py-2 bg-emerald-950 border border-emerald-800 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-400" />
               </div>
               <div className="flex items-end">
                 <button 
+                  disabled={isBootstrapping}
                   onClick={async () => {
-                    const email = (document.getElementById('boot_email') as HTMLInputElement).value;
+                    const email = (document.getElementById('boot_email') as HTMLInputElement).value.trim();
                     const password = (document.getElementById('boot_pass') as HTMLInputElement).value;
+                    if (!email || password.length < 6) {
+                      setFeedback({ type: 'error', text: 'Informe um e-mail válido e senha com no mínimo 6 caracteres.' });
+                      return;
+                    }
+                    setIsBootstrapping(true);
+                    setFeedback(null);
                     try {
                       const res = await fetch('/api/bootstrap-admin', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
+                        },
                         body: JSON.stringify({ email, password, nome: 'Administrador Softcase' })
                       });
                       if (res.ok) {
-                        alert('Usuário Super Admin criado com sucesso! Agora saia (Logout) e logue com este novo e-mail e senha.');
+                        setFeedback({ type: 'success', text: `Super Admin (${email}) provisionado com sucesso no Supabase!` });
                       } else {
-                        const err = await res.json();
-                        alert(`Erro: ${err.error}`);
+                        const err = await res.json().catch(() => ({}));
+                        setFeedback({ type: 'error', text: `Erro: ${err.error || 'Permissão negada.'}` });
                       }
-                    } catch (e) {
-                      alert('Erro ao criar usuário.');
+                    } catch {
+                      setFeedback({ type: 'error', text: 'Erro ao conectar com o servidor.' });
+                    } finally {
+                      setIsBootstrapping(false);
                     }
                   }}
-                  className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-lg text-xs transition-all cursor-pointer"
+                  className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50"
                 >
-                  Criar Conta Admin
+                  {isBootstrapping ? 'Criando...' : 'Criar Conta Admin'}
                 </button>
               </div>
             </div>

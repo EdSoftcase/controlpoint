@@ -148,6 +148,7 @@ export interface Colaborador {
   diasFolgaSemana?: number[]; // Dias de folga semanal fixos: 0=Dom, 1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb
   anualFolgas?: Record<string, boolean>; // Exceções de folga por data YYYY-MM-DD: true = folga, false = trabalho
   dataBaseCiclo?: string;
+  salarioBase?: number;
 }
 
 export interface SolicitacaoHoraExtra {
@@ -215,6 +216,7 @@ export interface SolicitacaoAjustePonto {
   tipoMarcacaoAjuste?: 'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA';
   cid10?: string;
   nomeDocumentoAnexo?: string;
+  anexoUrl?: string;
   dataHoraEnvio: string;
   justificativa: string;
   status: 'PENDENTE' | 'APROVADO' | 'REJEITADO';

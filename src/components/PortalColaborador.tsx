@@ -53,6 +53,7 @@ import {
   detectFaceAndBiometrics,
   matchBiometricFace,
   averageBiometricDescriptors,
+  saveBiometricTemplate,
   resetLivenessState,
   getRandomLivenessChallenge,
   LivenessChallenge
@@ -74,6 +75,18 @@ import { SolicitacaoTrocaTurno } from '../types/rhAvancado';
 import { useAuth } from './AuthContext';
 import { PortalFeriasTab } from './portal/PortalFeriasTab';
 import { PortalEspelhoTab } from './portal/PortalEspelhoTab';
+import {
+  getBrasiliaNow,
+  getBrasiliaParts,
+  getBrasiliaYmd,
+  getBrasiliaMonthYear,
+  getBrasiliaMinutesOfDay,
+  getBrasiliaDayOfWeek,
+  formatBrasiliaDate,
+  formatBrasiliaTime,
+  getMonthLabelPtBr
+} from '../utils/brasiliaClock';
+import { hasRealBiometricTemplate } from '../utils/biometricHelpers';
 
 interface PortalColaboradorProps {
   user: AuthUser;
@@ -87,6 +100,7 @@ interface PortalColaboradorProps {
   onAddAssinaturaEspelho?: (nova: AssinaturaEspelhoPonto) => void;
   onRegistrarPonto?: () => void;
   onAddRegistroPonto?: (novo: RegistroPontoREPP) => void;
+  onUpdateColaboradorBiometria?: (colabId: string, updatedFields: Partial<Colaborador>) => void;
   estabelecimentos?: Estabelecimento[];
   colaboradores?: Colaborador[];
   onOpenGuia?: () => void;
@@ -104,11 +118,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   onAddAssinaturaEspelho,
   onRegistrarPonto,
   onAddRegistroPonto,
+  onUpdateColaboradorBiometria,
   estabelecimentos = [],
   colaboradores = [],
   onOpenGuia
 }) => {
-  const { supabase } = useAuth();
+  const { supabase, authToken, session } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
   const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias' | 'holerites' | 'comunicados' | 'fale_dp'>('espelho');
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
   const [viewingHoleriteModal, setViewingHoleriteModal] = useState<any | null>(null);
@@ -116,6 +132,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [isSigningHolerite, setIsSigningHolerite] = useState(false);
   const [holeriteOffset, setHoleriteOffset] = useState(0);
   const LIMIT = 10;
+  const [portalNotice, setPortalNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const showPortalNotice = (type: 'success' | 'error', text: string) => {
+    setPortalNotice({ type, text });
+    setTimeout(() => {
+      setPortalNotice((prev) => (prev?.text === text ? null : prev));
+    }, 6500);
+  };
 
 
   const [holeritesList, setHoleritesList] = useState<any[]>(() => {
@@ -123,30 +146,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       const saved = localStorage.getItem(`sc_holerites_${user.id}`);
       if (saved) return JSON.parse(saved);
     } catch (_) {}
-    return [
-      {
-        id: 'hol-01',
-        mesAno: '2026-10',
-        competencia: 'Outubro / 2026',
-        salarioBruto: 5200.00,
-        descontos: 680.00,
-        liquido: 4520.00,
-        arquivoNome: 'contracheque_outubro_2026.pdf',
-        dataUpload: '05/11/2026',
-        status: 'EMITIDO_EMPRESA'
-      },
-      {
-        id: 'hol-02',
-        mesAno: '2026-09',
-        competencia: 'Setembro / 2026',
-        salarioBruto: 5200.00,
-        descontos: 680.00,
-        liquido: 4520.00,
-        arquivoNome: 'contracheque_setembro_2026.pdf',
-        dataUpload: '05/10/2026',
-        status: 'EMITIDO_EMPRESA'
-      }
-    ];
+    return [];
   });
 
   const [informesIrpfList, setInformesIrpfList] = useState<any[]>(() => {
@@ -154,17 +154,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       const saved = localStorage.getItem(`sc_informes_irpf_${user.id}`);
       if (saved) return JSON.parse(saved);
     } catch (_) {}
-    return [
-      {
-        id: 'irpf-2025',
-        anoCalendario: '2025',
-        exercicio: '2026',
-        titulo: 'Informe de Rendimentos IRPF - Ano Calendário 2025',
-        arquivoNome: 'informe_rendimentos_2025.pdf',
-        dataUpload: '28/02/2026',
-        status: 'PUBLICADO_RH'
-      }
-    ];
+    return [];
   });
 
   // Estados do Mural Digital & Atendimento Fale com o DP/RH
@@ -173,32 +163,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       const saved = localStorage.getItem('sc_comunicados_all');
       if (saved) return JSON.parse(saved);
     } catch (_) {}
-    return [
-      {
-        id: 'ann-01',
-        tenantId: 'tenant-01',
-        titulo: 'Feriado de Proclamação da República e Emenda de Ponte',
-        conteudo: 'Informamos a todos os colaboradores que no dia 15/11 (sexta-feira) não haverá expediente em virtude do feriado nacional. As atividades retornarão normalmente na segunda-feira subsequente.',
-        categoria: 'FERIADOS',
-        autorNome: 'Luciana Mendonça (Coordenação de RH)',
-        fixado: true,
-        exigeConfirmacaoLeitura: true,
-        confirmacoesLeitura: [],
-        criadoEm: '08/11/2026'
-      },
-      {
-        id: 'ann-02',
-        tenantId: 'tenant-01',
-        titulo: 'Campanha de Vacinação Corporativa contra Gripe H1N1',
-        conteudo: 'Na próxima quarta-feira (18/11), a equipe médica da empresa estará no auditório da matriz disponibilizando a vacinação gratuita para todos os funcionários contratados CLT.',
-        categoria: 'CAMPANHA_SAUDE',
-        autorNome: 'Departamento de Medicina do Trabalho',
-        fixado: false,
-        exigeConfirmacaoLeitura: true,
-        confirmacoesLeitura: [],
-        criadoEm: '07/11/2026'
-      }
-    ];
+    return [];
   });
 
   const [chamadosRhList, setChamadosRhList] = useState<ChamadoAtendimentoRh[]>(() => {
@@ -214,33 +179,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         return parsedAll.filter((t: any) => t.colaboradorId === user.id || (userCpfClean && (t.colaboradorCpf || '').replace(/\D/g, '') === userCpfClean));
       }
     } catch (_) {}
-    return [
-      {
-        id: 'ticket-01',
-        tenantId: 'tenant-01',
-        colaboradorId: user.id,
-        colaboradorNome: user.nome,
-        colaboradorCpf: user.cpf,
-        departamentoNome: user.departamentoNome || 'Geral',
-        assunto: 'VALE_TRANSPORTE',
-        titulo: 'Solicitação de Alteração de Rota do Vale-Transporte',
-        mensagemInicial: 'Mudei de residência recentemente e gostaria de solicitar a alteração da rota do meu VT.',
-        status: 'EM_ATENDIMENTO',
-        prioridade: 'MEDIA',
-        respostas: [
-          {
-            id: 'resp-01',
-            autorId: 'user-02',
-            autorNome: 'Luciana Mendonça (RH)',
-            eDoRh: true,
-            mensagem: 'Olá! Por favor anexe o novo comprovante de residência em seu nome para atualizarmos o benefício no sistema.',
-            dataHora: '08/11/2026 15:30'
-          }
-        ],
-        criadoEm: '08/11/2026 10:15',
-        atualizadoEm: '08/11/2026 15:30'
-      }
-    ];
+    return [];
   });
 
   const [isNovoChamadoModalOpen, setIsNovoChamadoModalOpen] = useState(false);
@@ -342,7 +281,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 liquido: Number(p.salario_liquido),
                 arquivoNome: p.arquivo_nome,
                 arquivoUrl: p.arquivo_url,
-                dataUpload: p.data_upload ? new Date(p.data_upload).toLocaleDateString('pt-BR') : 'Hoje',
+                dataUpload: p.data_upload ? formatBrasiliaDate(p.data_upload) : formatBrasiliaDate(),
                 status: p.status,
                 observacao: p.observacao,
                 confirmadoEm: p.confirmado_em,
@@ -387,7 +326,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 titulo: t.titulo || `Informe de Rendimentos IRPF - ${t.ano_calendario}`,
                 arquivoNome: t.arquivo_nome,
                 arquivoUrl: t.arquivo_url,
-                dataUpload: t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Hoje',
+                dataUpload: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
                 status: t.status || 'PUBLICADO_RH'
               }));
             if (mapped.length > 0) {
@@ -409,22 +348,27 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     async function fetchAnnouncementsFromDb() {
       try {
         if (supabase) {
-          const { data } = await supabase.from('company_announcements').select('*');
+          const { data } = await supabase
+            .from('company_announcements')
+            .select('*')
+            .order('created_at', { ascending: false });
           if (data && data.length > 0) {
-            const mapped = data.map((a: any) => ({
-              id: a.announcement_id || a.id,
-              tenantId: a.tenant_id,
-              titulo: a.titulo,
-              conteudo: a.conteudo,
-              categoria: a.categoria,
-              autorNome: a.autor_nome,
-              fixado: a.fixado,
-              exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
-              anexoNome: a.anexo_nome,
-              anexoUrl: a.anexo_url,
-              confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
-              criadoEm: a.created_at ? new Date(a.created_at).toLocaleDateString('pt-BR') : 'Hoje'
-            }));
+            const mapped = data
+              .filter((a: any) => !user.tenantId || !a.tenant_id || a.tenant_id === user.tenantId)
+              .map((a: any) => ({
+                id: a.announcement_id || a.id,
+                tenantId: a.tenant_id,
+                titulo: a.titulo,
+                conteudo: a.conteudo,
+                categoria: a.categoria,
+                autorNome: a.autor_nome,
+                fixado: a.fixado,
+                exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
+                anexoNome: a.anexo_nome,
+                anexoUrl: a.anexo_url,
+                confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
+                criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : formatBrasiliaDate()
+              }));
 
             setComunicadosList(prev => {
               const merged = [...prev];
@@ -443,7 +387,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     async function fetchTicketsFromDb() {
       try {
         if (supabase) {
-          const { data } = await supabase.from('rh_tickets').select('*');
+          const { data } = await supabase
+            .from('rh_tickets')
+            .select('*')
+            .order('updated_at', { ascending: false });
           if (data && data.length > 0) {
             const mapped = data
               .filter((t: any) => {
@@ -465,8 +412,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 status: t.status,
                 prioridade: t.prioridade,
                 respostas: Array.isArray(t.respostas) ? t.respostas : [],
-                criadoEm: t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Hoje',
-                atualizadoEm: t.updated_at ? new Date(t.updated_at).toLocaleDateString('pt-BR') : 'Hoje'
+                criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
+                atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : formatBrasiliaDate()
               }));
 
             if (mapped.length > 0) {
@@ -485,25 +432,83 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       } catch (_) {}
     }
 
+    async function fetchShiftSwapsFromDb() {
+      try {
+        if (supabase) {
+          const { data } = await supabase
+            .from('shift_swaps')
+            .select('*')
+            .order('data_solicitacao', { ascending: false });
+          if (data && data.length > 0) {
+            const mapped: SolicitacaoTrocaTurno[] = data
+              .filter((s: any) => s.solicitante_id === user.id || s.substituto_id === user.id)
+              .map((s: any) => ({
+                id: s.swap_id || s.id,
+                tenantId: s.tenant_id,
+                colaboradorOrigemId: s.solicitante_id,
+                colaboradorOrigemNome: s.solicitante_nome || user.nome,
+                colaboradorOrigemCpf: user.cpf,
+                colaboradorDestinoId: s.substituto_id,
+                colaboradorDestinoNome: s.substituto_nome || 'Colega',
+                colaboradorDestinoCpf: '',
+                departamentoId: user.departamentoNome || 'dep-01',
+                departamentoNome: user.departamentoNome || 'Geral',
+                dataPlantaoOrigem: s.data_turno_original,
+                dataPlantaoDestino: s.data_turno_compensacao || s.data_turno_original,
+                horarioTurno: 'Turno Escala',
+                motivo: s.motivo || '',
+                status: (s.status as any) || 'PENDENTE_SUPERVISOR',
+                validacaoInterjornadaOk: s.regra_clt_ok ?? true,
+                supervisorDecisorNome: s.supervisor_nome || undefined,
+                dataDecisao: s.data_aprovacao ? String(s.data_aprovacao).slice(0, 10) : undefined,
+                criadoEm: s.data_solicitacao ? String(s.data_solicitacao).slice(0, 10) : getBrasiliaYmd()
+              }));
+            setSolicitacoesTroca(mapped);
+          }
+        }
+      } catch (_) {}
+    }
+
     fetchPaystubsFromDb(holeriteOffset);
     fetchTaxReportsFromDb();
     fetchAnnouncementsFromDb();
     fetchTicketsFromDb();
-  }, [user.id, user.cpf, supabase, holeriteOffset]);
+    fetchShiftSwapsFromDb();
+  }, [user.id, user.cpf, user.tenantId, supabase, holeriteOffset]);
 
   const handleConfirmReadingAnnouncement = async (ann: ComunicadoEmpresa) => {
     setConfirmingReadAnnId(ann.id);
-    const userCpfClean = user.cpf.replace(/\D/g, '');
-    const ip = '189.120.45.88';
-    const timestamp = new Date().toLocaleString('pt-BR');
+    const timestamp = getBrasiliaParts().formatted;
 
-    const readEntry = {
+    let readEntry = {
       colaboradorId: user.id,
       colaboradorCpf: user.cpf,
       colaboradorNome: user.nome,
       dataHora: timestamp,
-      ip
+      ip: 'Registrado no servidor'
     };
+
+    try {
+      if (bearerToken) {
+        const res = await fetch('/api/read-announcement', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            announcementId: ann.id,
+            userCpf: user.cpf,
+            userName: user.nome,
+            userId: user.id
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.readEntry) readEntry = data.readEntry;
+        }
+      }
+    } catch (_) {}
 
     const updatedAnn: ComunicadoEmpresa = {
       ...ann,
@@ -514,37 +519,26 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setComunicadosList(updatedList);
     localStorage.setItem('sc_comunicados_all', JSON.stringify(updatedList));
 
-    try {
-      await fetch('/api/read-announcement', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          announcementId: ann.id,
-          userCpf: user.cpf,
-          userName: user.nome,
-          userId: user.id
-        })
-      });
-    } catch (_) {}
-
     setConfirmingReadAnnId(null);
-    alert(`Confirmação de leitura registrada com sucesso!\n\nComunicado: "${ann.titulo}"\nData/Hora: ${timestamp}\nIP: ${ip}`);
+    showPortalNotice('success', `Leitura do comunicado "${ann.titulo}" confirmada às ${readEntry.dataHora}.`);
   };
 
   const handleCreateTicket = async () => {
     if (!novoChamadoTitulo.trim() || !novoChamadoMensagem.trim()) {
-      alert('Informe o título e os detalhes da solicitação.');
+      showPortalNotice('error', 'Informe o título e os detalhes da solicitação antes de enviar.');
       return;
     }
 
+    const nowFormatted = getBrasiliaParts().formatted;
     const ticketId = `ticket-${Date.now()}`;
+    const tenantIdTarget = userColab?.tenantId || user.tenantId || 'tenant-01';
     const novo: ChamadoAtendimentoRh = {
       id: ticketId,
-      tenantId: user.tenantId || 'tenant-01',
-      colaboradorId: user.id,
+      tenantId: tenantIdTarget,
+      colaboradorId: userColab?.id || user.id,
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
-      departamentoNome: user.departamentoNome || 'Geral',
+      departamentoNome: userColab?.departamentoNome || user.departamentoNome || 'Geral',
       assunto: novoChamadoAssunto,
       titulo: novoChamadoTitulo.trim(),
       mensagemInicial: novoChamadoMensagem.trim(),
@@ -553,8 +547,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       status: 'ABERTO',
       prioridade: 'MEDIA',
       respostas: [],
-      criadoEm: new Date().toLocaleString('pt-BR'),
-      atualizadoEm: new Date().toLocaleString('pt-BR')
+      criadoEm: nowFormatted,
+      atualizadoEm: nowFormatted
     };
 
     const updatedList = [novo, ...chamadosRhList];
@@ -568,11 +562,29 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     } catch (_) {}
 
     try {
-      await fetch('/api/save-ticket', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(novo)
-      });
+      if (bearerToken) {
+        await fetch('/api/save-ticket', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            id: novo.id,
+            tenantId: novo.tenantId,
+            collaboratorId: novo.colaboradorId,
+            collaboratorCpf: novo.colaboradorCpf,
+            collaboratorName: novo.colaboradorNome,
+            departamentoNome: novo.departamentoNome,
+            assunto: novo.assunto,
+            titulo: novo.titulo,
+            mensagemInicial: novo.mensagemInicial,
+            anexoNome: novo.anexoNome,
+            anexoUrl: novo.anexoUrl,
+            prioridade: novo.prioridade
+          })
+        });
+      }
     } catch (_) {}
 
     setIsNovoChamadoModalOpen(false);
@@ -581,11 +593,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setNovoChamadoAnexoNome('');
     setNovoChamadoAnexoUrl('');
     setSelectedUserTicket(novo);
-    alert('Chamado criado e enviado com sucesso para a equipe de RH/DP!');
+    showPortalNotice('success', 'Chamado enviado com sucesso para a equipe de RH/DP.');
   };
 
   const handleSendUserReplyTicket = async (ticket: ChamadoAtendimentoRh) => {
     if (!respostaColabInput.trim()) return;
+    const nowFormatted = getBrasiliaParts().formatted;
 
     const novaResposta = {
       id: `resp-${Date.now()}`,
@@ -593,13 +606,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       autorNome: `${user.nome} (Você)`,
       eDoRh: false,
       mensagem: respostaColabInput.trim(),
-      dataHora: new Date().toLocaleString('pt-BR')
+      dataHora: nowFormatted
     };
 
     const updatedTicket: ChamadoAtendimentoRh = {
       ...ticket,
       respostas: [...ticket.respostas, novaResposta],
-      atualizadoEm: new Date().toLocaleString('pt-BR')
+      atualizadoEm: nowFormatted
     };
 
     const updatedList = chamadosRhList.map(t => t.id === ticket.id ? updatedTicket : t);
@@ -619,27 +632,40 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setRespostaColabInput('');
 
     try {
-      await fetch('/api/save-ticket', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: ticket.id,
-          resposta: novaResposta
-        })
-      });
+      if (bearerToken) {
+        await fetch('/api/save-ticket', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            id: ticket.id,
+            tenantId: ticket.tenantId || userColab?.tenantId || user.tenantId || 'tenant-01',
+            resposta: novaResposta
+          })
+        });
+      }
     } catch (_) {}
   };
 
   const handleConfirmHoleriteReceipt = async (holerite: any) => {
+    if (!bearerToken) {
+      showPortalNotice('error', 'Sessão autenticada expirada. Faça login novamente para assinar o recibo.');
+      return;
+    }
     setIsSigningHolerite(true);
     try {
       const resp = await fetch('/api/confirm-holerite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${bearerToken}`
+        },
         body: JSON.stringify({
           paystubId: holerite.id,
-          userCpf: user.cpf,
-          userName: user.nome
+          tenantId: holerite.tenantId || userColab?.tenantId || user.tenantId || 'tenant-01',
+          colaboradorId: userColab?.id || user.id
         })
       });
       const data = await resp.json();
@@ -670,83 +696,63 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         } catch (_) {}
 
         setViewingHoleriteModal(updatedHolerite);
-        alert(`Recibo digital do contracheque assinado com sucesso! (CLT Art. 464)\n\nHash SHA-256: ${hash}\nData/Hora: ${timestamp}\nIP: ${ip}`);
+        showPortalNotice('success', `Recibo do contracheque assinado (CLT Art. 464). Hash: ${String(hash).slice(0, 16)}...`);
       } else {
-        alert(`Erro ao assinar recibo: ${data.error || 'Falha no servidor'}`);
+        showPortalNotice('error', `Erro ao assinar recibo: ${data.error || 'Falha no servidor'}`);
       }
     } catch (err) {
       console.error(err);
-      alert('Erro de conexão ao assinar recibo digital.');
+      showPortalNotice('error', 'Erro de conexão ao assinar recibo digital.');
     } finally {
       setIsSigningHolerite(false);
     }
   };
 
   // Estados de Troca de Turno / Plantão (Gestão de Pares)
-  const [solicitacoesTroca, setSolicitacoesTroca] = useState<SolicitacaoTrocaTurno[]>([
-    {
-      id: 'troca-01',
-      tenantId: 'tenant-01',
-      colaboradorOrigemId: user.id,
-      colaboradorOrigemNome: user.nome,
-      colaboradorOrigemCpf: user.cpf,
-      colaboradorDestinoId: 'colab-02',
-      colaboradorDestinoNome: 'Mariana Souza',
-      colaboradorDestinoCpf: '234.567.890-12',
-      departamentoId: 'dep-02',
-      departamentoNome: 'Tecnologia & Inovação',
-      dataPlantaoOrigem: '2026-11-14',
-      dataPlantaoDestino: '2026-11-15',
-      horarioTurno: '07:00 às 19:00 (12h)',
-      motivo: 'Compromisso acadêmico. Mariana cobrirá meu plantão e eu farei o dela.',
-      status: 'APROVADO',
-      validacaoInterjornadaOk: true,
-      supervisorDecisorNome: 'Luciana Mendonça (Supervisora)',
-      dataDecisao: '2026-11-06',
-      criadoEm: '2026-11-05'
-    }
-  ]);
+  const [solicitacoesTroca, setSolicitacoesTroca] = useState<SolicitacaoTrocaTurno[]>([]);
   const [isNovaTrocaModalOpen, setIsNovaTrocaModalOpen] = useState(false);
   const [trocaColegaId, setTrocaColegaId] = useState('');
-  const [trocaDataOrigem, setTrocaDataOrigem] = useState('2026-11-18');
-  const [trocaDataDestino, setTrocaDataDestino] = useState('2026-11-19');
-  const [trocaHorarioTurno, setTrocaHorarioTurno] = useState('07:00 às 19:00 (12h)');
+  const [trocaDataOrigem, setTrocaDataOrigem] = useState(() => getBrasiliaYmd());
+  const [trocaDataDestino, setTrocaDataDestino] = useState(() => getBrasiliaYmd());
+  const [trocaHorarioTurno, setTrocaHorarioTurno] = useState('08:00 às 17:00');
   const [trocaMotivo, setTrocaMotivo] = useState('');
   const [trocaFeedback, setTrocaFeedback] = useState<string | null>(null);
 
   // =========================================================================
-  // RELÓGIO EM TEMPO REAL & CONTAGEM REGRESSIVA DE ANTECEDÊNCIA (15 MIN)
+  // RELÓGIO OFICIAL DE BRASÍLIA EM TEMPO REAL & REGRA DE ANTECEDÊNCIA
   // =========================================================================
-  const [nowClock, setNowClock] = useState<Date>(new Date());
+  const [nowClock, setNowClock] = useState<Date>(() => getBrasiliaNow());
   React.useEffect(() => {
-    const timer = setInterval(() => setNowClock(new Date()), 1000);
+    const timer = setInterval(() => setNowClock(getBrasiliaNow()), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const userColab = colaboradores.find(
     (c) => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, '')
   );
-  const myAllocatedEst =
+  const myAllocatedEst: Estabelecimento =
     estabelecimentos.find((e) => e.id === userColab?.estabelecimentoId) ||
     estabelecimentos.find((e) => e.tenantId === (userColab?.tenantId || user.tenantId)) ||
     estabelecimentos[0] || {
       id: 'est-default',
       tenantId: userColab?.tenantId || user.tenantId || 'tenant-01',
       codigo: '0001',
-      nome: userColab?.estabelecimentoNome || 'Sede Administrativa',
-      cnpj: '58.392.102/0001-44',
+      nome: userColab?.estabelecimentoNome || 'Unidade Principal',
+      cnpj: '',
       tipo: 'MATRIZ' as const,
       fusoHorario: 'America/Sao_Paulo',
-      latitude: -23.561684,
-      longitude: -46.655981,
+      latitude: Number.NaN,
+      longitude: Number.NaN,
       cercaRaioMetros: 100,
       uf: 'SP',
       municipio: 'São Paulo',
       bloquearForaDoRaio: true
     };
   const horarioInicioStr = userColab?.horarioInicio || '08:00';
+  const horarioFimStr = userColab?.horarioFim || '17:00';
   const maxAntecedenciaMin = userColab?.maxMinutosAntecedenciaPermitido ?? 15;
   const regraAntecedenciaAtiva = userColab?.regraAntecedenciaAtiva ?? true;
+  const hasEnrolledBiometry = hasRealBiometricTemplate(userColab);
 
   // Consulta real de férias agendadas para este colaborador (via LocalStorage e Supabase)
   const [minhasFeriasAgendadas, setMinhasFeriasAgendadas] = useState<any[]>([]);
@@ -818,17 +824,20 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     (r) => r.colaboradorCpf.replace(/\D/g, '') === userCpfDigits
   );
 
-  const hojeStr = nowClock.toISOString().slice(0, 10);
-  const batidasHoje = meusRegistros.filter((r) => r.dataHora.startsWith(hojeStr));
+  const nowParts = getBrasiliaParts(nowClock);
+  const hojeStr = nowParts.ymd;
+  const mesAnoAtual = nowParts.mesAno;
+  const mesAnoLabel = getMonthLabelPtBr(mesAnoAtual);
+  const batidasHoje = meusRegistros.filter((r) => getBrasiliaYmd(r.dataHora) === hojeStr);
   const isFirstPunchToday = batidasHoje.length === 0;
 
-  // Cálculo de permissão de batida: 15 min antes até 1h (60 min) depois do início da jornada
+  // Cálculo de permissão de batida no Horário Oficial de Brasília
   const [startH, startM] = horarioInicioStr.split(':').map(Number);
   const shiftStartTotalMinutes = startH * 60 + startM;
-  const allowedStartTotalMinutes = shiftStartTotalMinutes - maxAntecedenciaMin; // 15 min antes
-  const allowedEndTotalMinutes = shiftStartTotalMinutes + 60; // 1 hora depois (60 min)
-  const currentTotalMinutes = nowClock.getHours() * 60 + nowClock.getMinutes();
-  const currentTotalSeconds = currentTotalMinutes * 60 + nowClock.getSeconds();
+  const allowedStartTotalMinutes = shiftStartTotalMinutes - maxAntecedenciaMin;
+  const allowedEndTotalMinutes = shiftStartTotalMinutes + 60;
+  const currentTotalMinutes = getBrasiliaMinutesOfDay(nowClock);
+  const currentTotalSeconds = currentTotalMinutes * 60 + nowParts.second;
 
   const allowedStartMinutesDay = (shiftStartTotalMinutes - maxAntecedenciaMin + 1440) % 1440;
   const allowedEndMinutesDay = (shiftStartTotalMinutes + 60 + 1440) % 1440;
@@ -848,16 +857,25 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const dayOfWeek = nowClock.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  const dayOfWeek = getBrasiliaDayOfWeek(nowClock);
   const diasNomes = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
   const diaAtualNome = diasNomes[dayOfWeek];
 
-  // Determina os dias de folga escalados do colaborador (prioriza diasFolgaSemana customizados)
-  const defaultFolgas = userColab?.tipoEscala === '12x36' 
-    ? [] 
-    : (userColab?.tipoEscala === '6x1' ? [0] : (userColab?.tipoEscala === '5x2' ? [0, 6] : []));
-  const diasFolgaEscala = userColab?.diasFolgaSemana ?? defaultFolgas;
-  const isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek);
+  // Determina folga considerando exceções anuais, paridade 12x36 e folga semanal fixa
+  let isHojeDiaFolga = false;
+  if (userColab?.anualFolgas && Object.prototype.hasOwnProperty.call(userColab.anualFolgas, hojeStr)) {
+    isHojeDiaFolga = Boolean(userColab.anualFolgas[hojeStr]);
+  } else if (userColab?.tipoEscala === '12x36') {
+    const [yy, mm, dd] = hojeStr.split('-').map(Number);
+    const diffDays = Math.floor((Date.UTC(yy, mm - 1, dd) - Date.UTC(2026, 0, 1)) / (1000 * 60 * 60 * 24));
+    const isPar = Math.abs(diffDays) % 2 === 0;
+    const trabalhaHoje = (userColab.turmaEscala || 'A') === 'A' ? isPar : !isPar;
+    isHojeDiaFolga = !trabalhaHoje;
+  } else {
+    const defaultFolgas = userColab?.tipoEscala === '6x1' ? [0] : (userColab?.tipoEscala === '5x2' ? [0, 6] : []);
+    const diasFolgaEscala = userColab?.diasFolgaSemana ?? defaultFolgas;
+    isHojeDiaFolga = diasFolgaEscala.includes(dayOfWeek);
+  }
 
   let isPunchAllowed = true;
   let punchBlockReason = '';
@@ -877,10 +895,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     }
   }
 
-  const formattedLiveClock = nowClock.toLocaleTimeString('pt-BR');
+  const formattedLiveClock = formatBrasiliaTime(nowClock, true);
 
   // =========================================================================
-  // ESTADOS DO REGISTRO DE PONTO INDIVIDUAL (MOBILE / TRABALHO EXTERNO)
+  // ESTADOS DO REGISTRO DE PONTO INDIVIDUAL & AUTO-CADASTRO FACIAL
   // =========================================================================
   const [isBaterPontoModalOpen, setIsBaterPontoModalOpen] = useState(false);
   const [tipoPonto, setTipoPonto] = useState<'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA'>('ENTRADA');
@@ -893,10 +911,21 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [livenessConfirmed, setLivenessConfirmed] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsData, setGpsData] = useState<{ lat: number; lng: number; dist: number; dentroCerca: boolean; endereco: string } | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [pontoModalError, setPontoModalError] = useState<string | null>(null);
   const [isSubmittingPunch, setIsSubmittingPunch] = useState(false);
   const [pontoSucessoMsg, setPontoSucessoMsg] = useState<string | null>(null);
 
-  // Validação por Token / PIN (Recém-contratados / Contingência)
+  // Modal de Auto-Cadastro Facial pelo Próprio Colaborador
+  const [isEnrollFaceModalOpen, setIsEnrollFaceModalOpen] = useState(false);
+  const [isEnrollingFace, setIsEnrollingFace] = useState(false);
+  const [enrollProgress, setEnrollProgress] = useState(0);
+  const [enrollStatusMsg, setEnrollStatusMsg] = useState('Posicione seu rosto no centro da câmera para cadastrar sua biometria.');
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const enrollVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const enrollCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+
+  // Validação por Token / PIN (Estrito ao 1º dia / contingência autorizada)
   const [authMethod, setAuthMethod] = useState<'FACIAL' | 'TOKEN_PIN'>('FACIAL');
   const [tokenPinInput, setTokenPinInput] = useState<string>('');
   const [tokenValidated, setTokenValidated] = useState<boolean>(false);
@@ -906,25 +935,28 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setTokenErrorMsg(null);
     const pinClean = tokenPinInput.trim();
     if (!pinClean) {
-      setTokenErrorMsg('Digite o PIN ou Token de validação informado pela empresa.');
+      setTokenErrorMsg('Digite o PIN ou Token de validação informado pelo RH.');
       return;
     }
-    const userColab = colaboradores.find(c => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, ''));
-    
-    // Regra: PIN só é válido no 1º dia de uso / recém-contratado
+
     const eligibility = checkPinUsageEligibility(userColab, meusRegistros);
     if (!eligibility.isEligible) {
       setTokenErrorMsg(`Acesso por PIN/Token Expirado! ${eligibility.reason}`);
       return;
     }
 
-    const expectedPin = userColab?.pinColetor || '123456';
-    if (pinClean === expectedPin || pinClean === '123456' || pinClean.length >= 4) {
+    const expectedPin = userColab?.pinColetor?.trim();
+    if (!expectedPin) {
+      setTokenErrorMsg('Nenhum PIN de contingência cadastrado para sua matrícula. Solicite ao RH ou cadastre sua face.');
+      return;
+    }
+
+    if (pinClean === expectedPin) {
       setTokenValidated(true);
       setBioState('verified');
-      setBioMsg('Autenticado via PIN/Token (Válido para o 1º dia de trabalho)!');
+      setBioMsg('Autenticado via PIN/Token corporativo (1º dia de trabalho).');
     } else {
-      setTokenErrorMsg(`PIN/Token incorreto. Use o PIN cadastrado no sistema (padrão "${expectedPin}").`);
+      setTokenErrorMsg('PIN/Token incorreto. Verifique o código informado pelo RH e tente novamente.');
     }
   };
 
@@ -939,17 +971,20 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [minutosHeInput, setMinutosHeInput] = useState(120);
   const [tipoHeInput, setTipoHeInput] = useState<'NORMAL_50' | 'FERIADO_100'>('NORMAL_50');
   const [justificativaInput, setJustificativaInput] = useState('');
-  const [dataHeInput, setDataHeInput] = useState(new Date().toISOString().slice(0, 10));
+  const [dataHeInput, setDataHeInput] = useState(() => getBrasiliaYmd());
+  const [heFormError, setHeFormError] = useState<string | null>(null);
 
   // Modal Solicitar Ajuste de Ponto / Atestado Médico
   const [isAjusteModalOpen, setIsAjusteModalOpen] = useState(false);
   const [ajusteTipoInput, setAjusteTipoInput] = useState<'INCLUSAO_PONTO_ESQUECIDO' | 'ATESTADO_MEDICO' | 'JUSTIFICATIVA_CORRECAO'>('ATESTADO_MEDICO');
-  const [ajusteDataInput, setAjusteDataInput] = useState(new Date().toISOString().slice(0, 10));
+  const [ajusteDataInput, setAjusteDataInput] = useState(() => getBrasiliaYmd());
   const [ajusteHorarioInput, setAjusteHorarioInput] = useState('08:00');
   const [ajusteTipoMarcacaoInput, setAjusteTipoMarcacaoInput] = useState<'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA'>('ENTRADA');
   const [ajusteCidInput, setAjusteCidInput] = useState('');
   const [ajusteDocInput, setAjusteDocInput] = useState('');
+  const [ajusteAnexoUrl, setAjusteAnexoUrl] = useState('');
   const [ajusteJustificativaInput, setAjusteJustificativaInput] = useState('');
+  const [ajusteFormError, setAjusteFormError] = useState<string | null>(null);
 
   // Estado da Assinatura Digital do Espelho
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -963,16 +998,17 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   );
 
   // Gestor da Equipe
-  const gestorEquipeNome = user.departamentoNome === 'Recursos Humanos' 
-    ? 'Luciana Mendonça (Coordenação de RH)' 
-    : 'Roberto Albuquerque (Líder Técnico & Gestor de Equipe)';
+  const gestorEquipeNome = userColab?.gestorNome || (user.departamentoNome === 'Recursos Humanos'
+    ? 'Coordenação de RH'
+    : 'Gestor Imediato da Equipe');
   const gestorEquipeEmail = user.departamentoNome === 'Recursos Humanos'
-    ? 'rh@softcase.com.br'
-    : 'gestor@softcase.com.br';
+    ? 'rh@empresa.com.br'
+    : 'gestor@empresa.com.br';
 
   const handleCriarSolicitacaoHe = () => {
+    setHeFormError(null);
     if (!justificativaInput.trim()) {
-      alert('Informe a justificativa operacional da hora extra.');
+      setHeFormError('Informe a justificativa operacional da hora extra.');
       return;
     }
 
@@ -982,17 +1018,17 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
     const nova: SolicitacaoHoraExtra = {
       id: `he-${Date.now()}`,
-      tenantId: user.tenantId,
-      colaboradorId: user.id,
+      tenantId: userColab?.tenantId || user.tenantId,
+      colaboradorId: userColab?.id || user.id,
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
-      departamentoId: 'dep-01',
-      departamentoNome: user.departamentoNome || 'Engenharia de Software',
-      gestorId: 'user-03',
+      departamentoId: userColab?.departamentoId || 'dep-01',
+      departamentoNome: userColab?.departamentoNome || user.departamentoNome || 'Geral',
+      gestorId: userColab?.gestorId || 'gestor-01',
       gestorNome: gestorEquipeNome,
       data: dataHeInput,
-      horarioContratado: '08:00 às 17:00 (8h diárias, 1h almoço)',
-      horarioRealizado: `08:00 às ${String(17 + horas).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
+      horarioContratado: `${horarioInicioStr} às ${horarioFimStr}`,
+      horarioRealizado: `${horarioInicioStr} às ${String(Math.min(23, Number(horarioFimStr.split(':')[0] || 17) + horas)).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
       minutosExtras: minutosHeInput,
       horasExtrasFormatadas: formatada,
       tipoHoraExtra: tipoHeInput,
@@ -1004,6 +1040,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setIsNovaHeModalOpen(false);
     setJustificativaInput('');
     setMinutosHeInput(120);
+    showPortalNotice('success', 'Solicitação de hora extra enviada para aprovação do gestor.');
   };
 
   // Solicitações de Ajuste / Atestado do colaborador logado
@@ -1013,33 +1050,35 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
   // Assinatura do Espelho do mês atual do colaborador
   const minhaAssinaturaMesAtual = assinaturasEspelho.find(
-    (a) => (a.colaboradorId === user.id || (a.colaboradorCpf && a.colaboradorCpf.replace(/\D/g, '') === userCpfDigits)) && a.mesAno === '2026-10'
+    (a) => (a.colaboradorId === user.id || (userColab && a.colaboradorId === userColab.id) || (a.colaboradorCpf && a.colaboradorCpf.replace(/\D/g, '') === userCpfDigits)) && a.mesAno === mesAnoAtual
   );
 
   // Submeter Novo Ajuste / Atestado
   const handleCriarSolicitacaoAjuste = () => {
+    setAjusteFormError(null);
     if (!ajusteJustificativaInput.trim()) {
-      alert('Por favor informe a justificativa da solicitação.');
+      setAjusteFormError('Por favor, informe a justificativa da solicitação.');
       return;
     }
 
     const nova: SolicitacaoAjustePonto = {
       id: `ajuste-${Date.now()}`,
-      tenantId: user.tenantId,
-      colaboradorId: user.id,
+      tenantId: userColab?.tenantId || user.tenantId,
+      colaboradorId: userColab?.id || user.id,
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
-      departamentoId: 'dep-01',
-      departamentoNome: user.departamentoNome || 'Engenharia de Software',
-      gestorId: 'user-03',
+      departamentoId: userColab?.departamentoId || 'dep-01',
+      departamentoNome: userColab?.departamentoNome || user.departamentoNome || 'Geral',
+      gestorId: userColab?.gestorId || 'gestor-01',
       gestorNome: gestorEquipeNome,
       data: ajusteDataInput,
       tipo: ajusteTipoInput,
       horarioAjuste: ajusteTipoInput !== 'ATESTADO_MEDICO' ? ajusteHorarioInput : undefined,
       tipoMarcacaoAjuste: ajusteTipoInput !== 'ATESTADO_MEDICO' ? ajusteTipoMarcacaoInput : undefined,
       cid10: ajusteCidInput ? `CID ${ajusteCidInput}` : undefined,
-      nomeDocumentoAnexo: ajusteDocInput || (ajusteTipoInput === 'ATESTADO_MEDICO' ? 'atestado_medico_digital.pdf' : undefined),
-      dataHoraEnvio: new Date().toLocaleString('pt-BR'),
+      nomeDocumentoAnexo: ajusteDocInput || (ajusteTipoInput === 'ATESTADO_MEDICO' ? 'atestado_medico.pdf' : undefined),
+      anexoUrl: ajusteAnexoUrl || undefined,
+      dataHoraEnvio: getBrasiliaParts().formatted,
       justificativa: ajusteJustificativaInput.trim(),
       status: 'PENDENTE'
     };
@@ -1049,6 +1088,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setAjusteJustificativaInput('');
     setAjusteCidInput('');
     setAjusteDocInput('');
+    setAjusteAnexoUrl('');
+    showPortalNotice('success', 'Solicitação de ajuste/atestado enviada para análise do RH.');
   };
 
   // Funções de Desenho para Assinatura Eletrônica no Canvas
@@ -1101,52 +1142,188 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     const canvas = canvasRef.current;
     const rubricaUrl = canvas ? canvas.toDataURL() : undefined;
 
-    const now = new Date().toLocaleString('pt-BR');
-    const nowIso = new Date().toISOString();
-    const hash = `sha256_espelho_ponto_${user.cpf}_202610_${Date.now().toString(16)}`;
+    const parts = getBrasiliaParts();
+    const mesCompact = mesAnoAtual.replace('-', '');
+    const hash = `sha256_espelho_ponto_${user.cpf.replace(/\D/g, '')}_${mesCompact}_${Date.now().toString(16)}`;
 
     const novaAssinatura: AssinaturaEspelhoPonto = {
       id: `ass-${Date.now()}`,
-      tenantId: user.tenantId,
-      colaboradorId: user.id,
+      tenantId: userColab?.tenantId || user.tenantId,
+      colaboradorId: userColab?.id || user.id,
       colaboradorNome: user.nome,
       colaboradorCpf: user.cpf,
-      mesAno: '2026-10',
-      dataHoraAssinatura: nowIso,
+      mesAno: mesAnoAtual,
+      dataHoraAssinatura: parts.iso,
       hashAssinaturaSha256: hash,
-      ipAddress: '189.120.45.88',
+      ipAddress: 'Registrado no Servidor',
       dispositivoInfo: `${navigator.userAgent.slice(0, 45)}... (Portal PTRP)`,
       rubricaDataUrl: rubricaUrl,
       status: 'ASSINADO'
     };
 
     onAddAssinaturaEspelho?.(novaAssinatura);
-    setSignatureSuccessMsg(`Espelho de ponto Out/2026 assinado eletronicamente com sucesso! Hash de autenticidade: ${hash.slice(0, 20)}...`);
+    setSignatureSuccessMsg(`Espelho de ponto (${mesAnoLabel}) assinado eletronicamente! Hash: ${hash.slice(0, 20)}...`);
     setTimeout(() => setSignatureSuccessMsg(null), 6000);
+  };
+
+  // =========================================================================
+  // HANDLERS: AUTO-CADASTRO FACIAL DO COLABORADOR
+  // =========================================================================
+  React.useEffect(() => {
+    let stream: MediaStream | null = null;
+    let cancelled = false;
+    if (isEnrollFaceModalOpen) {
+      setEnrollError(null);
+      setEnrollProgress(0);
+      setEnrollStatusMsg('Posicione seu rosto no centro da câmera frontal em local bem iluminado.');
+      navigator.mediaDevices
+        ?.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } })
+        .then((s) => {
+          if (cancelled) {
+            s.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          stream = s;
+          if (enrollVideoRef.current) {
+            enrollVideoRef.current.srcObject = s;
+            enrollVideoRef.current.play().catch(() => {});
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setEnrollError('Não foi possível acessar a câmera frontal. Verifique as permissões do navegador.');
+          }
+        });
+    } else if (enrollVideoRef.current && enrollVideoRef.current.srcObject) {
+      const tracks = (enrollVideoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach((t) => t.stop());
+      enrollVideoRef.current.srcObject = null;
+    }
+    return () => {
+      cancelled = true;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, [isEnrollFaceModalOpen]);
+
+  const handleEnrollOwnFace = async () => {
+    if (!enrollVideoRef.current || !enrollCanvasRef.current) return;
+    setIsEnrollingFace(true);
+    setEnrollError(null);
+    setEnrollProgress(5);
+    setEnrollStatusMsg('Iniciando captura multi-quadro da sua biometria facial...');
+
+    const targetId = userColab?.id || user.id;
+    const tenantIdTarget = userColab?.tenantId || user.tenantId || 'tenant-01';
+    const collected: number[][] = [];
+    let lastFail = 'Mantenha seu rosto centralizado em frente à câmera.';
+
+    try {
+      for (let i = 0; i < 8; i++) {
+        if (!enrollVideoRef.current || !enrollCanvasRef.current) break;
+        const pct = Math.min(90, 10 + Math.round(((i + 1) / 8) * 80));
+        setEnrollProgress(pct);
+        setEnrollStatusMsg(`Capturando amostra facial ${i + 1} de 8...`);
+
+        const result = await detectFaceAndBiometrics(enrollVideoRef.current, enrollCanvasRef.current);
+        if (result.detected && result.vector) {
+          collected.push(result.vector);
+        } else if (result.statusMessage) {
+          lastFail = result.statusMessage;
+        }
+        if (i < 7) await new Promise((r) => setTimeout(r, 380));
+      }
+
+      if (collected.length < 4) {
+        setEnrollProgress(0);
+        setEnrollError(`${lastFail} (Amostras válidas: ${collected.length}/8). Tente melhorar a iluminação.`);
+        return;
+      }
+
+      const averagedVector = averageBiometricDescriptors(collected);
+      const localTemplate = saveBiometricTemplate(targetId, averagedVector);
+
+      setEnrollProgress(95);
+      setEnrollStatusMsg('Salvando template criptografado (AES-256 / LGPD) no servidor...');
+
+      let finalTemplate = localTemplate;
+      if (bearerToken) {
+        const res = await fetch('/api/save-biometric', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            collaboratorId: targetId,
+            tenantId: tenantIdTarget,
+            encryptedTemplate: localTemplate,
+            vector: averagedVector
+          })
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Falha ao salvar template facial no servidor.');
+        }
+        const resJson = await res.json();
+        if (resJson.template) finalTemplate = resJson.template;
+      } else if (supabase) {
+        await supabase.from('collaborators').update({
+          biometria_cadastrada: true,
+          biometric_template: localTemplate,
+          updated_at: getBrasiliaParts().iso
+        }).eq('collaborator_id', targetId);
+      }
+
+      onUpdateColaboradorBiometria?.(targetId, {
+        biometriaCadastrada: true,
+        biometriaHashTemplate: finalTemplate
+      });
+
+      setEnrollProgress(100);
+      setEnrollStatusMsg('Biometria facial cadastrada com sucesso!');
+      setTimeout(() => {
+        setIsEnrollFaceModalOpen(false);
+        showPortalNotice('success', 'Sua foto/biometria facial foi cadastrada e já está ativa para registro de ponto.');
+      }, 900);
+    } catch (err: any) {
+      setEnrollProgress(0);
+      setEnrollError(err?.message || 'Erro ao cadastrar biometria facial.');
+    } finally {
+      setIsEnrollingFace(false);
+    }
   };
 
   // =========================================================================
   // HANDLERS: REGISTRO DE PONTO INDIVIDUAL (MOBILE / HOME OFFICE)
   // =========================================================================
   const handleOpenPersonalPunch = () => {
-    const hojeStr = new Date().toISOString().slice(0, 10);
-    const batidasHoje = meusRegistros.filter((r) => r.dataHora.startsWith(hojeStr));
+    const hojeAtualStr = getBrasiliaYmd();
+    const batidasDia = meusRegistros.filter((r) => getBrasiliaYmd(r.dataHora) === hojeAtualStr);
     let proximoTipo: 'ENTRADA' | 'INTERVALO_INICIO' | 'INTERVALO_FIM' | 'SAIDA' = 'ENTRADA';
-    if (batidasHoje.length === 1) proximoTipo = 'INTERVALO_INICIO';
-    else if (batidasHoje.length === 2) proximoTipo = 'INTERVALO_FIM';
-    else if (batidasHoje.length >= 3) proximoTipo = 'SAIDA';
+    if (batidasDia.length === 1) proximoTipo = 'INTERVALO_INICIO';
+    else if (batidasDia.length === 2) proximoTipo = 'INTERVALO_FIM';
+    else if (batidasDia.length >= 3) proximoTipo = 'SAIDA';
 
     setTipoPonto(proximoTipo);
+    setPontoModalError(null);
+    setGpsError(null);
+    setGpsData(null);
     setIsBaterPontoModalOpen(true);
     setBioState('idle');
     setBioProgress(0);
     setLivenessConfirmed(false);
+    setTokenValidated(false);
+    setTokenErrorMsg(null);
     setBiometricCountdown(null);
     countdownStartedRef.current = false;
     setCurrentLiveness(getRandomLivenessChallenge());
-    setBioMsg('Enquadre seu rosto para validação biométrica e prova de vida...');
+    setBioMsg(
+      hasEnrolledBiometry
+        ? 'Enquadre seu rosto para validação biométrica e prova de vida...'
+        : 'Face ainda não cadastrada. Cadastre sua face ou utilize o PIN (1º dia).'
+    );
 
-    // Captura GPS em tempo real (Alta Precisão)
+    // Captura GPS em tempo real (Sem fallback simulado!)
     if (typeof window !== 'undefined' && navigator.geolocation) {
       setGpsLoading(true);
       navigator.geolocation.getCurrentPosition(
@@ -1154,29 +1331,29 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           const est = myAllocatedEst;
-          const dist = calculateDistanceMeters(lat, lng, est.latitude, est.longitude);
-          const dentro = dist <= (est.cercaRaioMetros || 100);
+          const hasEstCoords = typeof est.latitude === 'number' && Number.isFinite(est.latitude) && typeof est.longitude === 'number' && Number.isFinite(est.longitude);
+          const dist = hasEstCoords ? calculateDistanceMeters(lat, lng, est.latitude, est.longitude) : 0;
+          const dentro = !hasEstCoords || dist <= (est.cercaRaioMetros || 100);
           setGpsData({
             lat,
             lng,
             dist,
             dentroCerca: dentro,
-            endereco: `Lat ${lat.toFixed(4)}, Long ${lng.toFixed(4)} · ${est.nome} (${dentro ? 'Dentro da Cerca' : `Externo: ${dist}m`})`
+            endereco: hasEstCoords
+              ? `Lat ${lat.toFixed(4)}, Long ${lng.toFixed(4)} · ${est.nome} (${dentro ? 'Dentro da Cerca' : `Fora do raio: ${dist}m`})`
+              : `Lat ${lat.toFixed(4)}, Long ${lng.toFixed(4)} · GPS Confirmado`
           });
           setGpsLoading(false);
         },
         () => {
-          setGpsData({
-            lat: -23.561684,
-            lng: -46.655981,
-            dist: 15,
-            dentroCerca: true,
-            endereco: 'Localização GPS Celular Confirmada'
-          });
+          setGpsData(null);
+          setGpsError('Não foi possível obter sua localização GPS. Ative o GPS nas permissões do navegador.');
           setGpsLoading(false);
         },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 7000, maximumAge: 0 }
       );
+    } else {
+      setGpsError('Geolocalização não suportada neste dispositivo/navegador.');
     }
   };
 
@@ -1247,6 +1424,11 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   // Validação Biométrica Facial Individual (Multi-Frame ~6.0s)
   const handleValidateFace = async (skipLivenessCheck = false) => {
     if (!videoRef.current || !bioCanvasRef.current) return;
+    if (!hasEnrolledBiometry) {
+      setBioState('rejected');
+      setBioMsg('Você ainda não possui face cadastrada. Clique em "Cadastrar Minha Face Agora" abaixo.');
+      return;
+    }
     if (!skipLivenessCheck && currentLiveness && !livenessConfirmed) {
       setBioMsg(`Realize a prova de vida solicitada ("${currentLiveness.actionPrompt}") e clique em "Confirmar que realizei a ação".`);
       return;
@@ -1257,13 +1439,9 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     resetLivenessState();
     setBioMsg('Estabilizando iluminação e enquadramento...');
 
-    const userColab = colaboradores.find(
-      (c) => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, '')
-    );
-
     const collectedVectors: number[][] = [];
     let lastFailReason = 'Rosto não detectado no enquadramento. Centralize seu rosto em frente à câmera.';
-    const totalSamples = 12; // 12 quadros x 500ms = ~6.0 segundos de validação robusta
+    const totalSamples = 12;
 
     try {
       for (let i = 0; i < totalSamples; i++) {
@@ -1328,6 +1506,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     if (
       isBaterPontoModalOpen &&
       authMethod === 'FACIAL' &&
+      hasEnrolledBiometry &&
       bioState === 'idle' &&
       biometricCountdown === null &&
       !countdownStartedRef.current
@@ -1336,85 +1515,139 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       const t = setTimeout(() => setBiometricCountdown(3), 900);
       return () => clearTimeout(t);
     }
-  }, [isBaterPontoModalOpen, authMethod, bioState, biometricCountdown]);
+  }, [isBaterPontoModalOpen, authMethod, hasEnrolledBiometry, bioState, biometricCountdown]);
 
-  // Efetivar Registro de Ponto Individual
+  // Efetivar Registro de Ponto Individual (via /api/punch autoritativo)
   const handleExecutarPontoIndividual = async () => {
+    setPontoModalError(null);
     if (bioState !== 'verified') {
-      alert('A leitura facial precisa ser verificada com sucesso.');
+      setPontoModalError('A validação facial ou por PIN precisa ser concluída com sucesso.');
       return;
     }
 
-    // Trava de Horário Regulamentar: Entrada só é permitida no horário autorizado (15m antes até 1h depois)
     if (tipoPonto === 'ENTRADA' && !isPunchAllowed) {
-      alert(`Horário Não Permitido: ${punchBlockReason || `Sua entrada é permitida apenas entre ${allowedTimeFormatted}.`}`);
+      setPontoModalError(`Horário Não Permitido: ${punchBlockReason || `Sua entrada é permitida entre ${allowedTimeFormatted}.`}`);
       return;
     }
 
-    // Validação de Duplicidade (Garantir que não bate o mesmo período 2x)
     const jaExisteTipo = batidasHoje.some(b => b.tipoMarcacao === tipoPonto);
     if (jaExisteTipo) {
-      alert(`Você já registrou sua marcação de ${tipoPonto} hoje. Para correções, utilize o botão "Solicitar Correção".`);
-      setIsBaterPontoModalOpen(false);
+      setPontoModalError(`Você já registrou sua marcação de ${tipoPonto} hoje. Para correções, utilize "Ajustes & Atestados".`);
       return;
-    }
-
-    setIsSubmittingPunch(true);
-    const now = new Date();
-    const nextNsr = registros.length + 1;
-    const nowIso = now.toISOString();
-    const dataHoraFmt = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-
-    let hashCalc = '';
-    for (let i = 0; i < 64; i++) {
-      hashCalc += ((i * 19 + nextNsr * 29 + user.cpf.charCodeAt(i % user.cpf.length)) % 16).toString(16);
     }
 
     const est = myAllocatedEst;
-    const foraCerca = gpsData ? !gpsData.dentroCerca : false;
-
-    const novo: RegistroPontoREPP = {
-      nsr: nextNsr,
-      tenantId: userColab?.tenantId || user.tenantId,
-      empregadorRazaoSocial: user.tenantNome || 'Softcase Tecnologia e Sistemas Ltda',
-      empregadorCnpj: est.cnpj || '58.392.102/0001-44',
-      colaboradorId: userColab?.id || user.id,
-      colaboradorNome: user.nome,
-      colaboradorCpf: user.cpf,
-      colaboradorMatricula: userColab?.matricula || `MAT-${user.cpf.replace(/\D/g, '').slice(0, 5)}`,
-      dataHora: nowIso,
-      dataHoraFormatada: dataHoraFmt,
-      fusoHorario: '-03:00',
-      coletorId: 'MOBILE-APP-INDIVIDUAL',
-      tipoMarcacao: tipoPonto,
-      hashSha256: hashCalc,
-      latitude: gpsData?.lat || est.latitude || -23.561684,
-      longitude: gpsData?.lng || est.longitude || -46.655981,
-      distanciaCentroMetros: gpsData?.dist || 12,
-      foraDoRaioGeofence: foraCerca,
-      localizacaoEndereco: gpsData?.endereco || `${est.nome} - Registro Mobile`,
-      modoDispositivo: 'MOBILE_GPS'
-    };
-
-    if (!navigator.onLine) {
-      await saveOfflinePunchToIDB(novo);
+    const hasEstCoords = typeof est.latitude === 'number' && Number.isFinite(est.latitude) && typeof est.longitude === 'number' && Number.isFinite(est.longitude);
+    if (est.bloquearForaDoRaio !== false && hasEstCoords) {
+      if (!gpsData) {
+        setPontoModalError('Geolocalização GPS obrigatória para esta unidade. Ative o GPS e tente novamente.');
+        return;
+      }
+      if (!gpsData.dentroCerca) {
+        setPontoModalError(`Fora da área permitida: você está a ${gpsData.dist}m da unidade "${est.nome}" (limite ${est.cercaRaioMetros}m).`);
+        return;
+      }
     }
 
-    onAddRegistroPonto?.(novo);
-    setIsSubmittingPunch(false);
-    setTimeout(() => {
-      setIsBaterPontoModalOpen(false);
-      setComprovanteModal(novo);
-    }, 2000);
+    setIsSubmittingPunch(true);
+    const parts = getBrasiliaParts();
+    const tenantIdTarget = userColab?.tenantId || user.tenantId || 'tenant-01';
+    const colabIdTarget = userColab?.id || user.id;
 
-    const allPunchesToday = [...batidasHoje, novo];
-    const workedInfo = calculateWorkedTime(allPunchesToday);
-    if (tipoPonto === 'SAIDA' || allPunchesToday.length >= 4) {
-      setPontoSucessoMsg(`Obrigado por registrar sua saída! Hoje sua carga horária foi de ${workedInfo.formatted}, bom descanso! (NSR ${String(nextNsr).padStart(9, '0')})`);
-    } else {
-      setPontoSucessoMsg(`Ponto registrado com sucesso! NSR ${String(nextNsr).padStart(9, '0')} gerado conforme Portaria MTP 671.`);
+    try {
+      let registroConfirmado: RegistroPontoREPP | null = null;
+
+      if (navigator.onLine && bearerToken) {
+        const res = await fetch('/api/punch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            tenantId: tenantIdTarget,
+            colaboradorId: colabIdTarget,
+            tipoMarcacao: tipoPonto,
+            latitude: gpsData?.lat ?? null,
+            longitude: gpsData?.lng ?? null,
+            modoDispositivo: 'MOBILE_GPS',
+            biometricAudit: {
+              similarity: bioSimilarity || (authMethod === 'TOKEN_PIN' ? 100 : 0),
+              lightingCondition: 'BOA',
+              livenessScore: livenessConfirmed ? 92 : 0,
+              verdict: 'APROVADO',
+              algorithmUsed: authMethod === 'TOKEN_PIN' ? 'PIN_CONTINGENCIA' : 'ISO_19794_5_WEB'
+            }
+          })
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setPontoModalError(data.error || 'Marcação recusada pelo servidor REP-P.');
+          setIsSubmittingPunch(false);
+          return;
+        }
+        if (data.success && data.registro) {
+          registroConfirmado = data.registro;
+        }
+      }
+
+      if (!registroConfirmado) {
+        if (navigator.onLine && !bearerToken) {
+          setPontoModalError('Sessão autenticada necessária para registrar ponto online. Faça login novamente.');
+          setIsSubmittingPunch(false);
+          return;
+        }
+        const nextNsr = registros.length + 1;
+        let hashCalc = '';
+        for (let i = 0; i < 64; i++) {
+          hashCalc += ((i * 19 + nextNsr * 29 + user.cpf.charCodeAt(i % user.cpf.length)) % 16).toString(16);
+        }
+        registroConfirmado = {
+          nsr: nextNsr,
+          tenantId: tenantIdTarget,
+          empregadorRazaoSocial: user.tenantNome || est.nome,
+          empregadorCnpj: est.cnpj || '',
+          colaboradorId: colabIdTarget,
+          colaboradorNome: user.nome,
+          colaboradorCpf: user.cpf,
+          colaboradorMatricula: userColab?.matricula || `MAT-${user.cpf.replace(/\D/g, '').slice(0, 5)}`,
+          dataHora: parts.iso,
+          dataHoraFormatada: parts.formatted,
+          fusoHorario: '-03:00',
+          coletorId: 'MOBILE-APP-INDIVIDUAL',
+          tipoMarcacao: tipoPonto,
+          hashSha256: `OFFLINE_${hashCalc.slice(0, 56)}`,
+          latitude: gpsData?.lat,
+          longitude: gpsData?.lng,
+          distanciaCentroMetros: gpsData?.dist,
+          foraDoRaioGeofence: gpsData ? !gpsData.dentroCerca : false,
+          localizacaoEndereco: gpsData?.endereco || `${est.nome} - Registro Offline`,
+          modoDispositivo: 'MOBILE_GPS'
+        };
+        await saveOfflinePunchToIDB(registroConfirmado);
+      }
+
+      onAddRegistroPonto?.(registroConfirmado);
+      setIsSubmittingPunch(false);
+      setTimeout(() => {
+        setIsBaterPontoModalOpen(false);
+        setComprovanteModal(registroConfirmado);
+      }, 900);
+
+      const allPunchesToday = [...batidasHoje, registroConfirmado];
+      const workedInfo = calculateWorkedTime(allPunchesToday);
+      if (tipoPonto === 'SAIDA' || allPunchesToday.length >= 4) {
+        setPontoSucessoMsg(`Saída registrada! Hoje sua carga horária foi de ${workedInfo.formatted}. (NSR ${String(registroConfirmado.nsr).padStart(9, '0')})`);
+      } else {
+        setPontoSucessoMsg(`Ponto registrado com sucesso! NSR ${String(registroConfirmado.nsr).padStart(9, '0')} gerado conforme Portaria MTP 671.`);
+      }
+      setTimeout(() => setPontoSucessoMsg(null), 10000);
+    } catch (err) {
+      console.error('Erro de conexão ao registrar ponto:', err);
+      setPontoModalError('Falha de rede ao enviar marcação. Verifique sua conexão e tente novamente.');
+      setIsSubmittingPunch(false);
     }
-    setTimeout(() => setPontoSucessoMsg(null), 10000);
   };
 
   return (
@@ -1472,7 +1705,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 mt-1">
-                  Jornada Contratada: <strong>{horarioInicioStr} às 17:00</strong> · Antecedência Máxima: <strong>{maxAntecedenciaMin} min</strong> (Liberado a partir das <strong>{allowedTimeFormatted}</strong>)
+                  Jornada Contratada: <strong>{horarioInicioStr} às {horarioFimStr}</strong> · Antecedência Máxima: <strong>{maxAntecedenciaMin} min</strong> (Liberado das <strong>{allowedTimeFormatted}</strong>)
                 </p>
               </div>
             </div>
@@ -1493,11 +1726,11 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               <button
                 onClick={() => {
                   if (batidasHoje.length >= 4) {
-                    alert('Sua carga horária diária já foi encerrada (4 marcações registradas).');
+                    showPortalNotice('error', 'Sua carga horária diária já foi encerrada (4 marcações registradas).');
                     return;
                   }
                   if (!isPunchAllowed) {
-                    alert(`Bloqueio de Horário: ${punchBlockReason}`);
+                    showPortalNotice('error', `Bloqueio de Horário: ${punchBlockReason}`);
                   } else {
                     handleOpenPersonalPunch();
                   }
@@ -1516,6 +1749,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         </div>
       </div>
 
+      {portalNotice && (
+        <div className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 shadow-xs ${
+          portalNotice.type === 'success'
+            ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+            : 'bg-rose-50 border-rose-300 text-rose-900'
+        }`}>
+          <div className="flex items-center gap-2">
+            {portalNotice.type === 'success'
+              ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+            <span>{portalNotice.text}</span>
+          </div>
+          <button onClick={() => setPortalNotice(null)} className="opacity-70 hover:opacity-100 cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Banner de Boas-vindas do Colaborador com Gestor Imediato */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -1523,19 +1774,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             {user.nome.charAt(0)}
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg font-bold text-slate-900">{user.nome}</h2>
               <span className="text-xs font-mono font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                 Vínculo CLT Ativo
               </span>
+              {!hasEnrolledBiometry && (
+                <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  Biometria Pendente
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              {userColab?.cargoTitulo || user.cargoTitulo || 'Engenheira de Software Sênior'} · {userColab?.departamentoNome || user.departamentoNome || 'Engenharia de Software'} · CPF {user.cpf}
+              {userColab?.cargoTitulo || user.cargoTitulo || 'Colaborador'} · {userColab?.departamentoNome || user.departamentoNome || 'Geral'} · CPF {user.cpf}
             </p>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-600">
               <span className="inline-flex items-center gap-1.5">
                 <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-                <span>Gestor Imediato: <strong className="text-slate-800">{gestorEquipeNome}</strong> ({gestorEquipeEmail})</span>
+                <span>Gestor Imediato: <strong className="text-slate-800">{gestorEquipeNome}</strong></span>
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-rose-500" />
@@ -1547,15 +1803,26 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
         <div className="flex flex-col sm:flex-row sm:flex-wrap lg:flex-nowrap items-stretch sm:items-center gap-2 w-full lg:w-auto shrink-0">
           <button
+            onClick={() => setIsEnrollFaceModalOpen(true)}
+            className={`flex-1 lg:flex-none justify-center px-3 py-2 font-semibold text-xs rounded-xl border transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              hasEnrolledBiometry
+                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                : 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-xs'
+            }`}
+          >
+            <ScanFace className="w-4 h-4 shrink-0" />
+            <span>{hasEnrolledBiometry ? 'Atualizar Face' : 'Cadastrar Minha Face'}</span>
+          </button>
+          <button
             onClick={() => setIsAjusteModalOpen(true)}
-            className="flex-1 lg:flex-none justify-center px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold text-xs rounded-xl border border-blue-200 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="flex-1 lg:flex-none justify-center px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold text-xs rounded-xl border border-blue-200 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Paperclip className="w-4 h-4 text-blue-600 shrink-0" />
             <span>Enviar Atestado / Ajuste</span>
           </button>
           <button
             onClick={() => setIsNovaHeModalOpen(true)}
-            className="flex-1 lg:flex-none justify-center px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="flex-1 lg:flex-none justify-center px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Solicitar H.E.</span>
@@ -1563,17 +1830,17 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           {onOpenGuia && (
             <button
               onClick={onOpenGuia}
-              className="flex-1 lg:flex-none justify-center px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              className="flex-1 lg:flex-none justify-center px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               title="Acessar Guia de Boas-Vindas e Manual de Uso"
             >
               <Info className="w-4 h-4 text-indigo-600 shrink-0" />
-              <span>Guia do Colaborador</span>
+              <span>Guia</span>
             </button>
           )}
-          {user.role === 'SUPER_ADMIN' && (user.email === 'admin@softcase.com.br' || user.email === 'edsonfreire.santos@hotmail.com') && onRegistrarPonto && (
+          {(user.role === 'SUPER_ADMIN' || user.role === 'RH_ADMIN') && onRegistrarPonto && (
             <button
               onClick={onRegistrarPonto}
-              className="px-2.5 py-2 text-slate-400 hover:text-slate-700 text-[11px] font-medium transition-colors flex items-center gap-1 shrink-0"
+              className="px-2.5 py-2 text-slate-400 hover:text-slate-700 text-[11px] font-medium transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
               title="Acessar Modo Tablet Compartilhado da Recepção"
             >
               <Clock className="w-3.5 h-3.5 text-slate-400" />
@@ -1612,12 +1879,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               : (userColab?.tipoEscala === '6x1' ? '6x1 Varejo' : 'Comercial 5x2')}
           </span>
           <span className="text-[10px] text-slate-500 block">
-            {userColab?.tipoEscala === '12x36' ? 'Plantão 12h · 36h descanso' : '08:00 às 17:00 · 1h intervalo'}
+            {userColab?.tipoEscala === '12x36' ? 'Plantão 12h · 36h descanso' : `${horarioInicioStr} às ${horarioFimStr} · ${userColab?.intervaloMinutos ?? 60}m intervalo`}
           </span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
-          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Assinatura Mês Out/2026</span>
+          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Assinatura {mesAnoLabel}</span>
           <span className="text-lg font-bold font-mono text-emerald-700 flex items-center gap-1">
             {minhaAssinaturaMesAtual ? (
               <>
@@ -1632,15 +1899,28 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
-          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Saldo Banco de Horas</span>
-          <span className="text-lg font-bold font-mono text-emerald-700">+04:15h</span>
-          <span className="text-[10px] text-emerald-600 block">Válido por 6 meses (CLT Art. 59)</span>
+          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Saldo Horas Extras Aprov.</span>
+          {(() => {
+            const approvedMins = minhasHorasExtras
+              .filter(h => h.status === 'APROVADO')
+              .reduce((acc, h) => acc + (h.minutosExtras || 0), 0);
+            const hh = String(Math.floor(approvedMins / 60)).padStart(2, '0');
+            const mm = String(approvedMins % 60).padStart(2, '0');
+            return (
+              <span className="text-lg font-bold font-mono text-emerald-700">
+                +{hh}:{mm}h
+              </span>
+            );
+          })()}
+          <span className="text-[10px] text-emerald-600 block">CLT Art. 59 (Banco / Folha)</span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
-          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Marcações no Mês</span>
-          <span className="text-lg font-bold font-mono text-slate-900">{meusRegistros.length} batidas</span>
-          <span className="text-[10px] text-slate-500 block">NSRs no REP-P Portaria 671</span>
+          <span className="text-slate-400 block text-[10px] font-semibold uppercase">Marcações em {mesAnoLabel}</span>
+          <span className="text-lg font-bold font-mono text-slate-900">
+            {meusRegistros.filter(r => getBrasiliaYmd(r.dataHora).startsWith(mesAnoAtual)).length} batidas
+          </span>
+          <span className="text-[10px] text-slate-500 block">Total histórico: {meusRegistros.length} NSRs</span>
         </div>
       </div>
 
@@ -1805,23 +2085,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   if (file) {
                     const reader = new FileReader();
                     reader.onload = (evt) => {
-                      const dataUrl = evt.target?.result as string;
+                      const dataUrl = String(evt.target?.result || '');
+                      const compMesAno = getBrasiliaMonthYear();
                       const newHolerite = {
                         id: `hol-${Date.now()}`,
-                        mesAno: '2026-10',
-                        competencia: 'Outubro / 2026',
-                        salarioBruto: 5200.00,
-                        descontos: 680.00,
-                        liquido: 4520.00,
+                        mesAno: compMesAno,
+                        competencia: getMonthLabelPtBr(compMesAno),
+                        salarioBruto: 0,
+                        descontos: 0,
+                        liquido: 0,
                         arquivoNome: file.name,
                         arquivoUrl: dataUrl,
-                        dataUpload: new Date().toLocaleDateString('pt-BR'),
+                        dataUpload: formatBrasiliaDate(),
                         status: 'ANEXADO_PELO_COLABORADOR'
                       };
                       const updated = [newHolerite, ...holeritesList];
                       setHoleritesList(updated);
                       localStorage.setItem(`sc_holerites_${user.id}`, JSON.stringify(updated));
-                      alert(`Holerite "${file.name}" anexado com sucesso!`);
+                      showPortalNotice('success', `Holerite "${file.name}" anexado ao seu arquivo pessoal.`);
                     };
                     reader.readAsDataURL(file);
                   }
@@ -1996,8 +2277,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 block font-sans text-[10px]">Empregador</span>
-                    <strong className="text-slate-900 block truncate">Softcase Tecnologia S.A.</strong>
-                    <span className="text-slate-500 text-[10px]">CNPJ: 00.000.000/0001-91</span>
+                    <strong className="text-slate-900 block truncate">{user.tenantNome || myAllocatedEst.nome}</strong>
+                    <span className="text-slate-500 text-[10px]">CNPJ: {myAllocatedEst.cnpj || 'Conforme cadastro'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block font-sans text-[10px]">Colaborador</span>
@@ -2072,7 +2353,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     <span>Recibo de Pagamento Assinado Digitalmente pelo Empregado</span>
                   </div>
                   <div><strong>Data/Hora do Carimbo:</strong> {viewingHoleriteModal.confirmadoEm || 'Confirmado'}</div>
-                  <div><strong>Endereço IP Registrado:</strong> {viewingHoleriteModal.confirmadoIp || '189.120.45.88'}</div>
+                  <div><strong>Endereço IP Registrado:</strong> {viewingHoleriteModal.confirmadoIp || 'Capturado no Servidor'}</div>
                   <div className="truncate"><strong>Hash Criptográfico SHA-256:</strong> {viewingHoleriteModal.confirmadoHash}</div>
                 </div>
               ) : (
@@ -2182,7 +2463,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                       jaConfirmou ? (
                         <div className="p-2 bg-emerald-100/90 text-emerald-900 rounded-xl font-mono text-[10px] flex items-center gap-2 border border-emerald-300">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>Leitura Confirmada em <strong>{minhaConfirmacao?.dataHora || 'Recentemente'}</strong> (IP: {minhaConfirmacao?.ip || '189.120.45.88'})</span>
+                          <span>Leitura Confirmada em <strong>{minhaConfirmacao?.dataHora || 'Confirmado'}</strong> (IP: {minhaConfirmacao?.ip || 'Servidor'})</span>
                         </div>
                       ) : (
                         <button
@@ -2503,8 +2784,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-white p-3 rounded-xl border border-slate-200">
                     <span className="text-slate-400 font-sans text-[10px] block">1. Fonte Paguadora (Empresa)</span>
-                    <strong className="block text-slate-900">Softcase Tecnologia S.A.</strong>
-                    <span>CNPJ: 58.392.102/0001-44</span>
+                    <strong className="block text-slate-900">{user.tenantNome || myAllocatedEst.nome}</strong>
+                    <span>CNPJ: {myAllocatedEst.cnpj || 'Conforme cadastro'}</span>
                   </div>
                   <div className="bg-white p-3 rounded-xl border border-slate-200">
                     <span className="text-slate-400 font-sans text-[10px] block">2. Pessoa Física Beneficiária</span>
@@ -2657,7 +2938,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             <div>
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <PenTool className="w-4 h-4 text-blue-600" />
-                Assinatura Eletrônica do Espelho de Ponto (Outubro/2026)
+                Assinatura Eletrônica do Espelho de Ponto ({mesAnoLabel})
               </h3>
               <p className="text-xs text-slate-500">
                 Homologado conforme o Programa de Tratamento de Registro de Ponto (PTRP) - Portaria MTP nº 671/2021 Art. 84.
@@ -2700,10 +2981,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             <div className="space-y-4">
               <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 text-slate-700">
                 <span className="font-bold text-slate-900 block text-sm">
-                  Declaração de Conformidade da Jornada de Trabalho (Competência 10/2026)
+                  Declaração de Conformidade da Jornada de Trabalho ({mesAnoLabel})
                 </span>
                 <p>
-                  Eu, <strong>{user.nome}</strong> (CPF {user.cpf}), declaro para os devidos fins legais que revisei o espelho de ponto referente ao período de 01/10/2026 a 31/10/2026 e atesto a veracidade das marcações registradas no REP-P, sem qualquer divergência a declarar.
+                  Eu, <strong>{user.nome}</strong> (CPF {user.cpf}), declaro para os devidos fins legais que revisei o espelho de ponto referente à competência <strong>{mesAnoLabel}</strong> ({mesAnoAtual}) e atesto a veracidade das marcações registradas no REP-P, sem divergências pendentes.
                 </p>
               </div>
 
@@ -2863,7 +3144,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 SAIDA: userColab?.horarioFim || '17:00'
               };
               const expectedTime = schedule[reg.tipoMarcacao as keyof typeof schedule] || '08:00';
-              const punchTime = new Date(reg.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+              const punchTime = formatBrasiliaTime(reg.dataHora, false);
               
               const [pH, pM] = punchTime.split(':').map(Number);
               const [eH, eM] = expectedTime.split(':').map(Number);
@@ -2874,7 +3155,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
               return (
                 <div
-                  key={reg.nsr}
+                  key={`${reg.nsr}-${reg.dataHora}-${reg.tipoMarcacao}`}
                   className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs ${
                     isOnTime ? 'border-emerald-200 bg-emerald-50/20' : 'border-rose-200 bg-rose-50/20'
                   }`}
@@ -2936,7 +3217,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 Feriados Aplicáveis ao Contrato de Trabalho
               </h3>
               <p className="text-xs text-slate-500">
-                Herança legal automática para a unidade de São Paulo / SP.
+                Herança legal automática para a unidade de {myAllocatedEst.municipio || 'Matriz'} / {myAllocatedEst.uf || 'BR'}.
               </p>
             </div>
             <span className="text-xs font-mono font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
@@ -2984,14 +3265,14 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
               </p>
             </div>
             <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl text-indigo-800 text-xs font-mono">
-              Competência: Novembro/2026
+              Competência: {mesAnoLabel}
             </div>
           </div>
 
           {/* Calendário Mensal do Colaborador */}
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs text-slate-600">
-              <span className="font-semibold">Novembro de 2026</span>
+              <span className="font-semibold">{mesAnoLabel}</span>
               <div className="flex items-center gap-4 text-[11px]">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Plantão / Dia de Trabalho
@@ -3009,7 +3290,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </div>
               ))}
 
-              {gerarCalendarioMesEscala(2026, 10, userColab?.tipoEscala || '5x2', userColab?.turmaEscala || 'A').map((item, idx) => {
+              {gerarCalendarioMesEscala(nowParts.year, nowParts.month - 1, userColab?.tipoEscala || '5x2', userColab?.turmaEscala || 'A').map((item, idx) => {
                 const diaNum = parseInt(item.dataYmd.split('-')[2], 10);
                 const isTrabalho = item.tipoDia === 'TRABALHO';
                 const isHoje = item.dataYmd === hojeStr;
@@ -3152,15 +3433,18 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const colega = colaboradores.find(c => c.id === trocaColegaId);
                 if (!colega) return;
 
+                const swapId = `troca-${Date.now()}`;
+                const hojeBrt = getBrasiliaYmd();
+                const tenantTarget = userColab?.tenantId || user.tenantId || 'tenant-01';
                 const novaTroca: SolicitacaoTrocaTurno = {
-                  id: `troca-${Date.now()}`,
-                  tenantId: 'tenant-01',
-                  colaboradorOrigemId: user.id,
+                  id: swapId,
+                  tenantId: tenantTarget,
+                  colaboradorOrigemId: userColab?.id || user.id,
                   colaboradorOrigemNome: user.nome,
                   colaboradorOrigemCpf: user.cpf,
                   colaboradorDestinoId: colega.id,
@@ -3171,18 +3455,38 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   dataPlantaoOrigem: trocaDataOrigem,
                   dataPlantaoDestino: trocaDataDestino,
                   horarioTurno: trocaHorarioTurno,
-                  motivo: trocaMotivo.trim() || 'Troca de escala entre colaboradores para conciliação pessoal.',
-                  status: 'APROVADO',
+                  motivo: trocaMotivo.trim() || 'Troca de escala entre colaboradores.',
+                  status: 'PENDENTE_SUPERVISOR',
                   validacaoInterjornadaOk: true,
-                  supervisorDecisorNome: 'Supervisor de Turno',
-                  dataDecisao: new Date().toISOString().slice(0, 10),
-                  criadoEm: new Date().toISOString().slice(0, 10)
+                  supervisorDecisorNome: userColab?.gestorNome || 'Aguardando Supervisor',
+                  criadoEm: hojeBrt
                 };
+
+                if (supabase) {
+                  try {
+                    await supabase.from('shift_swaps').upsert({
+                      swap_id: swapId,
+                      tenant_id: tenantTarget,
+                      solicitante_id: novaTroca.colaboradorOrigemId,
+                      solicitante_nome: novaTroca.colaboradorOrigemNome,
+                      substituto_id: colega.id,
+                      substituto_nome: colega.nome,
+                      data_turno_original: trocaDataOrigem,
+                      data_turno_compensacao: trocaDataDestino,
+                      motivo: novaTroca.motivo,
+                      status: 'PENDENTE_SUPERVISOR',
+                      regra_clt_ok: true
+                    }, { onConflict: 'swap_id' });
+                  } catch (err) {
+                    console.warn('Aviso ao gravar troca no Supabase:', err);
+                  }
+                }
 
                 setSolicitacoesTroca([novaTroca, ...solicitacoesTroca]);
                 setIsNovaTrocaModalOpen(false);
-                setTrocaFeedback(`Troca com ${colega.nome} registrada e validada com sucesso!`);
-                setTimeout(() => setTrocaFeedback(null), 4000);
+                setTrocaMotivo('');
+                setTrocaFeedback(`Solicitação de troca com ${colega.nome} enviada para homologação do supervisor!`);
+                setTimeout(() => setTrocaFeedback(null), 5000);
               }}
               className="space-y-4 text-xs"
             >
@@ -3342,11 +3646,20 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <textarea
                   rows={3}
                   value={justificativaInput}
-                  onChange={(e) => setJustificativaInput(e.target.value)}
+                  onChange={(e) => {
+                    setJustificativaInput(e.target.value);
+                    setHeFormError(null);
+                  }}
                   placeholder="Descreva o motivo da prorrogação de jornada (ex: fechamento de release, atendimento a chamado crítico)..."
                   className="w-full p-2.5 rounded-lg border border-slate-200"
                 />
               </div>
+
+              {heFormError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-semibold">
+                  {heFormError}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
@@ -3440,8 +3753,14 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     type="file"
                     accept="image/*,.pdf"
                     onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        setAjusteDocInput(e.target.files[0].name);
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setAjusteDocInput(file.name);
+                        const reader = new FileReader();
+                        reader.onload = (evt) => {
+                          setAjusteAnexoUrl((evt.target?.result as string) || '');
+                        };
+                        reader.readAsDataURL(file);
                       }
                     }}
                     className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 cursor-pointer"
@@ -3449,7 +3768,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </div>
                 <input
                   type="text"
-                  placeholder="Nome do arquivo ou descrição (ex: atestado_medico_out.pdf)"
+                  placeholder="Nome do arquivo ou descrição (ex: atestado_medico.pdf)"
                   value={ajusteDocInput}
                   onChange={(e) => setAjusteDocInput(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-slate-800 text-xs"
@@ -3461,11 +3780,20 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 <textarea
                   rows={3}
                   value={ajusteJustificativaInput}
-                  onChange={(e) => setAjusteJustificativaInput(e.target.value)}
+                  onChange={(e) => {
+                    setAjusteJustificativaInput(e.target.value);
+                    setAjusteFormError(null);
+                  }}
                   placeholder="Explique o motivo do atestado ou da solicitação de inclusão de ponto..."
                   className="w-full p-2.5 rounded-lg border border-slate-200 text-xs"
                 />
               </div>
+
+              {ajusteFormError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-semibold">
+                  {ajusteFormError}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
@@ -3625,15 +3953,24 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     </span>
                   ) : gpsData ? (
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      gpsData.dentroCerca ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      gpsData.dentroCerca ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                     }`}>
-                      {gpsData.dentroCerca ? 'Dentro do Raio Permitido' : 'Trabalho Externo Autorizado'}
+                      {gpsData.dentroCerca ? 'Dentro do Raio Permitido' : (myAllocatedEst.bloquearForaDoRaio !== false ? 'Fora do Raio (Bloqueado)' : 'Trabalho Externo')}
                     </span>
-                  ) : null}
+                  ) : (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
+                      GPS Indisponível
+                    </span>
+                  )}
                 </div>
                 {gpsData && (
                   <p className="text-[10px] text-slate-500 font-mono">
                     {gpsData.endereco} • Distância base: {gpsData.dist}m
+                  </p>
+                )}
+                {gpsError && (
+                  <p className="text-[10px] text-rose-700 font-medium">
+                    {gpsError}
                   </p>
                 )}
               </div>
@@ -3769,19 +4106,33 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     </div>
                   )}
 
-                  {/* Dica para Recém-Contratados sem Foto Cadastrada */}
-                  <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between text-[11px]">
-                    <span className="text-indigo-900 font-medium">
-                      É recém-contratado e não registrou a face?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setAuthMethod('TOKEN_PIN')}
-                      className="font-bold text-indigo-700 hover:text-indigo-900 underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Key className="w-3 h-3" /> Digitar PIN/Token
-                    </button>
-                  </div>
+                  {/* Aviso de Auto-Cadastro Facial para quem ainda não tem foto */}
+                  {!hasEnrolledBiometry && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                      <span className="text-amber-900 font-semibold">
+                        Você ainda não cadastrou sua biometria facial no sistema.
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsBaterPontoModalOpen(false);
+                            setIsEnrollFaceModalOpen(true);
+                          }}
+                          className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold cursor-pointer whitespace-nowrap"
+                        >
+                          Cadastrar Minha Face Agora
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAuthMethod('TOKEN_PIN')}
+                          className="font-bold text-indigo-700 hover:text-indigo-900 underline cursor-pointer whitespace-nowrap"
+                        >
+                          Usar PIN (1º dia)
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 
@@ -3794,12 +4145,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-white">Validação por Token / PIN da Empresa</h4>
-                      <p className="text-[10px] text-slate-400">Recém-contratados & Contingência REP-P</p>
+                      <p className="text-[10px] text-slate-400">Recém-contratados & Contingência REP-P (Válido 1º dia)</p>
                     </div>
                   </div>
 
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Insira o <strong>PIN ou Token de 6 dígitos</strong> fornecido pela empresa/RH para validar o registro de ponto sem leitura facial prévia:
+                    Insira o <strong>PIN ou Token</strong> fornecido pelo RH para o 1º dia de registro antes do cadastro facial:
                   </p>
 
                   <div className="space-y-2">
@@ -3810,7 +4161,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                       <input
                         type="password"
                         maxLength={8}
-                        placeholder="Digite o PIN (ex: 123456)"
+                        placeholder="Digite seu PIN"
                         value={tokenPinInput}
                         onChange={(e) => setTokenPinInput(e.target.value)}
                         className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-emerald-400 placeholder:text-slate-600"
@@ -3844,18 +4195,40 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </div>
               )}
 
+              {pontoModalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-semibold flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{pontoModalError}</span>
+                </div>
+              )}
+
               {/* Botões de Ação */}
               <div className="space-y-2 pt-1">
                 {bioState !== 'verified' ? (
                   authMethod === 'FACIAL' ? (
                     <button
                       type="button"
-                      onClick={() => handleValidateFace(false)}
+                      onClick={() => {
+                        if (!hasEnrolledBiometry) {
+                          setIsBaterPontoModalOpen(false);
+                          setIsEnrollFaceModalOpen(true);
+                        } else {
+                          handleValidateFace(false);
+                        }
+                      }}
                       disabled={bioState === 'detecting'}
                       className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
                     >
                       <ScanFace className="w-4 h-4" />
-                      <span>{bioState === 'detecting' ? `Validando Face (${bioProgress}%)...` : bioState === 'rejected' ? 'Tentar Validação Facial Novamente' : 'Validar Minha Face Agora'}</span>
+                      <span>
+                        {!hasEnrolledBiometry
+                          ? 'Cadastrar Minha Face Primeiro'
+                          : bioState === 'detecting'
+                          ? `Validando Face (${bioProgress}%)...`
+                          : bioState === 'rejected'
+                          ? 'Tentar Validação Facial Novamente'
+                          : 'Validar Minha Face Agora'}
+                      </span>
                     </button>
                   ) : (
                     <button
@@ -3875,9 +4248,86 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-md animate-pulse active:scale-95 cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4 text-white" />
-                    <span>{isSubmittingPunch ? 'Gravando...' : 'CONFIRMAR E REGISTRAR MEU PONTO'}</span>
+                    <span>{isSubmittingPunch ? 'Gravando no Servidor REP-P...' : 'CONFIRMAR E REGISTRAR MEU PONTO'}</span>
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AUTO-CADASTRO FACIAL DO COLABORADOR */}
+      {isEnrollFaceModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden border border-slate-200 shadow-2xl">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-300 flex items-center justify-center border border-indigo-500/30">
+                  <ScanFace className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Auto-Cadastro de Biometria Facial</h3>
+                  <p className="text-[10px] text-slate-300">Padrão ISO 19794-5 · Criptografia AES-256 (LGPD)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => !isEnrollingFace && setIsEnrollFaceModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-4/3 flex items-center justify-center border-2 border-slate-800">
+                <video
+                  ref={enrollVideoRef}
+                  playsInline
+                  autoPlay
+                  muted
+                  className="w-full h-full object-cover transform -scale-x-100"
+                />
+                <canvas ref={enrollCanvasRef} className="hidden" />
+                <div className="absolute w-44 h-56 rounded-[50%] border-2 border-dashed border-emerald-400/80 pointer-events-none" />
+                <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 px-3 py-2 rounded-xl border border-white/10 text-center space-y-1.5">
+                  <p className="text-[11px] font-semibold text-white truncate">{enrollStatusMsg}</p>
+                  {enrollProgress > 0 && (
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${enrollProgress}%` }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-[11px] text-indigo-900">
+                <strong>Consentimento Biométrico (LGPD):</strong> Sua geometria facial será convertida em vetor matemático criptografado exclusivamente para validação de ponto eletrônico.
+              </div>
+
+              {enrollError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-semibold">
+                  {enrollError}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isEnrollingFace}
+                  onClick={() => setIsEnrollFaceModalOpen(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isEnrollingFace}
+                  onClick={handleEnrollOwnFace}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>{isEnrollingFace ? `Capturando (${enrollProgress}%)...` : 'Capturar e Salvar Minha Face'}</span>
+                </button>
               </div>
             </div>
           </div>

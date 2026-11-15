@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Tenant, Colaborador, RegistroPontoREPP } from '../types/operational';
 import { SistemaERPAlvo } from '../types/rhAvancado';
+import { getBrasiliaMonthYear } from '../utils/brasiliaClock';
 import {
   exportarLayoutTOTVSProtheus,
   exportarLayoutSeniorVetorh,
@@ -35,7 +36,7 @@ interface ExportadorFolhaERPProps {
 
 export function ExportadorFolhaERP({ tenant, colaboradores, registros }: ExportadorFolhaERPProps) {
   const [sistemaSelecionado, setSistemaSelecionado] = useState<SistemaERPAlvo>('TOTVS_PROTHEUS');
-  const [competencia, setCompetencia] = useState<string>('2026-11');
+  const [competencia, setCompetencia] = useState<string>(() => getBrasiliaMonthYear());
   const [codigoFilial, setCodigoFilial] = useState<string>('01');
   const [previewConteudo, setPreviewConteudo] = useState<string>('');
   const [previewTipo, setPreviewTipo] = useState<string>('');

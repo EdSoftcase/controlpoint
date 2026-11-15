@@ -51,6 +51,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
   const [cepLoading, setCepLoading] = useState(false);
   const [expandedEstId, setExpandedEstId] = useState<string | null>(null);
   const [filterEstByActiveTenant, setFilterEstByActiveTenant] = useState<boolean>(false);
+  const [pendingDelete, setPendingDelete] = useState<{ kind: 'depto' | 'cargo' | 'est'; id: string; label: string } | null>(null);
 
   // Modais de Criação / Edição
   const [isDeptoModalOpen, setIsDeptoModalOpen] = useState(false);
@@ -170,9 +171,12 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         gestor_id: novoDepto.gestorId,
         gestor_nome: novoDepto.gestorNome,
         gestor_email: novoDepto.gestorEmail,
-        horario_padrao: novoDepto.horarioInicioPadrao,
-        carga_horaria_diaria: novoDepto.cargaHorariaDiariaHoras
-      });
+        horario_inicio_padrao: novoDepto.horarioInicioPadrao,
+        carga_horaria_diaria: novoDepto.cargaHorariaDiariaHoras,
+        intervalo_minutos: novoDepto.intervaloMinutos,
+        max_minutos_antecedencia: novoDepto.maxMinutosAntecedenciaPermitido,
+        regra_antecedencia_ativa: novoDepto.regraAntecedenciaAtiva
+      }, { onConflict: 'department_id' });
     } catch (err) {
       console.warn('Aviso sincronização Supabase departamento:', err);
     }
@@ -190,22 +194,13 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     setIsDeptoModalOpen(false);
   };
 
-  const handleDeleteDepto = async (id: string, nome: string) => {
+  const handleDeleteDepto = (id: string, nome: string) => {
     const colabsInDepto = colaboradores.filter(c => c.departamentoId === id);
     if (colabsInDepto.length > 0) {
-      alert(`Não é possível excluir o departamento "${nome}" pois existem ${colabsInDepto.length} colaboradores alocados nele.`);
+      showNotification(`Não é possível excluir o departamento "${nome}" pois existem ${colabsInDepto.length} colaboradores alocados nele.`, 'error');
       return;
     }
-
-    if (confirm(`Deseja realmente remover o departamento "${nome}"?`)) {
-      try {
-        await supabase.from('departments').delete().eq('department_id', id);
-      } catch (err) {
-        console.warn('Aviso delete departamento Supabase:', err);
-      }
-      onUpdateDepartamentos(departamentos.filter(d => d.id !== id));
-      showNotification(`Departamento "${nome}" removido.`, 'success');
-    }
+    setPendingDelete({ kind: 'depto', id, label: nome });
   };
 
   // ==========================================
@@ -260,7 +255,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         cbo: novoCargo.cbo,
         cbo_descricao: novoCargo.cboDescricao,
         carga_horaria_semanal: novoCargo.cargaHorariaSemanal
-      });
+      }, { onConflict: 'position_id' });
     } catch (err) {
       console.warn('Aviso sincronização Supabase cargo:', err);
     }
@@ -278,22 +273,13 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     setIsCargoModalOpen(false);
   };
 
-  const handleDeleteCargo = async (id: string, titulo: string) => {
+  const handleDeleteCargo = (id: string, titulo: string) => {
     const colabsInCargo = colaboradores.filter(c => c.cargoId === id);
     if (colabsInCargo.length > 0) {
-      alert(`Não é possível excluir o cargo "${titulo}" pois existem ${colabsInCargo.length} colaboradores com esse cargo.`);
+      showNotification(`Não é possível excluir o cargo "${titulo}" pois existem ${colabsInCargo.length} colaboradores com esse cargo.`, 'error');
       return;
     }
-
-    if (confirm(`Deseja realmente remover o cargo "${titulo}"?`)) {
-      try {
-        await supabase.from('positions').delete().eq('position_id', id);
-      } catch (err) {
-        console.warn('Aviso delete cargo Supabase:', err);
-      }
-      onUpdateCargos(cargos.filter(c => c.id !== id));
-      showNotification(`Cargo "${titulo}" removido.`, 'success');
-    }
+    setPendingDelete({ kind: 'cargo', id, label: titulo });
   };
 
   // ==========================================
@@ -437,6 +423,8 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         tenant_id: novoEst.tenantId,
         nome: novoEst.nome,
         cnpj: novoEst.cnpj,
+        tipo: novoEst.tipo,
+        cep: novoEst.cep,
         latitude: novoEst.latitude,
         longitude: novoEst.longitude,
         cerca_raio_metros: novoEst.cercaRaioMetros,
@@ -445,7 +433,7 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
         municipio: novoEst.municipio,
         uf: novoEst.uf,
         fuso_horario: novoEst.fusoHorario
-      });
+      }, { onConflict: 'establishment_id' });
     } catch (err) {
       console.warn('Aviso sincronização Supabase estabelecimento:', err);
     }
@@ -463,21 +451,44 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     setIsEstModalOpen(false);
   };
 
-  const handleDeleteEst = async (id: string, nome: string) => {
+  const handleDeleteEst = (id: string, nome: string) => {
     const colabsInEst = colaboradores.filter(c => c.estabelecimentoId === id);
     if (colabsInEst.length > 0) {
-      alert(`Não é possível excluir a unidade "${nome}" pois existem ${colabsInEst.length} colaboradores lotados nela.`);
+      showNotification(`Não é possível excluir a unidade "${nome}" pois existem ${colabsInEst.length} colaboradores lotados nela.`, 'error');
       return;
     }
+    setPendingDelete({ kind: 'est', id, label: nome });
+  };
 
-    if (confirm(`Deseja realmente remover a unidade "${nome}"?`)) {
+  const executePendingDelete = async () => {
+    if (!pendingDelete) return;
+    const { kind, id, label } = pendingDelete;
+    setPendingDelete(null);
+
+    if (kind === 'depto') {
+      try {
+        await supabase.from('departments').delete().eq('department_id', id);
+      } catch (err) {
+        console.warn('Aviso delete departamento Supabase:', err);
+      }
+      onUpdateDepartamentos(departamentos.filter(d => d.id !== id));
+      showNotification(`Departamento "${label}" removido.`, 'success');
+    } else if (kind === 'cargo') {
+      try {
+        await supabase.from('positions').delete().eq('position_id', id);
+      } catch (err) {
+        console.warn('Aviso delete cargo Supabase:', err);
+      }
+      onUpdateCargos(cargos.filter(c => c.id !== id));
+      showNotification(`Cargo "${label}" removido.`, 'success');
+    } else {
       try {
         await supabase.from('establishments').delete().eq('establishment_id', id);
       } catch (err) {
         console.warn('Aviso delete estabelecimento Supabase:', err);
       }
       onUpdateEstabelecimentos(estabelecimentos.filter(e => e.id !== id));
-      showNotification(`Unidade "${nome}" removida.`, 'success');
+      showNotification(`Unidade "${label}" removida.`, 'success');
     }
   };
 
@@ -521,6 +532,31 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
             <span>{statusFeedback.message}</span>
           </div>
           <button onClick={() => setStatusFeedback(null)} className="text-slate-400 hover:text-slate-600 font-bold ml-4">✕</button>
+        </div>
+      )}
+
+      {pendingDelete && (
+        <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-rose-900 font-semibold">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>Confirmar exclusão de "{pendingDelete.label}"? Esta ação remove o registro do Supabase.</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPendingDelete(null)}
+              className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={executePendingDelete}
+              className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
+            >
+              Excluir Definitivamente
+            </button>
+          </div>
         </div>
       )}
 

@@ -1,25 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { AuthUser } from '../../types/auth';
-import { ComunicadoEmpresa, ChamadoAtendimentoRh, CategoriaComunicado, AssuntoChamadoRh } from '../../types/rhAvancado';
+import { ComunicadoEmpresa, ChamadoAtendimentoRh, CategoriaComunicado } from '../../types/rhAvancado';
 import { useAuth } from '../AuthContext';
+import { getBrasiliaParts, formatBrasiliaDate } from '../../utils/brasiliaClock';
 import {
   Megaphone,
   MessageSquare,
   Plus,
   CheckCircle2,
-  Clock,
   Pin,
-  Paperclip,
   Send,
-  User,
-  Filter,
   Eye,
   ShieldCheck,
   Search,
-  Check,
-  X,
-  AlertCircle,
-  FileText
+  AlertCircle
 } from 'lucide-react';
 
 interface GestaoMuralEAtendimentoProps {
@@ -27,47 +21,12 @@ interface GestaoMuralEAtendimentoProps {
 }
 
 export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = ({ currentUser }) => {
-  const { supabase } = useAuth();
+  const { supabase, authToken, session } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
   const [activeSubTab, setActiveSubTab] = useState<'mural' | 'atendimento'>('mural');
+  const [feedbackBanner, setFeedbackBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // ==========================================
-  // ESTADOS DO MURAL DIGITAL DE COMUNICADOS
-  // ==========================================
-  const [comunicados, setComunicados] = useState<ComunicadoEmpresa[]>(() => {
-    try {
-      const saved = localStorage.getItem('sc_comunicados_all');
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return [
-      {
-        id: 'ann-01',
-        tenantId: 'tenant-01',
-        titulo: 'Feriado de Proclamação da República e Emenda de Ponte',
-        conteudo: 'Informamos a todos os colaboradores que no dia 15/11 (sexta-feira) não haverá expediente em virtude do feriado nacional. As atividades retornarão normalmente na segunda-feira subsequente.',
-        categoria: 'FERIADOS',
-        autorNome: 'Luciana Mendonça (Coordenação de RH)',
-        fixado: true,
-        exigeConfirmacaoLeitura: true,
-        confirmacoesLeitura: [
-          { colaboradorId: 'colab-01', colaboradorCpf: '123.456.789-01', colaboradorNome: 'Carlos Silva', dataHora: '08/11/2026 14:20', ip: '189.120.45.88' }
-        ],
-        criadoEm: '08/11/2026'
-      },
-      {
-        id: 'ann-02',
-        tenantId: 'tenant-01',
-        titulo: 'Campanha de Vacinação Corporativa contra Gripe H1N1',
-        conteudo: 'Na próxima quarta-feira (18/11), a equipe médica da empresa estará no auditório da matriz disponibilizando a vacinação gratuita para todos os funcionários contratados CLT.',
-        categoria: 'CAMPANHA_SAUDE',
-        autorNome: 'Departamento de Medicina do Trabalho',
-        fixado: false,
-        exigeConfirmacaoLeitura: true,
-        confirmacoesLeitura: [],
-        criadoEm: '07/11/2026'
-      }
-    ];
-  });
-
+  const [comunicados, setComunicados] = useState<ComunicadoEmpresa[]>([]);
   const [isNovoComunicadoModalOpen, setIsNovoComunicadoModalOpen] = useState(false);
   const [novoTitulo, setNovoTitulo] = useState('');
   const [novoConteudo, setNovoConteudo] = useState('');
@@ -78,59 +37,7 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
   const [novoAnexoUrl, setNovoAnexoUrl] = useState('');
   const [verificandoLeitoresModal, setVerificandoLeitoresModal] = useState<ComunicadoEmpresa | null>(null);
 
-  // ==========================================
-  // ESTADOS DO CANAL "FALE COM O DP / RH"
-  // ==========================================
-  const [chamados, setChamados] = useState<ChamadoAtendimentoRh[]>(() => {
-    try {
-      const saved = localStorage.getItem('sc_chamados_rh_all');
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return [
-      {
-        id: 'ticket-01',
-        tenantId: 'tenant-01',
-        colaboradorId: 'colab-01',
-        colaboradorNome: 'Carlos Silva',
-        colaboradorCpf: '123.456.789-01',
-        departamentoNome: 'Engenharia de Software',
-        assunto: 'VALE_TRANSPORTE',
-        titulo: 'Atualização de Endereço para Linha de Ônibus / VT',
-        mensagemInicial: 'Olá equipe de RH, mudei de residência recentemente para o bairro Pinheiros e gostaria de solicitar a alteração da rota do meu cartão SPTrans Vale-Transporte.',
-        status: 'EM_ATENDIMENTO',
-        prioridade: 'MEDIA',
-        respostas: [
-          {
-            id: 'resp-01',
-            autorId: 'user-02',
-            autorNome: 'Luciana Mendonça (RH)',
-            eDoRh: true,
-            mensagem: 'Olá Carlos! Por favor anexe o novo comprovante de residência em seu nome para atualizarmos o benefício no sistema.',
-            dataHora: '08/11/2026 15:30'
-          }
-        ],
-        criadoEm: '08/11/2026 10:15',
-        atualizadoEm: '08/11/2026 15:30'
-      },
-      {
-        id: 'ticket-02',
-        tenantId: 'tenant-01',
-        colaboradorId: 'colab-03',
-        colaboradorNome: 'Marcos Ribeiro',
-        colaboradorCpf: '345.678.901-23',
-        departamentoNome: 'Logística & Expedição',
-        assunto: 'DUVIDA_HOLERITE',
-        titulo: 'Dúvida sobre desconto de INSS no holerite de Out/2026',
-        mensagemInicial: 'Gostaria de solicitar o detalhamento da faixa de alíquota progressiva do INSS calculada no meu holerite deste mês.',
-        status: 'ABERTO',
-        prioridade: 'ALTA',
-        respostas: [],
-        criadoEm: '09/11/2026 09:00',
-        atualizadoEm: '09/11/2026 09:00'
-      }
-    ];
-  });
-
+  const [chamados, setChamados] = useState<ChamadoAtendimentoRh[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<ChamadoAtendimentoRh | null>(null);
   const [respostaRhInput, setRespostaRhInput] = useState('');
   const [ticketStatusFilter, setTicketStatusFilter] = useState<'TODOS' | 'ABERTO' | 'EM_ATENDIMENTO' | 'CONCLUIDO'>('TODOS');
@@ -141,8 +48,11 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     async function fetchAnnouncements() {
       try {
         if (supabase) {
-          const { data } = await supabase.from('company_announcements').select('*');
-          if (data && data.length > 0) {
+          const { data } = await supabase
+            .from('company_announcements')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (data) {
             const mapped: ComunicadoEmpresa[] = data.map((a: any) => ({
               id: a.announcement_id || a.id,
               tenantId: a.tenant_id,
@@ -155,18 +65,9 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
               anexoNome: a.anexo_nome,
               anexoUrl: a.anexo_url,
               confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
-              criadoEm: a.created_at ? new Date(a.created_at).toLocaleDateString('pt-BR') : 'Hoje'
+              criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : getBrasiliaParts().ddmmyyyy
             }));
-
-            setComunicados(prev => {
-              const merged = [...prev];
-              for (const item of mapped) {
-                const idx = merged.findIndex(m => m.id === item.id);
-                if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
-                else merged.unshift(item);
-              }
-              return merged;
-            });
+            setComunicados(mapped);
           }
         }
       } catch (_) {}
@@ -175,8 +76,11 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     async function fetchTickets() {
       try {
         if (supabase) {
-          const { data } = await supabase.from('rh_tickets').select('*');
-          if (data && data.length > 0) {
+          const { data } = await supabase
+            .from('rh_tickets')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (data) {
             const mapped: ChamadoAtendimentoRh[] = data.map((t: any) => ({
               id: t.ticket_id || t.id,
               tenantId: t.tenant_id,
@@ -192,19 +96,10 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
               status: t.status,
               prioridade: t.prioridade,
               respostas: Array.isArray(t.respostas) ? t.respostas : [],
-              criadoEm: t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Hoje',
-              atualizadoEm: t.updated_at ? new Date(t.updated_at).toLocaleDateString('pt-BR') : 'Hoje'
+              criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : getBrasiliaParts().ddmmyyyy,
+              atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : getBrasiliaParts().ddmmyyyy
             }));
-
-            setChamados(prev => {
-              const merged = [...prev];
-              for (const item of mapped) {
-                const idx = merged.findIndex(m => m.id === item.id);
-                if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
-                else merged.unshift(item);
-              }
-              return merged;
-            });
+            setChamados(mapped);
           }
         }
       } catch (_) {}
@@ -217,7 +112,7 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
   // Ação RH: Publicar Comunicado
   const handlePublicarComunicado = async () => {
     if (!novoTitulo.trim() || !novoConteudo.trim()) {
-      alert('Informe o título e o conteúdo do comunicado.');
+      setFeedbackBanner({ type: 'error', text: 'Informe o título e o conteúdo do comunicado.' });
       return;
     }
 
@@ -234,18 +129,19 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
       anexoNome: novoAnexoNome || undefined,
       anexoUrl: novoAnexoUrl || undefined,
       confirmacoesLeitura: [],
-      criadoEm: new Date().toLocaleDateString('pt-BR')
+      criadoEm: getBrasiliaParts().ddmmyyyy
     };
 
     const updated = [novo, ...comunicados];
     setComunicados(updated);
-    localStorage.setItem('sc_comunicados_all', JSON.stringify(updated));
 
-    // Backend sync
     try {
       await fetch('/api/save-announcement', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
+        },
         body: JSON.stringify(novo)
       });
     } catch (_) {}
@@ -255,40 +151,43 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     setNovoConteudo('');
     setNovoAnexoNome('');
     setNovoAnexoUrl('');
-    alert('Comunicado publicado com sucesso no Mural Digital dos Colaboradores!');
+    setFeedbackBanner({ type: 'success', text: 'Comunicado publicado e persistido com sucesso no Mural Digital!' });
+    setTimeout(() => setFeedbackBanner(null), 4000);
   };
 
   // Ação RH: Enviar Resposta a um Chamado do DP
   const handleEnviarRespostaRh = async (ticket: ChamadoAtendimentoRh) => {
     if (!respostaRhInput.trim()) return;
 
+    const brtNow = getBrasiliaParts();
     const novaResposta = {
       id: `resp-${Date.now()}`,
       autorId: currentUser.id,
       autorNome: `${currentUser.nome} (RH)`,
       eDoRh: true,
       mensagem: respostaRhInput.trim(),
-      dataHora: new Date().toLocaleString('pt-BR')
+      dataHora: brtNow.formatted
     };
 
     const updatedTicket: ChamadoAtendimentoRh = {
       ...ticket,
       status: ticket.status === 'ABERTO' ? 'EM_ATENDIMENTO' : ticket.status,
       respostas: [...ticket.respostas, novaResposta],
-      atualizadoEm: new Date().toLocaleString('pt-BR')
+      atualizadoEm: brtNow.formatted
     };
 
     const updatedList = chamados.map(t => t.id === ticket.id ? updatedTicket : t);
     setChamados(updatedList);
-    localStorage.setItem('sc_chamados_rh_all', JSON.stringify(updatedList));
     setSelectedTicket(updatedTicket);
     setRespostaRhInput('');
 
-    // Backend sync
     try {
       await fetch('/api/save-ticket', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
+        },
         body: JSON.stringify({
           id: ticket.id,
           resposta: novaResposta
@@ -297,11 +196,12 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     } catch (_) {}
   };
 
-  // Ação RH: Alterar Status do Chamado (ex: Concluir)
+  // Ação RH: Alterar Status do Chamado
   const handleAlterarStatusTicket = async (ticketId: string, novoStatus: 'ABERTO' | 'EM_ATENDIMENTO' | 'CONCLUIDO') => {
+    const brtNow = getBrasiliaParts();
     const updatedList = chamados.map(t => {
       if (t.id === ticketId) {
-        const u = { ...t, status: novoStatus, atualizadoEm: new Date().toLocaleString('pt-BR') };
+        const u = { ...t, status: novoStatus, atualizadoEm: brtNow.formatted };
         if (selectedTicket?.id === ticketId) setSelectedTicket(u);
         return u;
       }
@@ -309,12 +209,14 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     });
 
     setChamados(updatedList);
-    localStorage.setItem('sc_chamados_rh_all', JSON.stringify(updatedList));
 
     try {
       await fetch('/api/update-ticket-status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
+        },
         body: JSON.stringify({ ticketId, status: novoStatus })
       });
     } catch (_) {}
@@ -335,6 +237,23 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
 
   return (
     <div className="space-y-6">
+      {feedbackBanner && (
+        <div className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-semibold ${
+          feedbackBanner.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          <div className="flex items-center gap-2">
+            {feedbackBanner.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{feedbackBanner.text}</span>
+          </div>
+          <button onClick={() => setFeedbackBanner(null)} className="ml-4 font-bold opacity-60 hover:opacity-100">✕</button>
+        </div>
+      )}
       {/* Cabeçalho da Seção de Comunicação & DP */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

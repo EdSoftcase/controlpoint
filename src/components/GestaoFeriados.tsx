@@ -3,22 +3,19 @@ import {
   Tenant,
   Estabelecimento,
   Colaborador,
-  Feriado,
-  MemoriaCalculoFeriadoDSR
+  Feriado
 } from '../types/operational';
+import { getBrasiliaYmd, getBrasiliaParts } from '../utils/brasiliaClock';
+import { useAuth } from './AuthContext';
 import {
   Calendar,
   Plus,
   Search,
-  Filter,
   CheckCircle2,
   AlertCircle,
-  Building2,
   User,
   Calculator,
   Scale,
-  Award,
-  ChevronRight,
   ShieldCheck,
   Check
 } from 'lucide-react';
@@ -38,6 +35,9 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
   feriados,
   onAddFeriado
 }) => {
+  const { supabase } = useAuth();
+  const hojeBrtYmd = getBrasiliaYmd();
+  const anoAtualBrt = getBrasiliaParts().year;
   const [subTab, setSubTab] = useState<'catalogo' | 'calendario-colaborador'>('catalogo');
   const [filtroTipo, setFiltroTipo] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -49,10 +49,10 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalForm, setModalForm] = useState({
     nome: '',
-    data: '2026-11-20',
+    data: hojeBrtYmd,
     tipo: 'NACIONAL' as 'NACIONAL' | 'ESTADUAL' | 'MUNICIPAL' | 'PONTO_FACULTATIVO',
-    uf: 'SP',
-    municipio: 'São Paulo',
+    uf: activeTenant.uf || 'SP',
+    municipio: activeTenant.municipio || 'São Paulo',
     recorrenteAnual: true,
     legislacaoBase: 'Lei Federal nº 14.759/2023',
     adicionalHoraExtraPercentual: 100,
@@ -63,14 +63,14 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
 
   // Simulador de Apuração de Ponto em Feriado
   const [simulacaoData, setSimulacaoData] = useState({
-    feriadoId: 'fer-07', // Finados 02/11/2026
+    feriadoId: feriados[0]?.id || 'fer-07',
     trabalhouNoFeriado: true,
     horasTrabalhadas: 8,
     concedeuFolgaCompensatoria: false,
-    salarioBaseMensal: 5500, // R$ 5.500,00
-    divisorHorasMes: 220, // 220h mensais
+    salarioBaseMensal: 5500,
+    divisorHorasMes: 220,
     diasUteisSemana: 5,
-    domingosEFeriadosSemana: 2 // Domingo + Feriado
+    domingosEFeriadosSemana: 2
   });
 
   // Feriados do tenant ativo
@@ -161,7 +161,7 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
     };
   }, [simulacaoData, tenantFeriados]);
 
-  const handleSalvarNovoFeriado = () => {
+  const handleSalvarNovoFeriado = async () => {
     if (!modalForm.nome.trim()) {
       setModalError('O nome do feriado é obrigatório.');
       return;
@@ -182,11 +182,11 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
     const novo: Feriado = {
       id: `fer-${Date.now()}`,
       tenantId: activeTenant.id,
-      nome: modalForm.nome,
+      nome: modalForm.nome.trim(),
       data: modalForm.data,
       tipo: modalForm.tipo,
       uf: modalForm.tipo !== 'NACIONAL' ? modalForm.uf : undefined,
-      municipio: modalForm.tipo === 'MUNICIPAL' ? modalForm.municipio : undefined,
+      municipio: modalForm.tipo === 'MUNICIPAL' ? modalForm.municipio.trim() : undefined,
       recorrenteAnual: modalForm.recorrenteAnual,
       legislacaoBase: modalForm.legislacaoBase || 'Legislação Trabalhista Municipal/Estadual',
       adicionalHoraExtraPercentual: modalForm.adicionalHoraExtraPercentual,
@@ -194,14 +194,33 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
       afetaDSR: modalForm.afetaDSR
     };
 
+    try {
+      await supabase.from('holidays').upsert({
+        holiday_id: novo.id,
+        tenant_id: novo.tenantId,
+        nome: novo.nome,
+        data: novo.data,
+        tipo: novo.tipo,
+        uf: novo.uf || null,
+        municipio: novo.municipio || null,
+        recorrente_anual: novo.recorrenteAnual,
+        legislacao_base: novo.legislacaoBase,
+        adicional_hora_extra_percentual: novo.adicionalHoraExtraPercentual,
+        gera_folga_compensatoria: novo.geraFolgaCompensatoria,
+        afeta_dsr: novo.afetaDSR
+      }, { onConflict: 'holiday_id' });
+    } catch (err) {
+      console.warn('Aviso sincronização Supabase feriado:', err);
+    }
+
     onAddFeriado(novo);
     setIsModalOpen(false);
     setModalForm({
       nome: '',
-      data: '2026-11-20',
+      data: hojeBrtYmd,
       tipo: 'NACIONAL',
-      uf: 'SP',
-      municipio: 'São Paulo',
+      uf: activeTenant.uf || 'SP',
+      municipio: activeTenant.municipio || 'São Paulo',
       recorrenteAnual: true,
       legislacaoBase: 'Lei Federal',
       adicionalHoraExtraPercentual: 100,
@@ -496,7 +515,7 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
                   <span className="font-semibold text-slate-700">
                     Feriados Aplicáveis a este Contrato ({feriadosColaborador.length})
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">Ano 2026</span>
+                  <span className="text-[10px] text-slate-400 font-mono">Ano {anoAtualBrt}</span>
                 </div>
 
                 <div className="max-h-[360px] overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 text-xs">

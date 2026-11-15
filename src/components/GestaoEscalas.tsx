@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Colaborador } from '../types/operational';
 import { EscalaTrabalhoConfig } from '../types/rhAvancado';
 import { ESCALAS_PADRAO, gerarCalendarioMesEscala } from '../utils/shiftEngine';
+import { getBrasiliaParts } from '../utils/brasiliaClock';
+import { useAuth } from './AuthContext';
 import {
   Calendar,
   Clock,
@@ -21,17 +23,22 @@ interface GestaoEscalasProps {
 }
 
 export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEscalasProps) {
-  const [escalas, setEscalas] = useState<EscalaTrabalhoConfig[]>(ESCALAS_PADRAO);
+  const { authToken, session, supabase } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
+  const brtNow = getBrasiliaParts();
+  const anosDisponiveis = [brtNow.year - 1, brtNow.year, brtNow.year + 1];
+
+  const [escalas] = useState<EscalaTrabalhoConfig[]>(ESCALAS_PADRAO);
   const [escalaSelecionadaId, setEscalaSelecionadaId] = useState<string>('esc-12x36-a');
   const [subTab, setSubTab] = useState<'ciclo' | 'calendario_anual'>('calendario_anual');
-  const [mesVisualizacao, setMesVisualizacao] = useState<number>(10); // Novembro (0-indexed: 10)
-  const [anoVisualizacao, setAnoVisualizacao] = useState<number>(2026);
+  const [mesVisualizacao, setMesVisualizacao] = useState<number>(brtNow.month - 1);
+  const [anoVisualizacao, setAnoVisualizacao] = useState<number>(brtNow.year);
   const [colaboradorFiltro, setColaboradorFiltro] = useState<string>('');
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   // Estados do Calendário Anual
   const [colabAnualId, setColabAnualId] = useState<string>(colaboradores[0]?.id || '');
-  const [anoAnual, setAnoAnual] = useState<number>(2026);
+  const [anoAnual, setAnoAnual] = useState<number>(brtNow.year);
 
   const escalaAtiva = escalas.find((e) => e.id === escalaSelecionadaId) || escalas[0];
 
@@ -43,7 +50,7 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
     mesVisualizacao,
     escalaAtiva.tipo,
     escalaAtiva.turma || 'A',
-    escalaAtiva.dataBaseInicioCiclo || '2026-01-01'
+    escalaAtiva.dataBaseInicioCiclo || `${brtNow.year}-01-01`
   );
 
   // Colaboradores alocados na escala
@@ -56,27 +63,60 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
     return escTipo === escalaAtiva.tipo;
   });
 
+  const persistColaboradorEscala = async (updatedColab: Colaborador) => {
+    try {
+      if (bearerToken) {
+        const res = await fetch('/api/save-collaborator', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(updatedColab)
+        });
+        if (res.ok) return;
+      }
+      if (supabase) {
+        await supabase
+          .from('collaborators')
+          .update({
+            tipo_escala: updatedColab.tipoEscala || '5x2',
+            turma_escala: updatedColab.turmaEscala || 'A',
+            dias_folga_semana: updatedColab.diasFolgaSemana ?? null,
+            anual_folgas: updatedColab.anualFolgas ?? null
+          })
+          .eq('collaborator_id', updatedColab.id);
+      }
+    } catch (err) {
+      console.warn('Aviso ao sincronizar escala no Supabase:', err);
+    }
+  };
+
   const handleTrocarEscalaColaborador = (colaboradorId: string, novaEscalaId: string) => {
     const targetEsc = escalas.find(e => e.id === novaEscalaId);
     if (!targetEsc) return;
 
+    let modified: Colaborador | null = null;
     const novosColaboradores = colaboradores.map(c => {
       if (c.id === colaboradorId) {
-        return {
+        modified = {
           ...c,
           tipoEscala: targetEsc.tipo,
           turmaEscala: targetEsc.turma || 'A'
         };
+        return modified;
       }
       return c;
     });
 
     onUpdateColaboradores(novosColaboradores);
-    setFeedbackMsg(`Escala do colaborador atualizada para ${targetEsc.nome}!`);
+    if (modified) void persistColaboradorEscala(modified);
+    setFeedbackMsg(`Escala do colaborador atualizada e salva para ${targetEsc.nome}!`);
     setTimeout(() => setFeedbackMsg(null), 3500);
   };
 
   const handleToggleDiaFolgaColaborador = (colaboradorId: string, dayIndex: number) => {
+    let modified: Colaborador | null = null;
     const novosColaboradores = colaboradores.map(c => {
       if (c.id === colaboradorId) {
         const defaultFolgas = c.tipoEscala === '12x36' ? [] : (c.tipoEscala === '6x1' ? [0] : [0, 6]);
@@ -86,27 +126,29 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
           ? currentFolgas.filter(d => d !== dayIndex) 
           : [...currentFolgas, dayIndex].sort();
 
-        return {
+        modified = {
           ...c,
           diasFolgaSemana: nextFolgas
         };
+        return modified;
       }
       return c;
     });
 
     onUpdateColaboradores(novosColaboradores);
-    setFeedbackMsg('Dias de folga semanal do colaborador atualizados com sucesso!');
+    if (modified) void persistColaboradorEscala(modified);
+    setFeedbackMsg('Dias de folga semanal do colaborador atualizados e salvos com sucesso!');
     setTimeout(() => setFeedbackMsg(null), 3000);
   };
 
   // Toggle de Folga Específica no Calendário Anual (Data YYYY-MM-DD)
   const handleToggleAnualFolgaData = (colaboradorId: string, yyyyMmDd: string) => {
+    let modified: Colaborador | null = null;
     const novosColaboradores = colaboradores.map(c => {
       if (c.id === colaboradorId) {
         const anualMap = { ...(c.anualFolgas || {}) };
         const currentVal = anualMap[yyyyMmDd];
         
-        // Determina se por padrão seria folga semanal
         const [y, m, d] = yyyyMmDd.split('-').map(Number);
         const dateObj = new Date(y, m - 1, d);
         const dayOfWeek = dateObj.getDay();
@@ -114,19 +156,20 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
         const defaultIsFolga = (c.diasFolgaSemana ?? defaultFolgas).includes(dayOfWeek);
 
         const effectiveVal = currentVal !== undefined ? currentVal : defaultIsFolga;
-        // Inverte o estado
         anualMap[yyyyMmDd] = !effectiveVal;
 
-        return {
+        modified = {
           ...c,
           anualFolgas: anualMap
         };
+        return modified;
       }
       return c;
     });
 
     onUpdateColaboradores(novosColaboradores);
-    setFeedbackMsg(`Calendário anual atualizado para a data ${yyyyMmDd.split('-').reverse().join('/')}!`);
+    if (modified) void persistColaboradorEscala(modified);
+    setFeedbackMsg(`Calendário anual atualizado e salvo para a data ${yyyyMmDd.split('-').reverse().join('/')}!`);
     setTimeout(() => setFeedbackMsg(null), 3000);
   };
 
@@ -232,8 +275,9 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
                   onChange={(e) => setAnoAnual(Number(e.target.value))}
                   className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value={2026}>2026</option>
-                  <option value={2027}>2027</option>
+                  {anosDisponiveis.map(yr => (
+                    <option key={yr} value={yr}>{yr}</option>
+                  ))}
                 </select>
               </div>
 
@@ -429,8 +473,9 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
                     onChange={(e) => setAnoVisualizacao(Number(e.target.value))}
                     className="bg-transparent text-white text-xs font-semibold px-2 py-1 outline-none cursor-pointer"
                   >
-                    <option value={2026} className="bg-slate-900 text-white">2026</option>
-                    <option value={2027} className="bg-slate-900 text-white">2027</option>
+                    {anosDisponiveis.map(yr => (
+                      <option key={yr} value={yr} className="bg-slate-900 text-white">{yr}</option>
+                    ))}
                   </select>
                 </div>
               </div>

@@ -27,10 +27,13 @@ import {
 import {
   detectFaceAndBiometrics,
   saveBiometricTemplate,
+  clearLocalBiometricTemplate,
   averageBiometricDescriptors,
   resetLivenessState,
   FaceLandmarks
 } from '../utils/facialBiometricsEngine';
+import { hasRealBiometricTemplate } from '../utils/biometricHelpers';
+import { getBrasiliaYmd, getBrasiliaParts } from '../utils/brasiliaClock';
 
 export function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371e3;
@@ -64,8 +67,8 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 }) => {
   // Aba ativa do Módulo 02
   const [moduleSubTab, setModuleSubTab] = useState<'biometria' | 'geofencing'>('geofencing');
-  const { session } = useAuth();
-
+  const { session, authToken, supabase } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
 
   // Estados da Biometria Facial
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,6 +76,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   const [selectedColabForEnroll, setSelectedColabForEnroll] = useState<Colaborador | null>(null);
   const [enrollmentStep, setEnrollmentStep] = useState<'idle' | 'capturing' | 'success'>('idle');
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'SUCCESS' | 'ERROR'; text: string } | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   // WebCam Real para Captura de Biometria Facial
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -119,10 +123,16 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   const [estForm, setEstForm] = useState<Estabelecimento>(selectedEst);
 
   React.useEffect(() => {
+    if (tenantEstabelecimentos.length > 0 && !tenantEstabelecimentos.some((e) => e.id === selectedEstId)) {
+      setSelectedEstId(tenantEstabelecimentos[0].id);
+    }
+  }, [activeTenant.id, tenantEstabelecimentos.length]);
+
+  React.useEffect(() => {
     if (selectedEst) {
       setEstForm(selectedEst);
     }
-  }, [selectedEstId]);
+  }, [selectedEstId, estabelecimentos]);
 
   // Posição de Teste do Trabalhador no Mapa
   const [workerTestPos, setWorkerTestPos] = useState<{ lat: number; lng: number }>({
@@ -282,7 +292,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     setIsSubmittingContingencyAudit(true);
 
     const hashTemplate = `CONTINGENCIA_AUDITADA_${Date.now()}`;
-    const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
+    const todayBr = getBrasiliaYmd();
 
     // 1. Atualiza colaboradores localmente liberando o bater de ponto
     const updated = colaboradores.map((c) => {
@@ -292,25 +302,38 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
           biometriaCadastrada: true,
           biometriaHashTemplate: hashTemplate,
           limiarConfiancaMinimo: globalThreshold,
-          dataUltimaAtualizacaoBiometria: new Date().toISOString().slice(0, 10)
+          dataUltimaAtualizacaoBiometria: todayBr
         };
       }
       return c;
     });
     onUpdateColaboradores(updated);
 
-    // 2. Envia log de auditoria REP-P (Portaria 671)
+    // 2. Persiste biometria + log de auditoria REP-P (Portaria 671)
     try {
-      await fetch('/api/save-biometric-audit', {
+      await fetch('/api/save-biometric', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${bearerToken}`
         },
         body: JSON.stringify({
           collaboratorId: selectedColabForEnroll.id,
           tenantId: activeTenant.id,
-          timestamp: new Date().toISOString(),
+          encryptedTemplate: hashTemplate
+        })
+      });
+
+      await fetch('/api/save-biometric-audit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({
+          collaboratorId: selectedColabForEnroll.id,
+          tenantId: activeTenant.id,
+          timestamp: getBrasiliaParts().iso,
           similarity: 100,
           lightingCondition: 'CONTINGENCIA_FALHA_DETECCAO',
           livenessScore: contingencyLivenessAnswer ? 100 : 80,
@@ -329,7 +352,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 
     setFeedbackMsg({
       type: 'SUCCESS',
-      text: `Selfie de Contingência de ${selectedColabForEnroll.nome} enviada para auditoria! Biometria liberada no banco local para registro de ponto.`
+      text: `Selfie de Contingência de ${selectedColabForEnroll.nome} enviada para auditoria! Biometria liberada para registro de ponto.`
     });
     setTimeout(() => {
       setSelectedColabForEnroll(null);
@@ -341,21 +364,30 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 
   const handleSaveEnrollment = async () => {
     if (!selectedColabForEnroll) return;
-    
-    // Salva vetor usando o motor aberto ISO 19794-5
-    const fallbackVector = capturedVector || new Array(64).fill(0).map((_, i) => Math.sin(i) * 0.1);
-    const hashTemplate = saveBiometricTemplate(selectedColabForEnroll.id, fallbackVector);
-    const token = session?.access_token || localStorage.getItem('sc_supabase_anon') || 'admin-session-token';
-    
-    // Atualiza estado local imediatamente para manter o app responsivo
+    if (!capturedVector || capturedVector.length !== 64) {
+      setFeedbackMsg({
+        type: 'ERROR',
+        text: 'Capture uma face válida pela câmera antes de salvar o template biométrico.'
+      });
+      return;
+    }
+
+    const hashTemplate = saveBiometricTemplate(selectedColabForEnroll.id, capturedVector);
+    const todayBr = getBrasiliaYmd();
+
     const updated = colaboradores.map((c) => {
       if (c.id === selectedColabForEnroll.id) {
         return {
           ...c,
           biometriaCadastrada: true,
-          biometriaHashTemplate: hashTemplate,
+          biometriaHashTemplate: JSON.stringify({
+            standard: 'ISO/IEC 19794-5',
+            enrolled: true,
+            template: hashTemplate,
+            vector: capturedVector
+          }),
           limiarConfiancaMinimo: globalThreshold,
-          dataUltimaAtualizacaoBiometria: new Date().toISOString().slice(0, 10)
+          dataUltimaAtualizacaoBiometria: todayBr
         };
       }
       return c;
@@ -366,20 +398,24 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     try {
       const response = await fetch('/api/save-biometric', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${bearerToken}`
         },
         body: JSON.stringify({
           collaboratorId: selectedColabForEnroll.id,
           tenantId: activeTenant.id,
           encryptedTemplate: hashTemplate,
-          vector: fallbackVector
+          vector: capturedVector
         })
       });
-      
+
       if (!response.ok) {
-        console.warn('Persistência remota da biometria retornou status não-200. Gravado localmente com sucesso.');
+        setFeedbackMsg({
+          type: 'ERROR',
+          text: 'Template salvo neste dispositivo, porém a sincronização com o servidor falhou. Verifique sua sessão.'
+        });
+        return;
       }
     } catch (error) {
       console.warn('Aviso de conexão ao persistir biometria:', error);
@@ -392,20 +428,19 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     setTimeout(() => {
       setSelectedColabForEnroll(null);
       setEnrollmentStep('idle');
-    }, 2000);
+    }, 1800);
   };
 
-  const handleRemoveBiometry = (colabId: string, nome: string) => {
-    if (!window.confirm(`Deseja remover o template biométrico facial de ${nome}? O trabalhador precisará cadastrar novamente para usar o reconhecimento facial.`)) {
-      return;
-    }
+  const handleRemoveBiometry = async (colabId: string, nome: string) => {
+    clearLocalBiometricTemplate(colabId);
+    setConfirmRemoveId(null);
 
     const updated = colaboradores.map((c) => {
       if (c.id === colabId) {
         return {
           ...c,
           biometriaCadastrada: false,
-          biometriaHashTemplate: undefined,
+          biometriaHashTemplate: c.email || c.telefone ? JSON.stringify({ email: c.email || '', telefone: c.telefone || '' }) : undefined,
           dataUltimaAtualizacaoBiometria: undefined
         };
       }
@@ -413,23 +448,89 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     });
 
     onUpdateColaboradores(updated);
+
+    try {
+      const res = await fetch('/api/remove-biometric', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({
+          collaboratorId: colabId,
+          tenantId: activeTenant.id
+        })
+      });
+      if (!res.ok) {
+        setFeedbackMsg({
+          type: 'ERROR',
+          text: `Biometria removida localmente, porém o servidor retornou erro ao atualizar o banco.`
+        });
+        return;
+      }
+    } catch {
+      setFeedbackMsg({
+        type: 'ERROR',
+        text: 'Erro de conexão ao remover biometria no Supabase.'
+      });
+      return;
+    }
+
     setFeedbackMsg({
       type: 'SUCCESS',
-      text: `Template biométrico de ${nome} removido com sucesso.`
+      text: `Template biométrico de ${nome} removido com sucesso no app e no Supabase.`
     });
     setTimeout(() => setFeedbackMsg(null), 4000);
   };
 
-  // Ação: Salvar Alterações de Geofencing do Estabelecimento
-  const handleSaveEstGeofencing = () => {
-    if (!onUpdateEstabelecimentos) return;
+  // Ação: Salvar Alterações de Geofencing do Estabelecimento e persistir no Supabase
+  const handleSaveEstGeofencing = async () => {
+    if (onUpdateEstabelecimentos) {
+      const exists = estabelecimentos.some((e) => e.id === estForm.id);
+      const novos = exists
+        ? estabelecimentos.map((e) => (e.id === estForm.id ? estForm : e))
+        : [...estabelecimentos, estForm];
+      onUpdateEstabelecimentos(novos);
+    }
 
-    const novos = estabelecimentos.map((e) => (e.id === estForm.id ? estForm : e));
-    onUpdateEstabelecimentos(novos);
+    try {
+      const { error } = await supabase.from('establishments').upsert(
+        {
+          establishment_id: estForm.id,
+          tenant_id: estForm.tenantId || activeTenant.id,
+          nome: estForm.nome,
+          cnpj: estForm.cnpj || activeTenant.cnpj,
+          tipo: estForm.tipo || 'MATRIZ',
+          cep: estForm.cep || null,
+          latitude: estForm.latitude,
+          longitude: estForm.longitude,
+          cerca_raio_metros: estForm.cercaRaioMetros,
+          bloquear_fora_do_raio: estForm.bloquearForaDoRaio ?? true,
+          endereco_completo: estForm.enderecoCompleto || null,
+          municipio: estForm.municipio || null,
+          uf: estForm.uf || null,
+          fuso_horario: estForm.fusoHorario || 'America/Sao_Paulo'
+        },
+        { onConflict: 'establishment_id' }
+      );
+      if (error) {
+        setFeedbackMsg({
+          type: 'ERROR',
+          text: `Erro ao persistir Geofencing no Supabase: ${error.message}`
+        });
+        return;
+      }
+    } catch (err: any) {
+      setFeedbackMsg({
+        type: 'ERROR',
+        text: `Falha ao conectar no Supabase: ${err?.message || 'verifique conexão'}`
+      });
+      return;
+    }
 
     setFeedbackMsg({
       type: 'SUCCESS',
-      text: `Parâmetros de Geofencing e Raio Permitido (${estForm.cercaRaioMetros}m) salvos com sucesso para a unidade "${estForm.nome}"!`
+      text: `Parâmetros de Geofencing (${estForm.cercaRaioMetros}m) salvos e persistidos no Supabase para "${estForm.nome}"!`
     });
     setTimeout(() => setFeedbackMsg(null), 5000);
   };
@@ -488,7 +589,10 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
           });
         },
         () => {
-          alert('Não foi possível obter a posição GPS do dispositivo.');
+          setFeedbackMsg({
+            type: 'ERROR',
+            text: 'Não foi possível obter a posição GPS do dispositivo. Verifique as permissões do navegador.'
+          });
         }
       );
     }
@@ -503,7 +607,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   );
   const isWorkerInsideGeofence = simulatedDistMeters <= estForm.cercaRaioMetros;
 
-  const cadastradasCount = activeColabs.filter((c) => c.biometriaCadastrada).length;
+  const cadastradasCount = activeColabs.filter((c) => hasRealBiometricTemplate(c)).length;
 
   return (
     <div className="space-y-6">
@@ -1088,7 +1192,9 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {filteredColabs.map((colab) => (
+                  {filteredColabs.map((colab) => {
+                    const hasBio = hasRealBiometricTemplate(colab);
+                    return (
                     <tr key={colab.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4 font-semibold text-slate-900">
                         {colab.nome}
@@ -1100,7 +1206,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                         {colab.departamentoNome}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        {colab.biometriaCadastrada ? (
+                        {hasBio ? (
                           <span className="inline-flex items-center gap-1 font-mono font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 text-[10px]">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Cadastrada
                           </span>
@@ -1111,10 +1217,10 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px] text-slate-500">
-                        {colab.biometriaCadastrada ? (
+                        {hasBio ? (
                           <div>
                             <div className="text-emerald-700 font-semibold">Min: {colab.limiarConfiancaMinimo || globalThreshold}%</div>
-                            <div className="text-[10px] text-slate-400 truncate max-w-[150px]">Hash: {colab.biometriaHashTemplate || 'SHA-256'}</div>
+                            <div className="text-[10px] text-slate-400 truncate max-w-[150px]">Padrão ISO/IEC 19794-5</div>
                           </div>
                         ) : (
                           <span className="text-slate-400 italic">Não configurado</span>
@@ -1127,21 +1233,39 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                             className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg transition-colors flex items-center gap-1"
                           >
                             <Camera className="w-3 h-3 text-emerald-400" />
-                            {colab.biometriaCadastrada ? 'Recadastrar' : 'Cadastrar Face'}
+                            {hasBio ? 'Recadastrar' : 'Cadastrar Face'}
                           </button>
-                          {colab.biometriaCadastrada && (
-                            <button
-                              onClick={() => handleRemoveBiometry(colab.id, colab.nome)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                              title="Remover Biometria"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                          {hasBio && (
+                            confirmRemoveId === colab.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleRemoveBiometry(colab.id, colab.nome)}
+                                  className="px-2 py-1 text-[10px] font-bold bg-rose-600 text-white rounded hover:bg-rose-700"
+                                >
+                                  Confirmar
+                                </button>
+                                <button
+                                  onClick={() => setConfirmRemoveId(null)}
+                                  className="px-2 py-1 text-[10px] font-semibold bg-slate-200 text-slate-700 rounded hover:bg-slate-300"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmRemoveId(colab.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="Remover Biometria"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {filteredColabs.length === 0 && (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-400">
