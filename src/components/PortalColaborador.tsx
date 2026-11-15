@@ -52,6 +52,7 @@ import { ComunicadoEmpresa, ChamadoAtendimentoRh, CategoriaComunicado, AssuntoCh
 import {
   detectFaceAndBiometrics,
   matchBiometricFace,
+  averageBiometricDescriptors,
   resetLivenessState,
   getRandomLivenessChallenge,
   LivenessChallenge
@@ -869,6 +870,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [bioState, setBioState] = useState<'idle' | 'detecting' | 'verified' | 'rejected'>('idle');
   const [bioMsg, setBioMsg] = useState('Posicione seu rosto de frente para a câmera frontal...');
   const [bioSimilarity, setBioSimilarity] = useState<number>(0);
+  const [bioProgress, setBioProgress] = useState<number>(0);
   const [currentLiveness, setCurrentLiveness] = useState<LivenessChallenge | null>(null);
   const [livenessConfirmed, setLivenessConfirmed] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -910,6 +912,9 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const bioCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const isModalOpenRef = React.useRef<boolean>(false);
+  isModalOpenRef.current = isBaterPontoModalOpen;
+  const countdownStartedRef = React.useRef<boolean>(false);
 
   // Modal Solicitar Horas Extras
   const [isNovaHeModalOpen, setIsNovaHeModalOpen] = useState(false);
@@ -1116,8 +1121,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setTipoPonto(proximoTipo);
     setIsBaterPontoModalOpen(true);
     setBioState('idle');
+    setBioProgress(0);
     setLivenessConfirmed(false);
     setBiometricCountdown(null);
+    countdownStartedRef.current = false;
     setCurrentLiveness(getRandomLivenessChallenge());
     setBioMsg('Enquadre seu rosto para validação biométrica e prova de vida...');
 
@@ -1167,17 +1174,21 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       timer = setTimeout(() => setBiometricCountdown(biometricCountdown - 1), 1000);
     } else if (biometricCountdown === 0) {
       setBiometricCountdown(null);
-      // Inicia análise biométrica automática após o timer
       if (authMethod === 'FACIAL') {
-        handleValidateFace();
+        if (currentLiveness && !livenessConfirmed) {
+          setBioMsg(`Prova de vida: execute "${currentLiveness.actionPrompt}" e toque em "Confirmar que realizei a ação".`);
+        } else {
+          handleValidateFace(true);
+        }
       }
     }
     return () => clearTimeout(timer);
-  }, [biometricCountdown, authMethod]);
+  }, [biometricCountdown, authMethod, currentLiveness, livenessConfirmed]);
 
   // Ciclo da Câmera Frontal (Selfie)
   React.useEffect(() => {
     let stream: MediaStream | null = null;
+    let cancelled = false;
     if (isBaterPontoModalOpen) {
       setCameraActive(true);
       resetLivenessState();
@@ -1186,6 +1197,10 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
         })
         .then((s) => {
+          if (cancelled) {
+            s.getTracks().forEach((t) => t.stop());
+            return;
+          }
           stream = s;
           if (videoRef.current) {
             videoRef.current.srcObject = s;
@@ -1193,11 +1208,14 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           }
         })
         .catch((err) => {
+          if (cancelled) return;
           console.warn('Câmera indisponível:', err);
+          setCameraActive(false);
           setBioMsg('Câmera frontal indisponível ou permissão não concedida.');
         });
     } else {
       setCameraActive(false);
+      countdownStartedRef.current = false;
       if (videoRef.current && videoRef.current.srcObject) {
         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
         tracks.forEach((t) => t.stop());
@@ -1206,40 +1224,73 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     }
 
     return () => {
+      cancelled = true;
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
       }
     };
   }, [isBaterPontoModalOpen]);
 
-  // Validação Biométrica Facial Individual
-  const handleValidateFace = async () => {
+  // Validação Biométrica Facial Individual (Multi-Frame ~6.0s)
+  const handleValidateFace = async (skipLivenessCheck = false) => {
     if (!videoRef.current || !bioCanvasRef.current) return;
-    if (currentLiveness && !livenessConfirmed) {
-      setBioMsg(`Realize a prova de vida solicitada ("${currentLiveness.actionPrompt}") e clique em "Confirmar Ação".`);
+    if (!skipLivenessCheck && currentLiveness && !livenessConfirmed) {
+      setBioMsg(`Realize a prova de vida solicitada ("${currentLiveness.actionPrompt}") e clique em "Confirmar que realizei a ação".`);
       return;
     }
 
     setBioState('detecting');
+    setBioProgress(5);
+    resetLivenessState();
     setBioMsg('Estabilizando iluminação e enquadramento...');
 
-    // Progresso ritmado de 3.5s para estabilização óptica
-    await new Promise(r => setTimeout(r, 800));
-    setBioMsg('Mapeando 64 pontos anatômicos faciais...');
+    const userColab = colaboradores.find(
+      (c) => c.id === user.id || c.cpf.replace(/\D/g, '') === user.cpf.replace(/\D/g, '')
+    );
 
-    await new Promise(r => setTimeout(r, 900));
-    setBioMsg('Extraindo descritor ISO 19794-5 e integridade temporal...');
-
-    await new Promise(r => setTimeout(r, 900));
-    setBioMsg('Comparando padrão vetorial com o banco de biometria...');
-
-    await new Promise(r => setTimeout(r, 700));
+    const collectedVectors: number[][] = [];
+    let lastFailReason = 'Rosto não detectado no enquadramento. Centralize seu rosto em frente à câmera.';
+    const totalSamples = 12; // 12 quadros x 500ms = ~6.0 segundos de validação robusta
 
     try {
-      const result = await detectFaceAndBiometrics(videoRef.current, bioCanvasRef.current);
-      if (result.detected && result.vector) {
-        const match = matchBiometricFace(result.vector, user.id, undefined, false);
+      for (let i = 0; i < totalSamples; i++) {
+        if (!isModalOpenRef.current || !videoRef.current || !bioCanvasRef.current) {
+          return;
+        }
+
+        const pct = Math.min(95, 8 + Math.round(((i + 1) / totalSamples) * 87));
+        setBioProgress(pct);
+
+        if (i < 3) setBioMsg('Estabilizando iluminação e foco da câmera frontal...');
+        else if (i < 6) setBioMsg('Mapeando 64 pontos anatômicos faciais...');
+        else if (i < 9) setBioMsg('Extraindo descritor ISO 19794-5 e prova de vida temporal...');
+        else setBioMsg('Conferindo padrão vetorial com o banco biométrico...');
+
+        const result = await detectFaceAndBiometrics(videoRef.current, bioCanvasRef.current);
+        if (result.detected && result.vector) {
+          collectedVectors.push(result.vector);
+        } else if (result.statusMessage) {
+          lastFailReason = result.statusMessage;
+        }
+
+        if (i < totalSamples - 1) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+
+      if (!isModalOpenRef.current) return;
+
+      if (collectedVectors.length >= 4) {
+        const stabilizedVector = averageBiometricDescriptors(collectedVectors);
+        const match = matchBiometricFace(
+          stabilizedVector,
+          userColab?.id || user.id,
+          userColab?.biometriaHashTemplate,
+          false
+        );
         setBioSimilarity(match.similarity);
+        setBioProgress(100);
+
         if (match.matched) {
           setBioState('verified');
           setBioMsg(`Autenticado com sucesso! Similaridade facial de ${match.similarity}%.`);
@@ -1248,23 +1299,31 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           setBioMsg(`Divergência biométrica (${match.similarity}%). Certifique-se de ser o titular cadastrado.`);
         }
       } else {
-        setBioState('idle');
-        setBioMsg('Rosto não detectado no enquadramento. Posicione-se bem em frente à câmera frontal.');
+        setBioProgress(0);
+        setBioState('rejected');
+        setBioMsg(`${lastFailReason} (Quadros válidos: ${collectedVectors.length}/${totalSamples}).`);
       }
     } catch (e) {
+      setBioProgress(0);
       setBioState('idle');
-      setBioMsg('Erro na leitura óptica facial.');
+      setBioMsg('Erro na leitura óptica facial. Tente novamente.');
     }
   };
 
-  // Trigger countdown when face is detected for the first time
+  // Inicia contagem regressiva preparatória única ao abrir modal no modo Facial
   React.useEffect(() => {
-    if (isBaterPontoModalOpen && authMethod === 'FACIAL' && bioState === 'idle' && biometricCountdown === null) {
-      // Pequeno delay para garantir que a câmera carregou
-      const t = setTimeout(() => setBiometricCountdown(3), 1000);
+    if (
+      isBaterPontoModalOpen &&
+      authMethod === 'FACIAL' &&
+      bioState === 'idle' &&
+      biometricCountdown === null &&
+      !countdownStartedRef.current
+    ) {
+      countdownStartedRef.current = true;
+      const t = setTimeout(() => setBiometricCountdown(3), 900);
       return () => clearTimeout(t);
     }
-  }, [isBaterPontoModalOpen, authMethod, bioState]);
+  }, [isBaterPontoModalOpen, authMethod, bioState, biometricCountdown]);
 
   // Efetivar Registro de Ponto Individual
   const handleExecutarPontoIndividual = async () => {
@@ -3592,32 +3651,6 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 </button>
               </div>
 
-              {/* Status do GPS / Geofencing */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                    <Navigation className="w-3.5 h-3.5 text-indigo-600" />
-                    Geolocalização em Tempo Real:
-                  </span>
-                  {gpsLoading ? (
-                    <span className="text-[10px] text-slate-500 flex items-center gap-1 animate-pulse">
-                      <RefreshCw className="w-3 h-3 animate-spin" /> Obtendo GPS...
-                    </span>
-                  ) : gpsData ? (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      gpsData.dentroCerca ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {gpsData.dentroCerca ? 'Dentro do Raio Permitido' : 'Trabalho Externo Autorizado'}
-                    </span>
-                  ) : null}
-                </div>
-                {gpsData && (
-                  <p className="text-[10px] text-slate-500 font-mono">
-                    {gpsData.endereco} • Distância base: {gpsData.dist}m
-                  </p>
-                )}
-              </div>
-
               {/* MODO 1: RECONHECIMENTO FACIAL */}
               {authMethod === 'FACIAL' && (
                 <>
@@ -3675,10 +3708,18 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     )}
 
                     {/* Badge de Status Biométrica */}
-                    <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-center">
+                    <div className="absolute bottom-2.5 left-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl border border-white/10 text-center space-y-1.5 z-30">
                       <p className="text-[11px] font-semibold text-white truncate">
                         {bioMsg}
                       </p>
+                      {(bioState === 'detecting' || bioState === 'verified') && (
+                        <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-300 ${bioState === 'verified' ? 'bg-emerald-400' : 'bg-indigo-400'}`}
+                            style={{ width: `${bioState === 'verified' ? 100 : bioProgress}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -3703,11 +3744,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                           type="button"
                           onClick={() => {
                             setLivenessConfirmed(true);
-                            setBioMsg('Prova de vida confirmada! Agora clique em "Validar Minha Face".');
+                            setBiometricCountdown(null);
+                            handleValidateFace(true);
                           }}
-                          className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs cursor-pointer"
+                          className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs cursor-pointer"
                         >
-                          Confirmar que realizei a ação
+                          Confirmar que realizei a ação e Validar Face
                         </button>
                       )}
                     </div>
@@ -3794,12 +3836,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   authMethod === 'FACIAL' ? (
                     <button
                       type="button"
-                      onClick={handleValidateFace}
+                      onClick={() => handleValidateFace(false)}
                       disabled={bioState === 'detecting'}
                       className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
                     >
                       <ScanFace className="w-4 h-4" />
-                      <span>{bioState === 'detecting' ? 'Validando Face...' : 'Validar Minha Face Agora'}</span>
+                      <span>{bioState === 'detecting' ? `Validando Face (${bioProgress}%)...` : bioState === 'rejected' ? 'Tentar Validação Facial Novamente' : 'Validar Minha Face Agora'}</span>
                     </button>
                   ) : (
                     <button

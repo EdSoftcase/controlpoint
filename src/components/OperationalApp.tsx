@@ -54,6 +54,7 @@ import {
 import {
   detectFaceAndBiometrics,
   matchBiometricFace,
+  averageBiometricDescriptors,
   resetLivenessState,
   FaceLandmarks,
   getRandomLivenessChallenge,
@@ -925,6 +926,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [detectedFaceBox, setDetectedFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [biometricEngineName, setBiometricEngineName] = useState<string>('Algoritmo Aberto ISO 19794-5');
   const [lightingCondition, setLightingCondition] = useState<'EXCELENTE' | 'BOA' | 'BAIXA' | 'EXCESSIVA'>('BOA');
+  const [biometricLivenessScore, setBiometricLivenessScore] = useState<number>(92);
   const [isAnalyzingInstant, setIsAnalyzingInstant] = useState<boolean>(false);
   const [kioskPinInput, setKioskPinInput] = useState<string>('');
   const [showPinFallback, setShowPinFallback] = useState<boolean>(false);
@@ -935,13 +937,30 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [biometricCountdown, setBiometricCountdown] = useState<number | null>(null);
 
+  // Refs para estabilizar o loop de visão computacional sem recriar setInterval a cada transição
+  const biometricStateRef = React.useRef(biometricState);
+  biometricStateRef.current = biometricState;
+  const biometricCountdownRef = React.useRef<number | null>(biometricCountdown);
+  biometricCountdownRef.current = biometricCountdown;
+  const currentLivenessRef = React.useRef(currentLivenessChallenge);
+  currentLivenessRef.current = currentLivenessChallenge;
+  const livenessConfirmedRef = React.useRef(livenessConfirmed);
+  livenessConfirmedRef.current = livenessConfirmed;
+  const isAnalyzingInstantRef = React.useRef(isAnalyzingInstant);
+  isAnalyzingInstantRef.current = isAnalyzingInstant;
+
+  const scanProgressRef = React.useRef<number>(0);
+  const missedFramesRef = React.useRef<number>(0);
+  const consecutiveDetectedRef = React.useRef<number>(0);
+  const countdownTriggeredRef = React.useRef<boolean>(false);
+  const collectedVectorsRef = React.useRef<number[][]>([]);
+
   // Efeito de Contador para Prova de Vida Ativa
   useEffect(() => {
     let timer: any;
     if (biometricCountdown !== null && biometricCountdown > 0) {
       timer = setTimeout(() => setBiometricCountdown(biometricCountdown - 1), 1000);
     } else if (biometricCountdown === 0) {
-      // Quando o contador chega a 0, sorteamos um desafio se não houver um
       if (!currentLivenessChallenge) {
         setCurrentLivenessChallenge(getRandomLivenessChallenge());
       }
@@ -979,6 +998,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   // Ciclo de Vida da Câmera para Validação Facial
   useEffect(() => {
     let stream: MediaStream | null = null;
+    let cancelled = false;
+
+    scanProgressRef.current = 0;
+    missedFramesRef.current = 0;
+    consecutiveDetectedRef.current = 0;
+    countdownTriggeredRef.current = false;
+    collectedVectorsRef.current = [];
 
     if (!biometricTargetColab) {
       setIsCameraActive(false);
@@ -1000,6 +1026,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     setBiometricCountdown(null);
     setDetectedLandmarks(null);
     setDetectedFaceBox(null);
+    setCurrentLivenessChallenge(getRandomLivenessChallenge());
 
     // 1. Validação Prévia: Colaborador possui biometria cadastrada?
     const hasBiometry = Boolean(
@@ -1026,15 +1053,21 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
       })
       .then((s) => {
+        if (cancelled) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
         stream = s;
         if (videoRef.current) {
           videoRef.current.srcObject = s;
+          videoRef.current.play().catch(() => {});
         }
         setIsCameraActive(true);
         setBiometricState('detecting_face');
         setFaceStatusMessage('Posicione o rosto centralizado no círculo biométrico.');
       })
       .catch(() => {
+        if (cancelled) return;
         setIsCameraActive(false);
         setBiometricState('no_camera');
         setFaceStatusMessage('Câmera indisponível ou permissão não concedida no navegador.');
@@ -1046,6 +1079,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
 
     return () => {
+      cancelled = true;
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
       }
@@ -1055,18 +1089,22 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   // Motor de Análise de Rosto em Tempo Real no Canvas (Algoritmo Aberto + ISO 19794-5)
   useEffect(() => {
     if (!biometricTargetColab || !isCameraActive) return;
-    if (
-      biometricState === 'verified' ||
-      biometricState === 'rejected_mismatch' ||
-      biometricState === 'unregistered_biometrics' ||
-      biometricState === 'no_camera'
-    ) {
-      return;
-    }
 
     let isProcessing = false;
     const interval = setInterval(async () => {
-      if (isProcessing) return;
+      if (isProcessing || isAnalyzingInstantRef.current) return;
+
+      const currentState = biometricStateRef.current;
+      if (
+        currentState === 'verified' ||
+        currentState === 'rejected_mismatch' ||
+        currentState === 'unregistered_biometrics' ||
+        currentState === 'no_camera' ||
+        currentState === 'checking_camera'
+      ) {
+        return;
+      }
+
       const video = videoRef.current;
       const canvas = analyzerCanvasRef.current;
       if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) {
@@ -1079,69 +1117,104 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         setLightingCondition(result.lightingQuality);
 
         if (!result.detected || !result.vector) {
+          consecutiveDetectedRef.current = 0;
+          missedFramesRef.current += 1;
           setFaceDetected(false);
-          setDetectedLandmarks(null);
-          setDetectedFaceBox(null);
-          setBiometricState('detecting_face');
-          setScanProgress(0);
-          setFaceStatusMessage(result.statusMessage);
-        } else {
-          setFaceDetected(true);
-          
-          // Inicia contagem regressiva para prova de vida se detectar rosto pela primeira vez
-          if (biometricCountdown === null && !currentLivenessChallenge && !livenessConfirmed && biometricState === 'detecting_face') {
-            setBiometricCountdown(3);
+
+          // Tolerância de 6 quadros (~1.5s) antes de zerar o progresso (evita perda por piscada ou micro-movimento)
+          if (missedFramesRef.current >= 6) {
+            setDetectedLandmarks(null);
+            setDetectedFaceBox(null);
+            scanProgressRef.current = 0;
+            collectedVectorsRef.current = [];
+            setScanProgress(0);
+            setBiometricState('detecting_face');
+            setFaceStatusMessage(result.statusMessage);
+          } else if (scanProgressRef.current > 0) {
+            setFaceStatusMessage('Mantenha o rosto centralizado na moldura para continuar...');
+          } else {
+            setFaceStatusMessage(result.statusMessage);
           }
+          return;
+        }
 
-          setDetectedFaceBox(result.faceBox || null);
-          setDetectedLandmarks(result.landmarks || null);
-          setBiometricEngineName(
-            result.algorithmUsed === 'W3C_NATIVE_SHAPE'
-              ? 'W3C Shape Detector (Nativo)'
-              : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
-          );
+        // Rosto válido detectado
+        missedFramesRef.current = 0;
+        consecutiveDetectedRef.current += 1;
+        setFaceDetected(true);
+        setDetectedFaceBox(result.faceBox || null);
+        setDetectedLandmarks(result.landmarks || null);
+        setBiometricLivenessScore(result.livenessScore);
+        setBiometricEngineName(
+          result.algorithmUsed === 'W3C_NATIVE_SHAPE'
+            ? 'W3C Shape Detector (Nativo)'
+            : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
+        );
+
+        // Inicia contagem regressiva preparatória de 3s após 2 detecções consecutivas estáveis
+        if (!countdownTriggeredRef.current && consecutiveDetectedRef.current >= 2) {
+          countdownTriggeredRef.current = true;
+          setBiometricCountdown(3);
+          setFaceStatusMessage('Rosto enquadrado! Prepare-se para a captura biométrica...');
+          return;
+        }
+
+        // Aguarda contagem regressiva terminar antes de avançar a barra de extração
+        if (biometricCountdownRef.current !== null) {
+          collectedVectorsRef.current.push(result.vector);
+          if (collectedVectorsRef.current.length > 15) {
+            collectedVectorsRef.current.shift();
+          }
+          return;
+        }
+
+        // Avança progressão em ~7.2 segundos (250ms * ~29 quadros = +3.5% por quadro)
+        if (currentState !== 'analyzing_face') {
           setBiometricState('analyzing_face');
+        }
 
-          setScanProgress((prev) => {
-            const next = prev + 7;
-            
-            if (next < 25) {
-              setFaceStatusMessage('Estabilizando enquadramento e calibração de luz...');
-            } else if (next < 55) {
-              setFaceStatusMessage('Mapeando 64 pontos anatômicos e extraindo vetor ISO 19794-5...');
-            } else if (next < 80) {
-              setFaceStatusMessage('Analisando integridade e prova de vida temporal...');
-            } else if (next < 100) {
-              setFaceStatusMessage('Conferindo padrão biométrico com a base cadastrada...');
-            }
+        collectedVectorsRef.current.push(result.vector);
+        if (collectedVectorsRef.current.length > 20) {
+          collectedVectorsRef.current.shift();
+        }
 
-            if (next >= 100) {
-              const match = matchBiometricFace(
-                result.vector,
-                biometricTargetColab.id,
-                biometricTargetColab.biometriaHashTemplate,
-                simulatedMismatch
+        const next = Math.min(100, Number((scanProgressRef.current + 3.5).toFixed(1)));
+        scanProgressRef.current = next;
+        setScanProgress(Math.round(next));
+
+        if (next < 25) {
+          setFaceStatusMessage('Estabilizando enquadramento e calibração óptica...');
+        } else if (next < 55) {
+          setFaceStatusMessage('Mapeando 64 pontos anatômicos e extraindo vetor ISO 19794-5...');
+        } else if (next < 85) {
+          setFaceStatusMessage('Analisando prova de vida temporal e textura facial...');
+        } else if (next < 100) {
+          setFaceStatusMessage('Conferindo padrão biométrico consolidado com a base...');
+        }
+
+        if (next >= 100) {
+          const stabilizedVector = averageBiometricDescriptors(collectedVectorsRef.current);
+          const match = matchBiometricFace(
+            stabilizedVector.length === 64 ? stabilizedVector : result.vector,
+            biometricTargetColab.id,
+            biometricTargetColab.biometriaHashTemplate,
+            simulatedMismatch
+          );
+
+          setBiometricConfidence(match.similarity.toString());
+          if (match.matched) {
+            setBiometricState('verified');
+            if (currentLivenessRef.current && !livenessConfirmedRef.current) {
+              setFaceStatusMessage(
+                `Face identificada (${match.similarity}%). AGUARDANDO PROVA DE VIDA: execute "${currentLivenessRef.current.actionPrompt}" e confirme.`
               );
-
-              if (match.matched) {
-                setBiometricState('verified');
-                setBiometricConfidence(match.similarity.toString());
-                if (currentLivenessChallenge && !livenessConfirmed) {
-                  setFaceStatusMessage(
-                    `Face identificada (${match.similarity}%). AGUARDANDO PROVA DE VIDA: execute "${currentLivenessChallenge.actionPrompt}" para liberar o ponto.`
-                  );
-                } else {
-                  setFaceStatusMessage(match.details);
-                }
-              } else {
-                setBiometricState('rejected_mismatch');
-                setBiometricConfidence(match.similarity.toString());
-                setFaceStatusMessage(match.details);
-              }
-              return 100;
+            } else {
+              setFaceStatusMessage(match.details);
             }
-            return next;
-          });
+          } else {
+            setBiometricState('rejected_mismatch');
+            setFaceStatusMessage(match.details);
+          }
         }
       } catch (err) {
         console.error('Erro na análise facial:', err);
@@ -1151,66 +1224,92 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }, 250);
 
     return () => clearInterval(interval);
-  }, [biometricTargetColab, isCameraActive, biometricState, simulatedMismatch, currentLivenessChallenge, livenessConfirmed]);
+  }, [biometricTargetColab, isCameraActive, simulatedMismatch]);
 
-  // Captura & Validação Instantânea Manual ("Capturar e Validar Face Agora")
+  // Captura & Validação Estendida Manual ("Capturar e Validar Face Agora")
   const handleInstantCaptureAndValidate = async () => {
     if (!videoRef.current || !analyzerCanvasRef.current || !biometricTargetColab) return;
 
-    if (currentLivenessChallenge && !livenessConfirmed) {
-      setFaceStatusMessage(`Prova de vida obrigatória: Conclua o desafio ("${currentLivenessChallenge.actionPrompt}") e clique em "Confirmar Ação".`);
-      return;
-    }
-
     setIsAnalyzingInstant(true);
-    setScanProgress(15);
-    setFaceStatusMessage('Iniciando análise biométrica estendida...');
-
-    // Progresso cadenciado de 3.5 segundos
-    for (let p of [30, 55, 80, 95]) {
-      await new Promise(r => setTimeout(r, 700));
-      setScanProgress(p);
-      if (p === 30) setFaceStatusMessage('Mapeando enquadramento e matriz YCbCr...');
-      if (p === 55) setFaceStatusMessage('Calculando vetor descritor de 64 dimensões...');
-      if (p === 80) setFaceStatusMessage('Verificando prova de vida e variância óptica...');
-      if (p === 95) setFaceStatusMessage('Comparando com o template de referência...');
-    }
+    setBiometricCountdown(null);
+    setBiometricState('analyzing_face');
+    resetLivenessState();
+    scanProgressRef.current = 10;
+    setScanProgress(10);
+    setFaceStatusMessage('Iniciando varredura biométrica estendida multi-quadro...');
 
     try {
-      const result = await detectFaceAndBiometrics(videoRef.current, analyzerCanvasRef.current);
-      setLightingCondition(result.lightingQuality);
-      if (result.detected && result.vector) {
-        setDetectedFaceBox(result.faceBox || null);
-        setDetectedLandmarks(result.landmarks || null);
-        setBiometricEngineName(
-          result.algorithmUsed === 'W3C_NATIVE_SHAPE'
-            ? 'W3C Shape Detector (Nativo)'
-            : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
-        );
-        setFaceDetected(true);
-        setScanProgress(100);
+      const sampledVectors: number[][] = [];
+      let lastResult: any = null;
+      const totalSamples = 10; // 10 quadros x 550ms = ~5.5 segundos
 
+      for (let i = 0; i < totalSamples; i++) {
+        if (!videoRef.current || !analyzerCanvasRef.current) break;
+
+        const pct = Math.min(95, 10 + Math.round(((i + 1) / totalSamples) * 85));
+        scanProgressRef.current = pct;
+        setScanProgress(pct);
+
+        if (i < 3) setFaceStatusMessage('Estabilizando enquadramento e matriz YCbCr...');
+        else if (i < 6) setFaceStatusMessage('Extraindo descritores faciais de 64 dimensões...');
+        else if (i < 8) setFaceStatusMessage('Verificando prova de vida e variância óptica...');
+        else setFaceStatusMessage('Consolidando leitura e comparando com o template...');
+
+        const result = await detectFaceAndBiometrics(videoRef.current, analyzerCanvasRef.current);
+        setLightingCondition(result.lightingQuality);
+        if (result.detected && result.vector) {
+          sampledVectors.push(result.vector);
+          lastResult = result;
+          setDetectedFaceBox(result.faceBox || null);
+          setDetectedLandmarks(result.landmarks || null);
+          setBiometricLivenessScore(result.livenessScore);
+          setBiometricEngineName(
+            result.algorithmUsed === 'W3C_NATIVE_SHAPE'
+              ? 'W3C Shape Detector (Nativo)'
+              : 'Algoritmo Aberto YCbCr/HOG (ISO 19794-5)'
+          );
+          setFaceDetected(true);
+        }
+
+        if (i < totalSamples - 1) {
+          await new Promise((r) => setTimeout(r, 550));
+        }
+      }
+
+      if (sampledVectors.length >= 4 && lastResult) {
+        scanProgressRef.current = 100;
+        setScanProgress(100);
+        const averagedVector = averageBiometricDescriptors(sampledVectors);
         const match = matchBiometricFace(
-          result.vector,
+          averagedVector,
           biometricTargetColab.id,
           biometricTargetColab.biometriaHashTemplate,
           simulatedMismatch
         );
 
+        setBiometricConfidence(match.similarity.toString());
         if (match.matched) {
           setBiometricState('verified');
-          setBiometricConfidence(match.similarity.toString());
-          setFaceStatusMessage(match.details);
+          if (currentLivenessChallenge && !livenessConfirmed) {
+            setFaceStatusMessage(
+              `Face validada (${match.similarity}%). Agora confirme a Prova de Vida ("${currentLivenessChallenge.actionPrompt}") no card amarelo.`
+            );
+          } else {
+            setFaceStatusMessage(match.details);
+          }
         } else {
           setBiometricState('rejected_mismatch');
-          setBiometricConfidence(match.similarity.toString());
           setFaceStatusMessage(match.details);
         }
       } else {
-        setFaceStatusMessage('Rosto não identificado no enquadramento. Posicione-se de frente para a câmera e tente novamente.');
+        scanProgressRef.current = 0;
+        setScanProgress(0);
+        setBiometricState('detecting_face');
+        setFaceStatusMessage('Rosto não mantido estável no enquadramento. Centralize a face em local iluminado e tente novamente.');
       }
     } catch (e) {
-      setFaceStatusMessage('Erro na leitura óptica facial instantânea.');
+      setBiometricState('detecting_face');
+      setFaceStatusMessage('Erro na leitura óptica facial.');
     } finally {
       setIsAnalyzingInstant(false);
     }
@@ -1608,7 +1707,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       longitude: gpsData?.lng || -46.655981,
       modoDispositivo: isCameraActive ? 'WEB_CAM' : 'TABLET_KIOSK',
       alertaAntecedencia: alertaAntecedencia || undefined,
-      alertaIntervalo: alertaIntervalo || undefined
+      alertaIntervalo: alertaIntervalo || undefined,
+      biometricAudit: {
+        similarity: parseFloat(biometricConfidence) || 0,
+        lightingCondition: lightingCondition || 'BOA',
+        livenessScore: biometricLivenessScore || 90,
+        verdict: biometricState === 'verified' ? 'APROVADO' : 'REJEITADO',
+        algorithmUsed: biometricEngineName
+      }
     };
 
     let novoRegistro: RegistroPontoREPP;
@@ -3719,6 +3825,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                       type="button"
                       onClick={() => {
                         setSimulatedMismatch(false);
+                        resetLivenessState();
+                        scanProgressRef.current = 0;
+                        missedFramesRef.current = 0;
+                        collectedVectorsRef.current = [];
                         setBiometricState('detecting_face');
                         setScanProgress(0);
                         setFaceStatusMessage('Posicione o rosto centralizado no círculo.');
@@ -3814,6 +3924,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   <div className="flex items-center justify-between text-xs text-slate-400">
                     <button
                       onClick={() => {
+                        resetLivenessState();
+                        scanProgressRef.current = 0;
+                        missedFramesRef.current = 0;
+                        collectedVectorsRef.current = [];
                         setBiometricState('detecting_face');
                         setScanProgress(0);
                         setFaceStatusMessage('Recapturando face...');

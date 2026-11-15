@@ -27,6 +27,8 @@ import {
 import {
   detectFaceAndBiometrics,
   saveBiometricTemplate,
+  averageBiometricDescriptors,
+  resetLivenessState,
   FaceLandmarks
 } from '../utils/facialBiometricsEngine';
 
@@ -67,7 +69,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 
   // Estados da Biometria Facial
   const [searchTerm, setSearchTerm] = useState('');
-  const [globalThreshold, setGlobalThreshold] = useState<number>(98.5);
+  const [globalThreshold, setGlobalThreshold] = useState<number>(82.0);
   const [selectedColabForEnroll, setSelectedColabForEnroll] = useState<Colaborador | null>(null);
   const [enrollmentStep, setEnrollmentStep] = useState<'idle' | 'capturing' | 'success'>('idle');
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'SUCCESS' | 'ERROR'; text: string } | null>(null);
@@ -138,11 +140,13 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   React.useEffect(() => {
     let stream: MediaStream | null = null;
     if (selectedColabForEnroll && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+      resetLivenessState();
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } })
         .then((s) => {
           stream = s;
           if (videoRef.current) {
             videoRef.current.srcObject = s;
+            videoRef.current.play().catch(() => {});
           }
           setIsCameraActive(true);
         })
@@ -199,14 +203,37 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   const handleEnrollCaptureNow = async () => {
     if (!videoRef.current || !enrollCanvasRef.current || !selectedColabForEnroll) return;
     setIsExtractingEnrollment(true);
-    setEnrollStatus('Extraindo pontos de referência e vetor ISO 19794-5...');
+    setEnrollStatus('Capturando múltiplos quadros para estabilização facial (aguarde ~2,5s)...');
     try {
-      const result = await detectFaceAndBiometrics(videoRef.current, enrollCanvasRef.current);
-      if (result.vector && result.faceBox) {
-        setEnrollFaceBox(result.faceBox);
-        setEnrollLandmarks(result.landmarks || null);
-        setCapturedVector(result.vector);
-        setEnrollStatus('Rosto e vetor 64D mapeados com sucesso! Clique em "Salvar Template" para confirmar.');
+      const collectedVectors: number[][] = [];
+      let lastBox: { x: number; y: number; width: number; height: number } | null = null;
+      let lastLandmarks: FaceLandmarks | null = null;
+      let lastFailMsg = 'Rosto não detectado na moldura.';
+
+      for (let sample = 0; sample < 5; sample++) {
+        if (!videoRef.current || !enrollCanvasRef.current) break;
+        const result = await detectFaceAndBiometrics(videoRef.current, enrollCanvasRef.current);
+        if (result.detected && result.vector && result.faceBox) {
+          collectedVectors.push(result.vector);
+          lastBox = result.faceBox;
+          lastLandmarks = result.landmarks || null;
+          setEnrollFaceBox(result.faceBox);
+          setEnrollLandmarks(result.landmarks || null);
+          setEnrollStatus(`Mapeando pontos anatômicos (${sample + 1}/5)...`);
+        } else {
+          lastFailMsg = result.statusMessage || lastFailMsg;
+        }
+        if (sample < 4) {
+          await new Promise((r) => setTimeout(r, 450));
+        }
+      }
+
+      if (collectedVectors.length >= 3 && lastBox) {
+        const averagedVector = averageBiometricDescriptors(collectedVectors);
+        setEnrollFaceBox(lastBox);
+        setEnrollLandmarks(lastLandmarks);
+        setCapturedVector(averagedVector);
+        setEnrollStatus('Rosto e vetor 64D estabilizados com sucesso! Clique em "Salvar Template" para confirmar.');
         setEnrollmentStep('success');
       } else {
         const nextFailed = failedAttempts + 1;
@@ -224,7 +251,7 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
           setShowSelfieContingency(true);
           setEnrollStatus('3 tentativas de detecção automática falharam. Modo de Selfie de Contingência ativado.');
         } else {
-          setEnrollStatus(`Tentativa ${nextFailed}/3 de captura automática falhou. Ajuste o enquadramento ou iluminação.`);
+          setEnrollStatus(`Tentativa ${nextFailed}/3 falhou (${lastFailMsg}). Centralize o rosto e melhore a iluminação.`);
         }
       }
     } catch (e) {
@@ -346,7 +373,8 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
         body: JSON.stringify({
           collaboratorId: selectedColabForEnroll.id,
           tenantId: activeTenant.id,
-          encryptedTemplate: hashTemplate 
+          encryptedTemplate: hashTemplate,
+          vector: fallbackVector
         })
       });
       
