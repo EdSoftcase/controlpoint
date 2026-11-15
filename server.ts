@@ -264,22 +264,49 @@ app.post('/api/save-biometric', async (req, res) => {
     const user = await getAuthenticatedUser(token);
     if (!user) return res.status(401).send('Unauthorized');
     
-    const { collaboratorId, encryptedTemplate, tenantId } = req.body;
+    const { collaboratorId, encryptedTemplate, tenantId, vector } = req.body;
     if (user.user_metadata?.tenantId && user.user_metadata.tenantId !== tenantId && user.user_metadata?.role !== 'SUPER_ADMIN') {
       return res.status(403).send('Forbidden');
     }
     
+    // Preserva metadados de contato existentes (email/telefone) caso já gravados em biometric_template
+    let existingMeta: Record<string, any> = {};
+    if (supabase) {
+      try {
+        const { data: existingRow } = await supabase
+          .from('collaborators')
+          .select('biometric_template')
+          .eq('collaborator_id', collaboratorId)
+          .maybeSingle();
+        if (existingRow?.biometric_template) {
+          const parsed = typeof existingRow.biometric_template === 'string'
+            ? JSON.parse(existingRow.biometric_template)
+            : existingRow.biometric_template;
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.email) existingMeta.email = parsed.email;
+            if (parsed.telefone) existingMeta.telefone = parsed.telefone;
+            if (parsed.pretensaoDepto) existingMeta.pretensaoDepto = parsed.pretensaoDepto;
+            if (parsed.pretensaoCargo) existingMeta.pretensaoCargo = parsed.pretensaoCargo;
+          }
+        }
+      } catch {
+        // Ignora parse
+      }
+    }
+
     // Encrypt template with AES-256-GCM & LGPD E2EE compliance envelope
     const secureTemplate = (encryptedTemplate && encryptedTemplate.includes(':')) 
       ? encryptedTemplate 
       : encryptBiometricTemplate(encryptedTemplate || `template_${collaboratorId}_${Date.now()}`);
     
     const lgpdEnvelope = JSON.stringify({
+      ...existingMeta,
       standard: 'ISO/IEC 19794-5',
       encryption: 'AES-256-GCM',
       lgpd_compliant: true,
       consent_timestamp: new Date().toISOString(),
-      template: secureTemplate
+      template: secureTemplate,
+      ...(Array.isArray(vector) && vector.length === 64 ? { vector } : {})
     });
     
     if (supabase) {
@@ -978,6 +1005,22 @@ app.post('/api/punch', async (req, res) => {
 
     if (colabData) {
       colaborador = colabData;
+      
+      // Robust day-off validation
+      const today = new Date().getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+      let diasFolga = colaborador.dias_folga_semana;
+      
+      // Se dias_folga_semana não definido no DB, aplica regra padrão baseada na escala
+      if (!diasFolga || !Array.isArray(diasFolga)) {
+        if (colaborador.tipo_escala === '6x1') diasFolga = [0];
+        else if (colaborador.tipo_escala === '5x2') diasFolga = [0, 6];
+        else diasFolga = [];
+      }
+      
+      if (diasFolga.includes(today)) {
+        await logEvent(tenantId, `Tentativa de ponto bloqueada (folga): colaborador=${colaboradorId}`);
+        return res.status(403).json({ error: 'Marcação bloqueada: Hoje é seu dia de folga conforme escala atribuída.' });
+      }
     }
 
     const { data: tenantData } = await supabase
@@ -1011,9 +1054,11 @@ app.post('/api/punch', async (req, res) => {
       previousHash = lastPoints[0].hash_sha256 || previousHash;
     }
 
-    const clockTime = new Date();
-    const nowIso = clockTime.toISOString();
-    const dataHoraFormatada = `${String(clockTime.getDate()).padStart(2, '0')}/${String(clockTime.getMonth() + 1).padStart(2, '0')}/${clockTime.getFullYear()} ${String(clockTime.getHours()).padStart(2, '0')}:${String(clockTime.getMinutes()).padStart(2, '0')}:${String(clockTime.getSeconds()).padStart(2, '0')}`;
+    const now = new Date();
+    const brasiliaDate = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const nowIso = brasiliaDate.toISOString().replace('Z', '-03:00');
+    
+    const dataHoraFormatada = `${String(brasiliaDate.getDate()).padStart(2, '0')}/${String(brasiliaDate.getMonth() + 1).padStart(2, '0')}/${brasiliaDate.getFullYear()} ${String(brasiliaDate.getHours()).padStart(2, '0')}:${String(brasiliaDate.getMinutes()).padStart(2, '0')}:${String(brasiliaDate.getSeconds()).padStart(2, '0')}`;
 
     const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
     const hashSha256 = crypto.createHash('sha256').update(rawPayload).digest('hex');
@@ -1061,6 +1106,24 @@ app.post('/api/punch', async (req, res) => {
     if (insertError) {
       console.warn('Erro ao inserir ponto no Supabase via /api/punch:', insertError);
       throw insertError;
+    }
+
+    // Biometric Audit Log (Portaria 671 Compliance)
+    if (req.body.biometricAudit) {
+      const audit = req.body.biometricAudit;
+      await supabase
+        .from('biometric_audit_logs')
+        .insert({
+          tenant_id: tenantId,
+          collaborator_id: colaboradorId,
+          timestamp: nowIso,
+          similarity: audit.similarity || 0,
+          lighting_condition: audit.lightingCondition || 'NORMAL',
+          liveness_score: audit.livenessScore || 0,
+          verdict: audit.verdict || 'MATCH',
+          algorithm_used: audit.algorithmUsed || 'ISO19794-5',
+          hash_template: hashSha256 
+        });
     }
 
     await logEvent(tenantId, `Ponto REP-P oficial registrado server-side: NSR ${nextNsr} para ${colaboradorNome} (${tipoMarcacao})`);
