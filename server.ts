@@ -31,7 +31,7 @@ function initSupabase(url: string, key: string) {
 
 initSupabase(currentConfig.url, currentConfig.key);
 
-const app = express();
+export const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
