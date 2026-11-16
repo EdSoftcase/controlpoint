@@ -2152,21 +2152,26 @@ app.get('/api/status', async (_req, res) => {
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const isProd = process.env.NODE_ENV === 'production';
+const isVercel = Boolean(process.env.VERCEL);
 
 async function startServer() {
-  if (isProd) {
-    app.use(express.static('dist'));
-    app.get('*', (_req, res) => {
-      res.sendFile('dist/index.html', { root: '.' });
-    });
-  } else {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa'
-    });
-    app.use(vite.middlewares);
-  }
+  if (!isVercel) {
+    if (isProd) {
+      app.use(express.static('dist'));
+      app.get('*', (_req, res) => {
+        res.sendFile('dist/index.html', { root: '.' });
+      });
+    } else {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa'
+      });
+      app.use(vite.middlewares);
+    }
 
-  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+    app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+  }
 }
-startServer();
+if (!isVercel) {
+  startServer();
+}
