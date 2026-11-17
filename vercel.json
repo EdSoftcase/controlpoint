@@ -1,12 +1,13 @@
 {
   "version": 2,
+  "framework": "vite",
   "rewrites": [
     {
       "source": "/api/(.*)",
       "destination": "/api/index.ts"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/|assets/|favicon\\.ico|manifest\\.json|icon\\.svg|apple-touch-icon\\.png|sw\\.js|icon-192\\.png|icon-512\\.png).*)",
       "destination": "/index.html"
     }
   ]

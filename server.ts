@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
@@ -3700,7 +3699,10 @@ app.use('/api', (_req, res) => {
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const isProd = process.env.NODE_ENV === 'production';
-const isVercel = Boolean(process.env.VERCEL);
+const isVercel = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.NOW_REGION);
+const isDirectRun = Boolean(
+  process.argv[1] && (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js'))
+);
 
 async function startServer() {
   if (!isVercel) {
@@ -3710,7 +3712,8 @@ async function startServer() {
         res.sendFile('dist/index.html', { root: '.' });
       });
     } else {
-      const vite = await createViteServer({
+      const { createServer } = await import('vite');
+      const vite = await createServer({
         server: { middlewareMode: true },
         appType: 'spa'
       });
@@ -3720,6 +3723,7 @@ async function startServer() {
     app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
   }
 }
-if (!isVercel) {
-  startServer();
+
+if (!isVercel && (isDirectRun || !process.env.NODE_ENV)) {
+  startServer().catch(console.error);
 }
