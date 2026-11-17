@@ -253,6 +253,18 @@ function canActForCollaborator(user: any, collaboratorId: string): boolean {
   return user.user_metadata?.collaboratorId === collaboratorId;
 }
 
+function getErrorMessage(err: any): string {
+  if (!err) return 'Erro desconhecido';
+  if (typeof err === 'string') return err;
+  if (err.message) return err.message;
+  if (err.error_description) return err.error_description;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 // Logging utility
 async function logEvent(tenantId: string, event: string) {
   if (!supabase) return;
@@ -262,9 +274,14 @@ async function logEvent(tenantId: string, event: string) {
       event,
       timestamp: getBrasiliaTimeParts().iso
     });
-    if (error) console.error('Error logging event:', error.message);
-  } catch (err) {
-    console.error('Error logging event exception:', err);
+    if (error && !error.message?.includes('row-level security')) {
+      console.warn('Aviso ao registrar log:', error.message);
+    }
+  } catch (err: any) {
+    const msg = getErrorMessage(err);
+    if (!msg.includes('row-level security')) {
+      console.warn('Aviso exceção ao registrar log:', msg);
+    }
   }
 }
 
@@ -736,7 +753,7 @@ app.post('/api/bootstrap-admin', async (req, res) => {
     });
   } catch (error) {
     console.error('Bootstrap error:', error);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -854,7 +871,7 @@ app.post('/api/save-biometric', async (req, res) => {
   } catch (error) {
     console.error('Save biometric error:', error);
     await logEvent('error', `Save biometric error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -919,7 +936,7 @@ app.post('/api/remove-biometric', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Remove biometric error:', error);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -975,7 +992,7 @@ app.get('/api/biometric-audit-summary', async (req, res) => {
 
     res.json({ summary });
   } catch (error) {
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1035,7 +1052,7 @@ app.post('/api/save-biometric-audit', async (req, res) => {
   } catch (error) {
     console.error('Save biometric audit error:', error);
     await logEvent('error', `Save biometric audit error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1158,7 +1175,7 @@ app.post('/api/save-collaborator', async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     await logEvent('error', `Save collaborator error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1385,11 +1402,19 @@ app.post('/api/save-tenant', async (req, res) => {
       return res.status(403).send('Forbidden: Only SUPER_ADMIN or Tenant RH_ADMIN can manage tenants');
     }
 
+    const { data: existingByCnpj } = await supabase
+      .from('tenants')
+      .select('tenant_id')
+      .eq('cnpj', tenant.cnpj)
+      .maybeSingle();
+
+    const tenantIdToUse = existingByCnpj?.tenant_id || tenant.id;
+
     const { data, error: dbError } = await supabase
       .from('tenants')
       .upsert(
         {
-          tenant_id: tenant.id,
+          tenant_id: tenantIdToUse,
           cnpj: tenant.cnpj,
           razao_social: tenant.razaoSocial,
           nome_fantasia: tenant.nomeFantasia,
@@ -1421,7 +1446,7 @@ app.post('/api/save-tenant', async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     await logEvent('error', `Save tenant error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1611,7 +1636,7 @@ app.post('/api/save-holerite', async (req, res) => {
   } catch (error) {
     console.error('Save holerite error:', error);
     await logEvent('error', `Save holerite error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1660,7 +1685,7 @@ app.post('/api/confirm-holerite', async (req, res) => {
   } catch (error) {
     console.error('Confirm holerite error:', error);
     await logEvent('error', `Confirm holerite error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1709,7 +1734,7 @@ app.post('/api/save-informe-irpf', async (req, res) => {
   } catch (error) {
     console.error('Save informe IRPF error:', error);
     await logEvent('error', `Save informe IRPF error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -1748,7 +1773,7 @@ app.post('/api/create-auth-user', async (req, res) => {
     res.json({ success: true, user: data.user });
   } catch (error) {
     console.error('Error creating auth user:', error);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -2162,7 +2187,7 @@ app.post('/api/punch', async (req, res) => {
   } catch (error) {
     console.error('Erro no endpoint /api/punch:', error);
     await logEvent('error', `Punch error: ${error}`);
-    res.status(500).json({ error: String(error) });
+    res.status(500).json({ error: getErrorMessage(error) });
   }
 });
 
@@ -2494,8 +2519,11 @@ app.get('/api/bootstrap-data', async (req, res) => {
     if (!user) return res.status(401).send('Unauthorized');
     if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
 
-    const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
-    const tenantScope = isSuperAdmin(user) && !req.query.tenantId ? null : requestedTenant;
+    const requestedTenant = String(req.query.tenantId || '');
+    const tenantScope = requestedTenant && requestedTenant !== 'all' 
+      ? requestedTenant 
+      : (isManagerOrAdmin(user) ? null : (user.user_metadata?.tenantId || 'tenant-01'));
+
     if (tenantScope && !canAccessTenant(user, tenantScope)) {
       return res.status(403).send('Forbidden');
     }
@@ -2523,7 +2551,7 @@ app.get('/api/bootstrap-data', async (req, res) => {
       adjsRes,
       positionsRes
     ] = await Promise.all([
-      isSuperAdmin(user) ? supabase.from('tenants').select('*') : supabase.from('tenants').select('*').eq('tenant_id', requestedTenant),
+      isManagerOrAdmin(user) ? supabase.from('tenants').select('*') : (tenantScope ? supabase.from('tenants').select('*').eq('tenant_id', tenantScope) : supabase.from('tenants').select('*')),
       q('collaborators'),
       q('establishments'),
       q('departments'),
