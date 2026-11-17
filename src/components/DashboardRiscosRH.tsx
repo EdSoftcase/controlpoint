@@ -5,6 +5,7 @@ import {
   verificarInterjornada11h,
   validarIntervaloIntrajornada
 } from '../utils/cltCalculators';
+import { calculateWorkedTime } from '../utils/jornadaCalculator';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -53,18 +54,23 @@ export function DashboardRiscosRH({ colaboradores, registros, tenantName }: Dash
     }
 
     porColab.forEach((regs, chave) => {
-      const colab = colaboradores.find(c => c.id === chave || c.cpf.replace(/\D/g, '') === chave.replace(/\D/g, ''));
+      const colab = colaboradores.find(
+        (c) =>
+          c.id === chave ||
+          (c.cpf && chave && c.cpf.replace(/\D/g, '') === chave.replace(/\D/g, ''))
+      );
       const nomeColab = colab?.nome || regs[0]?.colaboradorNome || 'Colaborador';
       const cpfColab = colab?.cpf || regs[0]?.colaboradorCpf || '';
       const depto = colab?.departamentoNome || 'Operações';
+      const cargaDiariaHoras = Number(colab?.cargaHorariaDiariaHoras || 8);
 
       // Ordena por data e hora
       const sorted = [...regs].sort((a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime());
 
-      // Agrupa por dia
+      // Agrupa por dia oficial em Horário de Brasília (BRT)
       const porDia = new Map<string, RegistroPontoREPP[]>();
       for (const reg of sorted) {
-        const dia = reg.dataHora.slice(0, 10);
+        const dia = getBrasiliaYmd(reg.dataHora);
         if (!porDia.has(dia)) porDia.set(dia, []);
         porDia.get(dia)!.push(reg);
       }
@@ -96,22 +102,26 @@ export function DashboardRiscosRH({ colaboradores, registros, tenantName }: Dash
               data: diaAtual,
               detalhe: resultado.detalheTexto,
               baseLegal: 'CLT Art. 66 c/c Súmula 110 do TST',
-              passivoEstimadoReais: Math.round(resultado.horasExtrasIndenizatorias * 35.0 * 1.5) // ~ R$ 35/h com 50%
+              passivoEstimadoReais: Math.round(resultado.horasExtrasIndenizatorias * 35.0 * 1.5)
             });
           }
         }
       }
 
-      // 2. Checagem de Intervalo Intrajornada (CLT Art. 71) em cada dia
+      // 2. Checagem de Intervalo Intrajornada (CLT Art. 71) e Limite de H.E. (CLT Art. 59)
       porDia.forEach((regsDoDia, dia) => {
+        const worked = calculateWorkedTime(regsDoDia);
+        const jornadaDiaHoras = worked.totalMinutes > 0 ? worked.totalMinutes / 60 : cargaDiariaHoras;
+
         if (regsDoDia.length >= 4) {
-          // Tipicamente: Entrada, Intervalo_Inicio, Intervalo_Fim, Saida
-          const intInicio = regsDoDia.find(r => r.tipoMarcacao === 'INTERVALO_INICIO') || regsDoDia[1];
-          const intFim = regsDoDia.find(r => r.tipoMarcacao === 'INTERVALO_FIM') || regsDoDia[2];
+          const intInicio = regsDoDia.find((r) => r.tipoMarcacao === 'INTERVALO_INICIO') || regsDoDia[1];
+          const intFim = regsDoDia.find((r) => r.tipoMarcacao === 'INTERVALO_FIM') || regsDoDia[2];
 
           if (intInicio && intFim) {
-            const minGozados = Math.round((new Date(intFim.dataHora).getTime() - new Date(intInicio.dataHora).getTime()) / 60000);
-            const validacao = validarIntervaloIntrajornada(8, minGozados);
+            const minGozados = Math.round(
+              (new Date(intFim.dataHora).getTime() - new Date(intInicio.dataHora).getTime()) / 60000
+            );
+            const validacao = validarIntervaloIntrajornada(jornadaDiaHoras, minGozados);
 
             if (validacao.suprimido) {
               lista.push({
@@ -129,6 +139,25 @@ export function DashboardRiscosRH({ colaboradores, registros, tenantName }: Dash
               });
             }
           }
+        }
+
+        const limiteComExtrasMin = Math.round((cargaDiariaHoras + 2) * 60);
+        if (worked.totalMinutes > limiteComExtrasMin) {
+          const excessoMin = worked.totalMinutes - Math.round(cargaDiariaHoras * 60);
+          const horasExcesso = +(excessoMin / 60).toFixed(2);
+          lista.push({
+            id: `risco-he-${dia}-${chave}`,
+            colaboradorId: chave,
+            colaboradorNome: nomeColab,
+            colaboradorCpf: cpfColab,
+            departamento: depto,
+            tipoRisco: 'HORAS_EXTRAS_2H',
+            gravidade: 'MODERADA',
+            data: dia,
+            detalhe: `Jornada efetiva de ${worked.formatted} excedeu o limite legal de +2h extras sobre a carga diária (${cargaDiariaHoras}h).`,
+            baseLegal: 'CLT Art. 59 (Limite máximo de 2h suplementares/dia)',
+            passivoEstimadoReais: Math.round(horasExcesso * 35.0 * 1.5)
+          });
         }
       });
     });

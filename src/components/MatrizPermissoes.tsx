@@ -32,14 +32,28 @@ import { useAuth } from './AuthContext';
 
 const STORAGE_KEY_PERMISSIONS = 'sc_role_permissions_matrix';
 
-export const MatrizPermissoes: React.FC = () => {
-  const { supabase } = useAuth();
+interface MatrizPermissoesProps {
+  activeTenantId?: string;
+  initialPermissions?: RolePermissionsMap;
+  onPermissionsUpdated?: (next: RolePermissionsMap) => void;
+}
+
+export const MatrizPermissoes: React.FC<MatrizPermissoesProps> = ({
+  activeTenantId,
+  initialPermissions,
+  onPermissionsUpdated
+}) => {
+  const { authToken, session } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
+  const targetTenantId = activeTenantId || 'tenant-01';
+
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_PERMISSIONS);
+    if (initialPermissions) return initialPermissions;
+    const saved = localStorage.getItem(`${STORAGE_KEY_PERMISSIONS}_${targetTenantId}`) || localStorage.getItem(STORAGE_KEY_PERMISSIONS);
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch (e) {
+      } catch {
         return DEFAULT_ROLE_PERMISSIONS;
       }
     }
@@ -51,8 +65,37 @@ export const MatrizPermissoes: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [feedback, setFeedback] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
   const rolesList: UserRole[] = ['SUPER_ADMIN', 'RH_ADMIN', 'GESTOR', 'COLABORADOR'];
+
+  useEffect(() => {
+    let active = true;
+    const loadPermissions = async () => {
+      if (!bearerToken) return;
+      try {
+        const res = await fetch(`/api/role-permissions?tenantId=${encodeURIComponent(targetTenantId)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!active) return;
+        if (json.permissionsByRole && Object.keys(json.permissionsByRole).length > 0) {
+          const merged: RolePermissionsMap = {
+            ...DEFAULT_ROLE_PERMISSIONS,
+            ...json.permissionsByRole
+          };
+          setRolePermissions(merged);
+          localStorage.setItem(`${STORAGE_KEY_PERMISSIONS}_${targetTenantId}`, JSON.stringify(merged));
+          onPermissionsUpdated?.(merged);
+        }
+      } catch (err) {
+        console.warn('Aviso ao carregar matriz RBAC:', err);
+      }
+    };
+    loadPermissions();
+    return () => { active = false; };
+  }, [targetTenantId, bearerToken]);
 
   const togglePermission = (role: UserRole, permKey: string) => {
     // Super admin deve manter permissões essenciais de segurança, mas permitimos customização total
@@ -82,26 +125,37 @@ export const MatrizPermissoes: React.FC = () => {
     });
   };
 
+  const persistMatrixToBackend = async (matrix: RolePermissionsMap): Promise<boolean> => {
+    localStorage.setItem(`${STORAGE_KEY_PERMISSIONS}_${targetTenantId}`, JSON.stringify(matrix));
+    localStorage.setItem(STORAGE_KEY_PERMISSIONS, JSON.stringify(matrix));
+    onPermissionsUpdated?.(matrix);
+
+    if (!bearerToken) return false;
+    const res = await fetch('/api/role-permissions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${bearerToken}`
+      },
+      body: JSON.stringify({
+        tenantId: targetTenantId,
+        permissionsByRole: matrix
+      })
+    });
+    return res.ok;
+  };
+
   const handleSaveMatrix = async () => {
     setIsSaving(true);
     try {
-      localStorage.setItem(STORAGE_KEY_PERMISSIONS, JSON.stringify(rolePermissions));
-      
-      // Tentativa de salvar no Supabase (em tabela role_permissions se configurada)
-      try {
-        for (const role of rolesList) {
-          await supabase.from('role_permissions').upsert({
-            role: role,
-            permissions: rolePermissions[role],
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'role' });
-        }
-      } catch (err) {
-        console.warn('Aviso sincronismo Supabase role_permissions:', err);
-      }
-
-      setFeedback({ message: 'Matriz de permissões RBAC salva com sucesso no sistema!', type: 'success' });
-    } catch (e) {
+      const ok = await persistMatrixToBackend(rolePermissions);
+      setFeedback({
+        message: ok
+          ? 'Matriz de permissões RBAC salva e sincronizada no servidor com sucesso!'
+          : 'Matriz salva localmente; verifique sua sessão administrativa para sincronizar com o servidor.',
+        type: ok ? 'success' : 'info'
+      });
+    } catch {
       setFeedback({ message: 'Erro ao salvar matriz de permissões.', type: 'error' });
     } finally {
       setIsSaving(false);
@@ -109,11 +163,17 @@ export const MatrizPermissoes: React.FC = () => {
     }
   };
 
-  const handleResetDefaults = () => {
-    if (confirm('Deseja restaurar as permissões recomendadas pela Portaria MTP 671/2021 e CLT?')) {
+  const handleConfirmResetDefaults = async () => {
+    setIsResetConfirmOpen(false);
+    setIsSaving(true);
+    try {
       setRolePermissions(DEFAULT_ROLE_PERMISSIONS);
-      localStorage.setItem(STORAGE_KEY_PERMISSIONS, JSON.stringify(DEFAULT_ROLE_PERMISSIONS));
-      setFeedback({ message: 'Permissões restauradas para o padrão oficial de conformidade!', type: 'info' });
+      await persistMatrixToBackend(DEFAULT_ROLE_PERMISSIONS);
+      setFeedback({ message: 'Permissões restauradas para o padrão oficial da Portaria MTP 671/2021!', type: 'info' });
+    } catch {
+      setFeedback({ message: 'Erro ao restaurar permissões no servidor.', type: 'error' });
+    } finally {
+      setIsSaving(false);
       setTimeout(() => setFeedback(null), 4000);
     }
   };
@@ -168,7 +228,7 @@ export const MatrizPermissoes: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleResetDefaults}
+              onClick={() => setIsResetConfirmOpen(true)}
               className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
               title="Restaurar permissões padrão recomendadas"
             >
@@ -375,6 +435,43 @@ export const MatrizPermissoes: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Modal inline de confirmação para restaurar padrão RBAC */}
+      {isResetConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-amber-600" />
+                Restaurar Permissões Padrão
+              </h3>
+              <button
+                onClick={() => setIsResetConfirmOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Deseja restaurar as permissões recomendadas pela Portaria MTP 671/2021 e CLT para todos os perfis da empresa atual?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setIsResetConfirmOpen(false)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmResetDefaults}
+                className="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs"
+              >
+                Confirmar Restauração
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

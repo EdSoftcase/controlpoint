@@ -1,5 +1,6 @@
 import React from 'react';
 import { Colaborador } from '../../types/operational';
+import { getBrasiliaYmd } from '../../utils/brasiliaClock';
 import { Plane } from 'lucide-react';
 
 interface PortalFeriasTabProps {
@@ -11,48 +12,44 @@ export const PortalFeriasTab: React.FC<PortalFeriasTabProps> = ({
   userColab,
   minhasFeriasAgendadas
 }) => {
-  const adm = userColab?.dataAdmissao || '2026-11-08';
-  let anoAdm = 2026, mesAdm = 11, diaAdm = 8;
-  if (adm && adm.includes('-')) {
-    const parts = adm.split('-').map(Number);
-    if (parts.length === 3 && !isNaN(parts[0])) {
-      anoAdm = parts[0];
-      mesAdm = parts[1];
-      diaAdm = parts[2];
-    }
-  }
-  const admDate = new Date(anoAdm, mesAdm - 1, diaAdm);
-  const hoje = new Date();
+  const hojeYmd = getBrasiliaYmd();
+  const [hY, hM, hD] = hojeYmd.split('-').map(Number);
+  const hoje = new Date(Date.UTC(hY, hM - 1, hD, 12, 0, 0));
 
-  let aquisitivoInicio = new Date(admDate);
-  let aquisitivoFim = new Date(aquisitivoInicio);
-  aquisitivoFim.setFullYear(aquisitivoFim.getFullYear() + 1);
-  aquisitivoFim.setDate(aquisitivoFim.getDate() - 1);
+  const rawAdm = userColab?.dataAdmissao || '';
+  const admValida = /^\d{4}-\d{2}-\d{2}$/.test(rawAdm.slice(0, 10));
+  const [anoAdm, mesAdm, diaAdm] = (admValida ? rawAdm.slice(0, 10) : hojeYmd).split('-').map(Number);
+  const admDate = new Date(Date.UTC(anoAdm, mesAdm - 1, diaAdm, 12, 0, 0));
+
+  let aquisitivoInicio = new Date(admDate.getTime());
+  let aquisitivoFim = new Date(aquisitivoInicio.getTime());
+  aquisitivoFim.setUTCFullYear(aquisitivoFim.getUTCFullYear() + 1);
+  aquisitivoFim.setUTCDate(aquisitivoFim.getUTCDate() - 1);
 
   while (hoje > aquisitivoFim) {
-    aquisitivoInicio = new Date(aquisitivoFim);
-    aquisitivoInicio.setDate(aquisitivoInicio.getDate() + 1);
-    aquisitivoFim = new Date(aquisitivoInicio);
-    aquisitivoFim.setFullYear(aquisitivoFim.getFullYear() + 1);
-    aquisitivoFim.setDate(aquisitivoFim.getDate() - 1);
+    aquisitivoInicio = new Date(aquisitivoFim.getTime());
+    aquisitivoInicio.setUTCDate(aquisitivoInicio.getUTCDate() + 1);
+    aquisitivoFim = new Date(aquisitivoInicio.getTime());
+    aquisitivoFim.setUTCFullYear(aquisitivoFim.getUTCFullYear() + 1);
+    aquisitivoFim.setUTCDate(aquisitivoFim.getUTCDate() - 1);
   }
 
-  let concessivoInicio = new Date(aquisitivoFim);
-  concessivoInicio.setDate(concessivoInicio.getDate() + 1);
-  let concessivoFim = new Date(concessivoInicio);
-  concessivoFim.setFullYear(concessivoFim.getFullYear() + 1);
-  concessivoFim.setDate(concessivoFim.getDate() - 1);
+  const concessivoInicio = new Date(aquisitivoFim.getTime());
+  concessivoInicio.setUTCDate(concessivoInicio.getUTCDate() + 1);
+  const concessivoFim = new Date(concessivoInicio.getTime());
+  concessivoFim.setUTCFullYear(concessivoFim.getUTCFullYear() + 1);
+  concessivoFim.setUTCDate(concessivoFim.getUTCDate() - 1);
 
-  const formatarData = (d: Date) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  const formatarData = (d: Date) =>
+    `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
   const formatarDataStr = (isoStr: string) => {
     if (!isoStr) return '';
     const parts = isoStr.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : isoStr;
   };
 
-  const diasAteFimConcessao = Math.round((concessivoFim.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
-  const vencido = hoje > concessivoFim;
-  const dataGozoApartirDe = formatarData(concessivoInicio);
+  const vencido = admValida ? hoje > concessivoFim : false;
+  const dataGozoApartirDe = admValida ? formatarData(concessivoInicio) : 'Aguardando cadastro da admissão';
   const temAgendamento = minhasFeriasAgendadas.length > 0;
 
   return (
@@ -75,13 +72,19 @@ export const PortalFeriasTab: React.FC<PortalFeriasTabProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
             <span className="text-[10px] text-slate-400 font-bold uppercase block">Data de Admissão</span>
-            <span className="text-base font-bold text-slate-900">{formatarData(admDate)}</span>
-            <span className="text-[10px] text-slate-500 block">Vínculo CLT Ativo</span>
+            <span className="text-base font-bold text-slate-900">
+              {admValida ? formatarData(admDate) : 'Não informada'}
+            </span>
+            <span className="text-[10px] text-slate-500 block">
+              {admValida ? 'Vínculo CLT Ativo' : 'Solicite atualização cadastral ao RH'}
+            </span>
           </div>
 
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
             <span className="text-[10px] text-slate-400 font-bold uppercase block">Período Aquisitivo Atual</span>
-            <span className="text-sm font-bold font-mono text-slate-900">{formatarData(aquisitivoInicio)} a {formatarData(aquisitivoFim)}</span>
+            <span className="text-sm font-bold font-mono text-slate-900">
+              {admValida ? `${formatarData(aquisitivoInicio)} a ${formatarData(aquisitivoFim)}` : 'Aguardando data de admissão'}
+            </span>
             <span className="text-[10px] text-slate-500 block">12 meses de trabalho (CLT Art. 130)</span>
           </div>
 
@@ -90,12 +93,12 @@ export const PortalFeriasTab: React.FC<PortalFeriasTabProps> = ({
             <span className={`text-sm font-bold font-mono ${temAgendamento ? 'text-emerald-700' : (vencido ? 'text-rose-600' : 'text-slate-800')}`}>
               {temAgendamento 
                 ? `${formatarDataStr(minhasFeriasAgendadas[0].dataInicioFerias)} a ${formatarDataStr(minhasFeriasAgendadas[0].dataFimFerias)}` 
-                : `A partir de ${dataGozoApartirDe}`}
+                : (admValida ? `A partir de ${dataGozoApartirDe}` : dataGozoApartirDe)}
             </span>
             <span className={`text-[10px] font-bold block ${temAgendamento ? 'text-emerald-600' : (vencido ? 'text-rose-600' : 'text-slate-500')}`}>
               {temAgendamento 
                 ? 'Programado pelo RH' 
-                : (vencido ? '🔴 Férias Vencidas (Art. 137 CLT)' : `Limite concessivo: ${formatarData(concessivoFim)}`)}
+                : (!admValida ? 'Sem previsão calculada' : vencido ? 'Férias Vencidas (Art. 137 CLT)' : `Limite concessivo: ${formatarData(concessivoFim)}`)}
             </span>
           </div>
         </div>

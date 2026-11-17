@@ -129,8 +129,8 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
   const [holeriteModalColab, setHoleriteModalColab] = useState<Colaborador | null>(null);
   const [holeriteMesAno, setHoleriteMesAno] = useState<string>(currentMesAno);
   const [holeriteCompetencia, setHoleriteCompetencia] = useState<string>(getMonthLabelPtBr(currentMesAno));
-  const [holeriteSalarioBruto, setHoleriteSalarioBruto] = useState<string>('5200.00');
-  const [holeriteDescontos, setHoleriteDescontos] = useState<string>('680.00');
+  const [holeriteSalarioBruto, setHoleriteSalarioBruto] = useState<string>('');
+  const [holeriteDescontos, setHoleriteDescontos] = useState<string>('');
   const [holeriteArquivoNome, setHoleriteArquivoNome] = useState<string>(`contracheque_${currentMesAno}.pdf`);
   const [holeriteArquivoUrl, setHoleriteArquivoUrl] = useState<string | undefined>(undefined);
   const [holeriteObservacao, setHoleriteObservacao] = useState<string>('');
@@ -140,6 +140,10 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     if (!holeriteModalColab) return;
     const bruto = parseFloat(holeriteSalarioBruto) || 0;
     const desc = parseFloat(holeriteDescontos) || 0;
+    if (bruto <= 0) {
+      setHoleriteNotice('Informe o salário bruto válido (> 0) antes de publicar o holerite.');
+      return;
+    }
     const liq = Math.max(0, bruto - desc);
 
     const newHolerite = {
@@ -175,7 +179,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     } catch (_) {}
 
     try {
-      await fetch('/api/save-holerite', {
+      const res = await fetch('/api/save-holerite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -183,25 +187,39 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
         },
         body: JSON.stringify(newHolerite)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setHoleriteNotice(`Holerite salvo em cache local, porém o servidor retornou erro: ${errData?.error || res.status}.`);
+        return;
+      }
     } catch (err) {
       console.warn('Aviso Supabase save-holerite:', err);
+      setHoleriteNotice('Sem conexão com o servidor para persistir o holerite no banco.');
+      return;
     }
 
     setHoleriteNotice(`Holerite de "${holeriteModalColab.nome}" (Competência ${holeriteCompetencia}) cadastrado com sucesso pelo RH! Persistido no banco de dados e disponível no Portal do Colaborador.`);
+    setHoleriteSalarioBruto('');
+    setHoleriteDescontos('');
     setHoleriteModalColab(null);
   };
 
   // Estados para Publicação de Informe de Rendimentos (IRPF) pelo RH
   const [irpfModalColab, setIrpfModalColab] = useState<Colaborador | null>(null);
   const [irpfAnoCalendario, setIrpfAnoCalendario] = useState<string>(String(Number(currentAno) - 1));
-  const [irpfRendimentos, setIrpfRendimentos] = useState<string>('62400.00');
-  const [irpfPrevidencia, setIrpfPrevidencia] = useState<string>('6864.00');
-  const [irpfImpostoFonte, setIrpfImpostoFonte] = useState<string>('4320.00');
+  const [irpfRendimentos, setIrpfRendimentos] = useState<string>('');
+  const [irpfPrevidencia, setIrpfPrevidencia] = useState<string>('');
+  const [irpfImpostoFonte, setIrpfImpostoFonte] = useState<string>('');
   const [irpfArquivoNome, setIrpfArquivoNome] = useState<string>(`informe_rendimentos_${Number(currentAno) - 1}.pdf`);
   const [irpfArquivoUrl, setIrpfArquivoUrl] = useState<string | undefined>(undefined);
 
   const handleSaveInformeIrpfRH = async () => {
     if (!irpfModalColab) return;
+    const rendVal = parseFloat(irpfRendimentos) || 0;
+    if (rendVal <= 0) {
+      setHoleriteNotice('Informe os rendimentos tributáveis (> 0) antes de publicar o Informe IRPF.');
+      return;
+    }
 
     const newInforme = {
       id: `irpf-rh-${Date.now()}`,
@@ -210,7 +228,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
       colaboradorNome: irpfModalColab.nome,
       colaboradorCpf: irpfModalColab.cpf,
       anoCalendario: irpfAnoCalendario || String(Number(currentAno) - 1),
-      rendimentosTributaveis: parseFloat(irpfRendimentos) || 0,
+      rendimentosTributaveis: rendVal,
       contribuicaoPrevidenciaria: parseFloat(irpfPrevidencia) || 0,
       impostoRetidoFonte: parseFloat(irpfImpostoFonte) || 0,
       arquivoNome: irpfArquivoNome || `informe_irpf_${irpfAnoCalendario}_${irpfModalColab.cpf.replace(/\D/g, '')}.pdf`,
@@ -234,7 +252,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     } catch (_) {}
 
     try {
-      await fetch('/api/save-informe-irpf', {
+      const res = await fetch('/api/save-informe-irpf', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -242,11 +260,21 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
         },
         body: JSON.stringify(newInforme)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setHoleriteNotice(`Informe salvo em cache local, porém o servidor retornou erro: ${errData?.error || res.status}.`);
+        return;
+      }
     } catch (err) {
       console.warn('Aviso Supabase save-informe-irpf:', err);
+      setHoleriteNotice('Sem conexão com o servidor para persistir o Informe IRPF no banco.');
+      return;
     }
 
     setHoleriteNotice(`Informe de Rendimentos IRPF (${irpfAnoCalendario}) de "${irpfModalColab.nome}" publicado com sucesso! Disponibilizado no Portal do Colaborador.`);
+    setIrpfRendimentos('');
+    setIrpfPrevidencia('');
+    setIrpfImpostoFonte('');
     setIrpfModalColab(null);
   };
 
@@ -944,6 +972,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    placeholder="0,00"
                     value={holeriteSalarioBruto}
                     onChange={(e) => setHoleriteSalarioBruto(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-slate-900 text-xs"
@@ -954,6 +983,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    placeholder="0,00"
                     value={holeriteDescontos}
                     onChange={(e) => setHoleriteDescontos(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-rose-600 text-xs"
@@ -1072,9 +1102,11 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   onChange={(e) => setIrpfAnoCalendario(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-bold text-slate-900 text-xs"
                 >
-                  <option value="2025">Ano-Calendário 2025 (Exercício 2026)</option>
-                  <option value="2024">Ano-Calendário 2024 (Exercício 2025)</option>
-                  <option value="2026">Ano-Calendário 2026 (Exercício 2027)</option>
+                  {[Number(currentAno) - 1, Number(currentAno) - 2, Number(currentAno)].map((yr) => (
+                    <option key={yr} value={String(yr)}>
+                      Ano-Calendário {yr} (Exercício {yr + 1})
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1084,6 +1116,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    placeholder="0,00"
                     value={irpfRendimentos}
                     onChange={(e) => setIrpfRendimentos(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-slate-900 text-xs"
@@ -1094,6 +1127,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    placeholder="0,00"
                     value={irpfPrevidencia}
                     onChange={(e) => setIrpfPrevidencia(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-blue-700 text-xs"
@@ -1104,6 +1138,7 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    placeholder="0,00"
                     value={irpfImpostoFonte}
                     onChange={(e) => setIrpfImpostoFonte(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-purple-700 text-xs"

@@ -2,6 +2,7 @@
 // Cálculos puros e testáveis, sem efeitos colaterais
 
 import { RegistroPontoREPP } from '../types/operational';
+import { getBrasiliaParts } from './brasiliaClock';
 
 // Fator oficial de redução da hora noturna: 60 minutos / 52.5 minutos = 1.14285714
 export const FATOR_HORA_NOTURNA_REDUZIDA = 60 / 52.5;
@@ -46,7 +47,7 @@ export function calcularHorasNoturnasIntervalo(
   let atingiuPeriodoNoturnoSignificativo = false;
 
   while (cursor < dFim) {
-    const hora = cursor.getHours();
+    const hora = getBrasiliaParts(cursor).hour;
     
     // Período Noturno Estrito: 22:00 até 04:59:59
     if (hora >= 22 || hora < 5) {

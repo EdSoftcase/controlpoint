@@ -83,9 +83,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     empresa: string;
   } | null>(null);
 
-  // Estados de Recuperação de Senha (2 fatores)
+  // Estados de Recuperação de Senha (3 fatores: CPF + E-mail/Matrícula + Data de Admissão)
   const [recIdentificador, setRecIdentificador] = useState('');
   const [recSegundoFator, setRecSegundoFator] = useState('');
+  const [recDataAdmissao, setRecDataAdmissao] = useState('');
   const [recNovaSenha, setRecNovaSenha] = useState('');
   const [recNovaSenhaConfirma, setRecNovaSenhaConfirma] = useState('');
 
@@ -281,7 +282,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  // Submissão do Formulário de Recuperação de Acesso (Duplo Fator)
+  // Submissão do Formulário de Recuperação de Acesso (Triplo Fator)
   const handleRecoverSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -293,7 +294,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
 
     if (!recSegundoFator.trim()) {
-      setErrorMessage('Informe seu E-mail corporativo ou Matrícula para validação em dois fatores.');
+      setErrorMessage('Informe seu E-mail corporativo ou Matrícula para validação em três fatores.');
+      return;
+    }
+
+    if (!recDataAdmissao.trim()) {
+      setErrorMessage('Informe sua Data de Admissão na empresa (3º fator de segurança).');
       return;
     }
 
@@ -315,6 +321,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         body: JSON.stringify({
           identificador: recIdentificador.trim(),
           segundoFator: recSegundoFator.trim(),
+          dataAdmissao: recDataAdmissao.trim(),
           novaSenha: recNovaSenha.trim()
         })
       });
@@ -325,7 +332,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         setIdentificador(recIdentificador.trim());
         setSenha(recNovaSenha.trim());
       } else {
-        setErrorMessage(data.error || 'Dados não conferem com nenhum colaborador ativo.');
+        setErrorMessage(data.error || 'Os três fatores informados não conferem com nenhum colaborador ativo.');
       }
     } catch {
       setErrorMessage('Erro ao conectar com o serviço de recuperação.');
@@ -1075,7 +1082,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  2º Fator de Validação: E-mail Corporativo ou Matrícula *
+                  2º Fator: E-mail Corporativo ou Matrícula *
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1089,6 +1096,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  3º Fator: Data de Admissão na Empresa *
+                </label>
+                <input
+                  type="date"
+                  required
+                  disabled={isLoading}
+                  value={recDataAdmissao}
+                  onChange={(e) => setRecDataAdmissao(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 font-mono"
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

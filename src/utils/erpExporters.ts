@@ -3,6 +3,7 @@
 
 import { Colaborador, RegistroPontoREPP } from '../types/operational';
 import { SistemaERPAlvo } from '../types/rhAvancado';
+import { getBrasiliaParts } from './brasiliaClock';
 
 export interface ParametrosGeracaoERP {
   sistema: SistemaERPAlvo;
@@ -13,87 +14,88 @@ export interface ParametrosGeracaoERP {
   registros: RegistroPontoREPP[];
 }
 
-/**
- * Converte data ISO em formato DDMMAAAA ou AAAAMMDD
- */
 function formatarData(dataIso: string, formato: 'DDMMAAAA' | 'AAAAMMDD' | 'DD/MM/AAAA'): string {
-  const d = new Date(dataIso);
-  const dia = String(d.getDate()).padStart(2, '0');
-  const mes = String(d.getMonth() + 1).padStart(2, '0');
-  const ano = d.getFullYear();
+  const p = getBrasiliaParts(dataIso);
+  const dia = String(p.day).padStart(2, '0');
+  const mes = String(p.month).padStart(2, '0');
+  const ano = p.year;
 
   if (formato === 'DDMMAAAA') return `${dia}${mes}${ano}`;
   if (formato === 'AAAAMMDD') return `${ano}${mes}${dia}`;
-  return `${dia}/${mes}/${ano}`;
+  return p.ddmmyyyy;
 }
 
-/**
- * Converte data ISO em HHMM ou HH:MM
- */
 function formatarHora(dataIso: string, formato: 'HHMM' | 'HH:MM'): string {
-  const d = new Date(dataIso);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  if (formato === 'HHMM') return `${hh}${mm}`;
-  return `${hh}:${mm}`;
+  const p = getBrasiliaParts(dataIso);
+  if (formato === 'HHMM') return p.hhmm.replace(':', '');
+  return p.hhmm;
+}
+
+function formatarMatriculaPosicional(raw: string, length: number, padChar: string = '0'): string {
+  const cleanAlnum = (raw || '').replace(/[^a-zA-Z0-9]/g, '');
+  const digitsOnly = (raw || '').replace(/\D/g, '');
+  const base = digitsOnly.length > 0 ? digitsOnly : (cleanAlnum || '1');
+  return base.slice(-length).padStart(length, padChar);
 }
 
 /**
  * Gera arquivo posicional para TOTVS Protheus (Layout padrão de importação de batidas)
- * Estrutura clássica de arquivo TXT:
- * Filial (2) + Matrícula (6) + Data (8 - DDMMAAAA) + Hora (4 - HHMM) + Tipo (1) + Relógio (3)
  */
 export function exportarLayoutTOTVSProtheus(params: ParametrosGeracaoERP): string {
   const { codigoFilial, colaboradores, registros, mesAnoCompetencia } = params;
   const filial = (codigoFilial || '01').slice(0, 2).padEnd(2, '0');
   const linhas: string[] = [];
 
-  // Cabeçalho de lote TOTVS
   linhas.push(`00${filial}${mesAnoCompetencia.replace('-', '')}SOFTCASE_PONTO_REPP_PROTHEUS_V12`);
 
-  // Filtra registros do mês de competência
-  const registrosCompetencia = registros.filter(r => r.dataHora.startsWith(mesAnoCompetencia));
+  const registrosCompetencia = registros.filter(
+    (r) => getBrasiliaParts(r.dataHora).mesAno === mesAnoCompetencia
+  );
 
   for (const reg of registrosCompetencia) {
-    const colab = colaboradores.find(c => c.id === reg.colaboradorId || c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''));
+    const colab = colaboradores.find(
+      (c) =>
+        c.id === reg.colaboradorId ||
+        (c.cpf && reg.colaboradorCpf && c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''))
+    );
     const matriculaRaw = colab?.matricula || reg.colaboradorMatricula || '000001';
-    const matricula = matriculaRaw.replace(/\D/g, '').slice(0, 6).padStart(6, '0');
-    
+    const matricula = formatarMatriculaPosicional(matriculaRaw, 6, '0');
+
     const dataStr = formatarData(reg.dataHora, 'DDMMAAAA');
     const horaStr = formatarHora(reg.dataHora, 'HHMM');
-    
-    // Mapeamento de tipo de marcação TOTVS (1=Entrada, 2=Saída intervalo, 3=Volta intervalo, 4=Saída dia)
+
     let tipoNum = '1';
     if (reg.tipoMarcacao === 'INTERVALO_INICIO') tipoNum = '2';
     else if (reg.tipoMarcacao === 'INTERVALO_FIM') tipoNum = '3';
     else if (reg.tipoMarcacao === 'SAIDA') tipoNum = '4';
 
-    const numRelogio = '001'; // REP-P
-
-    // Registro Tipo 10 - Batida de Ponto
+    const numRelogio = '001';
     linhas.push(`10${filial}${matricula}${dataStr}${horaStr}${tipoNum}${numRelogio}`);
   }
 
-  // Traço final de arquivo TOTVS
   linhas.push(`99${String(linhas.length - 1).padStart(6, '0')}`);
-
   return linhas.join('\r\n');
 }
 
 /**
  * Gera arquivo para Senior Sistemas (Vetorh / Ronda Ponto)
- * Layout: Data (DD/MM/AAAA) + Hora (HH:MM) + Matrícula (10) + Código Evento (04)
  */
 export function exportarLayoutSeniorVetorh(params: ParametrosGeracaoERP): string {
   const { colaboradores, registros, mesAnoCompetencia } = params;
   const linhas: string[] = [];
 
-  const registrosCompetencia = registros.filter(r => r.dataHora.startsWith(mesAnoCompetencia));
+  const registrosCompetencia = registros.filter(
+    (r) => getBrasiliaParts(r.dataHora).mesAno === mesAnoCompetencia
+  );
 
   for (const reg of registrosCompetencia) {
-    const colab = colaboradores.find(c => c.id === reg.colaboradorId || c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''));
+    const colab = colaboradores.find(
+      (c) =>
+        c.id === reg.colaboradorId ||
+        (c.cpf && reg.colaboradorCpf && c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''))
+    );
     const matriculaRaw = colab?.matricula || reg.colaboradorMatricula || '1';
-    const matricula = matriculaRaw.replace(/\D/g, '').slice(0, 10).padStart(10, '0');
+    const matricula = formatarMatriculaPosicional(matriculaRaw, 10, '0');
 
     const dataStr = formatarData(reg.dataHora, 'DD/MM/AAAA');
     const horaStr = formatarHora(reg.dataHora, 'HH:MM');
@@ -107,34 +109,36 @@ export function exportarLayoutSeniorVetorh(params: ParametrosGeracaoERP): string
 
 /**
  * Gera arquivo para Domínio Sistemas (Thomson Reuters)
- * Layout de Cartão Ponto: Código Empregado (7) + Data (DD/MM/AAAA) + Entrada 1 + Saída 1 + Entrada 2 + Saída 2
  */
 export function exportarLayoutDominioSistemas(params: ParametrosGeracaoERP): string {
   const { colaboradores, registros, mesAnoCompetencia } = params;
   const linhas: string[] = [];
 
-  // Agrupa batidas por colaborador e por data
-  const mapaPorColabData = new Map<string, RegistroPontoREPP[]>();
+  const mapaPorColabData = new Map<string, { matricula: string; ymd: string; regs: RegistroPontoREPP[] }>();
 
-  const registrosCompetencia = registros.filter(r => r.dataHora.startsWith(mesAnoCompetencia));
+  const registrosCompetencia = registros.filter(
+    (r) => getBrasiliaParts(r.dataHora).mesAno === mesAnoCompetencia
+  );
 
   for (const reg of registrosCompetencia) {
-    const colab = colaboradores.find(c => c.id === reg.colaboradorId || c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''));
-    const matricula = colab?.matricula || reg.colaboradorMatricula || '1';
-    const dataYmd = reg.dataHora.slice(0, 10);
-    const chave = `${matricula}__${dataYmd}`;
+    const colab = colaboradores.find(
+      (c) =>
+        c.id === reg.colaboradorId ||
+        (c.cpf && reg.colaboradorCpf && c.cpf.replace(/\D/g, '') === reg.colaboradorCpf.replace(/\D/g, ''))
+    );
+    const matricula = colab?.matricula || reg.colaboradorMatricula || reg.colaboradorId || '1';
+    const dataYmd = getBrasiliaParts(reg.dataHora).ymd;
+    const chave = `${colab?.id || reg.colaboradorId || matricula}__${dataYmd}`;
 
     if (!mapaPorColabData.has(chave)) {
-      mapaPorColabData.set(chave, []);
+      mapaPorColabData.set(chave, { matricula, ymd: dataYmd, regs: [] });
     }
-    mapaPorColabData.get(chave)!.push(reg);
+    mapaPorColabData.get(chave)!.regs.push(reg);
   }
 
-  // Ordena por horário e monta linha consolidada do dia
-  mapaPorColabData.forEach((regs, chave) => {
-    const [matriculaRaw, dataYmd] = chave.split('__');
-    const codEmpregado = matriculaRaw.replace(/\D/g, '').slice(0, 7).padStart(7, ' ');
-    const [ano, mes, dia] = dataYmd.split('-');
+  mapaPorColabData.forEach(({ matricula, ymd, regs }) => {
+    const codEmpregado = formatarMatriculaPosicional(matricula, 7, ' ');
+    const [ano, mes, dia] = ymd.split('-');
     const dataFormatada = `${dia}/${mes}/${ano}`;
 
     regs.sort((a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime());

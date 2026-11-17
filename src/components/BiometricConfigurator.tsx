@@ -56,6 +56,8 @@ interface BiometricConfiguratorProps {
   onUpdateColaboradores: (colaboradores: Colaborador[]) => void;
   estabelecimentos?: Estabelecimento[];
   onUpdateEstabelecimentos?: (estabelecimentos: Estabelecimento[]) => void;
+  initialThreshold?: number;
+  onThresholdChange?: (nextThreshold: number) => void;
 }
 
 export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
@@ -63,7 +65,9 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
   colaboradores,
   onUpdateColaboradores,
   estabelecimentos = [],
-  onUpdateEstabelecimentos
+  onUpdateEstabelecimentos,
+  initialThreshold = 82.0,
+  onThresholdChange
 }) => {
   // Aba ativa do Módulo 02
   const [moduleSubTab, setModuleSubTab] = useState<'biometria' | 'geofencing'>('geofencing');
@@ -72,7 +76,8 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
 
   // Estados da Biometria Facial
   const [searchTerm, setSearchTerm] = useState('');
-  const [globalThreshold, setGlobalThreshold] = useState<number>(82.0);
+  const [globalThreshold, setGlobalThreshold] = useState<number>(initialThreshold);
+  const [isSavingThreshold, setIsSavingThreshold] = useState<boolean>(false);
   const [selectedColabForEnroll, setSelectedColabForEnroll] = useState<Colaborador | null>(null);
   const [enrollmentStep, setEnrollmentStep] = useState<'idle' | 'capturing' | 'success'>('idle');
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'SUCCESS' | 'ERROR'; text: string } | null>(null);
@@ -133,6 +138,69 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
       setEstForm(selectedEst);
     }
   }, [selectedEstId, estabelecimentos]);
+
+  React.useEffect(() => {
+    setGlobalThreshold(initialThreshold);
+  }, [initialThreshold]);
+
+  React.useEffect(() => {
+    let active = true;
+    const loadSettings = async () => {
+      if (!bearerToken) return;
+      try {
+        const res = await fetch(`/api/app-settings?tenantId=${encodeURIComponent(activeTenant.id)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && typeof json.biometricThreshold === 'number' && !Number.isNaN(json.biometricThreshold)) {
+          setGlobalThreshold(json.biometricThreshold);
+          onThresholdChange?.(json.biometricThreshold);
+        }
+      } catch (err) {
+        console.warn('Aviso ao carregar app-settings:', err);
+      }
+    };
+    loadSettings();
+    return () => { active = false; };
+  }, [activeTenant.id, bearerToken]);
+
+  const handleSaveGlobalThreshold = async () => {
+    setIsSavingThreshold(true);
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({
+          tenantId: activeTenant.id,
+          biometricThreshold: globalThreshold
+        })
+      });
+      if (res.ok) {
+        onThresholdChange?.(globalThreshold);
+        setFeedbackMsg({
+          type: 'SUCCESS',
+          text: `Limiar biométrico global de ${globalThreshold}% salvo no servidor para ${activeTenant.razaoSocial}!`
+        });
+      } else {
+        setFeedbackMsg({
+          type: 'ERROR',
+          text: 'Não foi possível salvar o limiar no servidor. Verifique sua permissão administrativa.'
+        });
+      }
+    } catch {
+      setFeedbackMsg({
+        type: 'ERROR',
+        text: 'Erro de conexão ao salvar o limiar biométrico.'
+      });
+    } finally {
+      setIsSavingThreshold(false);
+      setTimeout(() => setFeedbackMsg(null), 4000);
+    }
+  };
 
   // Posição de Teste do Trabalhador no Mapa
   const [workerTestPos, setWorkerTestPos] = useState<{ lat: number; lng: number }>({
@@ -341,7 +409,8 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
           algorithmUsed: 'CONTINGENCIA_PORTARIA_671',
           hashTemplate: hashTemplate,
           gps: contingencyGps || { lat: selectedEst.latitude, lng: selectedEst.longitude },
-          livenessManualConfirmed: contingencyLivenessAnswer
+          livenessManualConfirmed: contingencyLivenessAnswer,
+          contingencySelfieDataUrl: contingencySelfieDataUrl || undefined
         })
       });
     } catch (err) {
@@ -494,43 +563,65 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
     }
 
     try {
-      const { error } = await supabase.from('establishments').upsert(
-        {
-          establishment_id: estForm.id,
-          tenant_id: estForm.tenantId || activeTenant.id,
-          nome: estForm.nome,
-          cnpj: estForm.cnpj || activeTenant.cnpj,
-          tipo: estForm.tipo || 'MATRIZ',
-          cep: estForm.cep || null,
-          latitude: estForm.latitude,
-          longitude: estForm.longitude,
-          cerca_raio_metros: estForm.cercaRaioMetros,
-          bloquear_fora_do_raio: estForm.bloquearForaDoRaio ?? true,
-          endereco_completo: estForm.enderecoCompleto || null,
-          municipio: estForm.municipio || null,
-          uf: estForm.uf || null,
-          fuso_horario: estForm.fusoHorario || 'America/Sao_Paulo'
-        },
-        { onConflict: 'establishment_id' }
-      );
-      if (error) {
-        setFeedbackMsg({
-          type: 'ERROR',
-          text: `Erro ao persistir Geofencing no Supabase: ${error.message}`
+      if (bearerToken) {
+        const res = await fetch('/api/establishments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            ...estForm,
+            tenantId: estForm.tenantId || activeTenant.id
+          })
         });
-        return;
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          setFeedbackMsg({
+            type: 'ERROR',
+            text: `Erro ao persistir Geofencing no servidor: ${errJson?.error || res.status}`
+          });
+          return;
+        }
+      } else if (supabase) {
+        const { error } = await supabase.from('establishments').upsert(
+          {
+            establishment_id: estForm.id,
+            tenant_id: estForm.tenantId || activeTenant.id,
+            nome: estForm.nome,
+            cnpj: estForm.cnpj || activeTenant.cnpj,
+            tipo: estForm.tipo || 'MATRIZ',
+            cep: estForm.cep || null,
+            latitude: estForm.latitude,
+            longitude: estForm.longitude,
+            cerca_raio_metros: estForm.cercaRaioMetros,
+            bloquear_fora_do_raio: estForm.bloquearForaDoRaio ?? true,
+            endereco_completo: estForm.enderecoCompleto || null,
+            municipio: estForm.municipio || null,
+            uf: estForm.uf || null,
+            fuso_horario: estForm.fusoHorario || 'America/Sao_Paulo'
+          },
+          { onConflict: 'establishment_id' }
+        );
+        if (error) {
+          setFeedbackMsg({
+            type: 'ERROR',
+            text: `Erro ao persistir Geofencing no Supabase: ${error.message}`
+          });
+          return;
+        }
       }
     } catch (err: any) {
       setFeedbackMsg({
         type: 'ERROR',
-        text: `Falha ao conectar no Supabase: ${err?.message || 'verifique conexão'}`
+        text: `Falha ao conectar ao servidor: ${err?.message || 'verifique conexão'}`
       });
       return;
     }
 
     setFeedbackMsg({
       type: 'SUCCESS',
-      text: `Parâmetros de Geofencing (${estForm.cercaRaioMetros}m) salvos e persistidos no Supabase para "${estForm.nome}"!`
+      text: `Parâmetros de Geofencing (${estForm.cercaRaioMetros}m) salvos e persistidos no banco de dados para "${estForm.nome}"!`
     });
     setTimeout(() => setFeedbackMsg(null), 5000);
   };
@@ -1135,25 +1226,43 @@ export const BiometricConfigurator: React.FC<BiometricConfiguratorProps> = ({
                   Taxa de similaridade geométrica exigida para aceitar a marcação no coletor.
                 </p>
               </div>
-              <div className="flex items-center gap-4">
-                <input
-                  type="range"
-                  min="90"
-                  max="99.5"
-                  step="0.5"
-                  value={globalThreshold}
-                  onChange={(e) => setGlobalThreshold(Number(e.target.value))}
-                  className="w-full accent-emerald-600 cursor-pointer"
-                />
-                <span className="font-mono font-bold text-slate-900 text-sm min-w-[50px] text-right">
-                  {globalThreshold}%
-                </span>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="75"
+                    max="99.5"
+                    step="0.5"
+                    value={globalThreshold}
+                    onChange={(e) => setGlobalThreshold(Number(e.target.value))}
+                    className="w-full accent-emerald-600 cursor-pointer"
+                  />
+                  <span className="font-mono font-bold text-slate-900 text-sm min-w-[54px] text-right">
+                    {globalThreshold}%
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                  <span>75% (Flexível)</span>
+                  <span>82% (Padrão)</span>
+                  <span>99.5% (Máxima Segurança)</span>
+                </div>
               </div>
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-start gap-2">
-                <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                <span>
-                  Valores acima de 98% mitigam falsos positivos em ambientes corporativos com alta segurança.
-                </span>
+              <div className="flex flex-col gap-2">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-start gap-2">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <span>
+                    Valores entre 80% e 95% equilibram agilidade e proteção antifraude; acima de 95% exigem iluminação controlada.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveGlobalThreshold}
+                  disabled={isSavingThreshold}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5 text-emerald-400" />
+                  {isSavingThreshold ? 'Salvando política...' : 'Salvar Limiar Global'}
+                </button>
               </div>
             </div>
           </div>

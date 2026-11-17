@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { getBrasiliaMonthYear, getMonthLabelPtBr } from '../utils/brasiliaClock';
+import { useAuth } from './AuthContext';
 import {
   Colaborador,
   RegistroPontoREPP,
@@ -98,12 +99,39 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
   // Modal de Detalhes (Raio-X)
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState<ScoringIPAItem | null>(null);
 
+  const { session, authToken } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
+
   // Parâmetros de Premiação do RH (Simulador Financeiro)
   const [bonusDiamante, setBonusDiamante] = useState<number>(500);
   const [bonusOuro, setBonusOuro] = useState<number>(350);
   const [bonusPrata, setBonusPrata] = useState<number>(150);
   const [mostrarSimulador, setMostrarSimulador] = useState<boolean>(false);
   const [loteAprovadoFeedback, setLoteAprovadoFeedback] = useState<boolean>(false);
+  const [isApprovingLote, setIsApprovingLote] = useState<boolean>(false);
+  const [loteErro, setLoteErro] = useState<string | null>(null);
+  const [historicoLotes, setHistoricoLotes] = useState<any[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadBatches = async () => {
+      if (!bearerToken) return;
+      try {
+        const res = await fetch(`/api/ipa-reward-batches?tenantId=${encodeURIComponent(activeTenant.id)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && Array.isArray(json.batches)) {
+          setHistoricoLotes(json.batches);
+        }
+      } catch (err) {
+        console.warn('Aviso ao carregar histórico de lotes IPA:', err);
+      }
+    };
+    loadBatches();
+    return () => { active = false; };
+  }, [activeTenant.id, bearerToken]);
 
   // =========================================================================
   // MOTOR DE CÁLCULO: ALGORITMO DO ÍNDICE DE PERFORMANCE & ASSIDUIDADE (IPA)
@@ -126,8 +154,8 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
       const pontosForaCerca = colabPontos.filter((r) => r.foraDoRaioGeofence);
       const totalDivergencias = pontosForaCerca.length + intervaloExc.length;
 
-      // 3. Taxas de biometria e geofencing
-      const taxaBiometria = colab.biometriaCadastrada ? 100 : 92.5;
+      // 3. Taxas reais de biometria e geofencing
+      const taxaBiometria = colab.biometriaCadastrada ? 100 : 0;
       const taxaCerca = colabPontos.length > 0 
         ? Math.round(((colabPontos.length - pontosForaCerca.length) / colabPontos.length) * 100)
         : 100;
@@ -349,12 +377,59 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
     document.body.removeChild(link);
   };
 
-  // Ação: Aprovar Lote de Premiações
-  const handleAprovarLote = () => {
-    setLoteAprovadoFeedback(true);
-    setTimeout(() => {
-      setLoteAprovadoFeedback(false);
-    }, 4500);
+  // Ação: Aprovar e Persistir Lote de Premiações
+  const handleAprovarLote = async () => {
+    const elegiveis = rankingIPA.filter((i) => i.statusPremiacao !== 'INELEGIVEL' && i.valorBonus > 0);
+    if (elegiveis.length === 0) {
+      setLoteErro('Nenhum colaborador elegível com bônus positivo nesta competência.');
+      setTimeout(() => setLoteErro(null), 4000);
+      return;
+    }
+
+    setIsApprovingLote(true);
+    setLoteErro(null);
+    try {
+      const res = await fetch('/api/ipa-reward-batches', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({
+          tenantId: activeTenant.id,
+          competencia: periodoSelecionado,
+          totalBeneficiaries: elegiveis.length,
+          totalPayout: stats.totalOrcamentoBonus,
+          beneficiaries: elegiveis.map((item) => ({
+            colaboradorId: item.colaboradorId,
+            colaboradorNome: item.colaboradorNome,
+            matricula: item.colaboradorMatricula,
+            nivel: item.nivel,
+            scoreGeral: item.scoreGeral,
+            valorBonus: item.valorBonus
+          }))
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        setLoteErro(errJson.error || 'Erro ao homologar lote de premiação no servidor.');
+        return;
+      }
+
+      const json = await res.json();
+      if (json.batch) {
+        setHistoricoLotes((prev) => [json.batch, ...prev]);
+      }
+      setLoteAprovadoFeedback(true);
+      setTimeout(() => {
+        setLoteAprovadoFeedback(false);
+      }, 5000);
+    } catch {
+      setLoteErro('Falha de conexão ao persistir lote de premiação IPA.');
+    } finally {
+      setIsApprovingLote(false);
+    }
   };
 
   return (
@@ -402,10 +477,11 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
 
             <button
               onClick={handleAprovarLote}
-              className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all active:scale-95"
+              disabled={isApprovingLote}
+              className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all active:scale-95 disabled:opacity-50"
             >
               <CheckCheck className="w-4 h-4 text-slate-950" />
-              Aprovar Lote de Premiações
+              {isApprovingLote ? 'Homologando Lote...' : 'Aprovar Lote de Premiações'}
             </button>
           </div>
         </div>
@@ -415,7 +491,7 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
           <div className="mt-4 p-3 bg-emerald-500/20 border border-emerald-400/50 rounded-xl flex items-center justify-between text-xs text-emerald-200 animate-fadeIn">
             <span className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <strong>Lote de Premiações Homologado:</strong> R$ {stats.totalOrcamentoBonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} liberados para inclusão na folha de pagamento para {stats.totalElegiveisPremiacao} colaboradores!
+              <strong>Lote de Premiações Homologado e Persistido:</strong> R$ {stats.totalOrcamentoBonus.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} liberados para inclusão na folha de pagamento para {stats.totalElegiveisPremiacao} colaboradores!
             </span>
             <button onClick={() => setLoteAprovadoFeedback(false)} className="text-emerald-400 hover:text-white">
               <X className="w-4 h-4" />
@@ -973,6 +1049,37 @@ export const PainelScoringIPA: React.FC<PainelScoringIPAProps> = ({
           </table>
         </div>
       </div>
+
+      {loteErro && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-800 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{loteErro}</span>
+        </div>
+      )}
+
+      {historicoLotes.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+            <CheckCheck className="w-4 h-4 text-emerald-600" />
+            Histórico de Lotes de Premiação Homologados ({historicoLotes.length})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {historicoLotes.slice(0, 6).map((batch: any) => (
+              <div key={batch.batch_id || batch.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
+                <div className="flex items-center justify-between font-bold text-slate-900">
+                  <span>Competência {batch.competencia}</span>
+                  <span className="font-mono text-emerald-700">
+                    R$ {Number(batch.total_payout || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  {batch.total_beneficiaries || 0} beneficiários • Homologado por {batch.processed_by || 'RH'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 7. MODAL DE RAIO-X & EXTRATO DE PERFORMANCE DO COLABORADOR               */}

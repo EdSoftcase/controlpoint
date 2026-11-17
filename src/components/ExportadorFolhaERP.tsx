@@ -43,7 +43,9 @@ export function ExportadorFolhaERP({ tenant, colaboradores, registros }: Exporta
   const [copiado, setCopiado] = useState<boolean>(false);
   const [feedbackDownload, setFeedbackDownload] = useState<string | null>(null);
 
-  const totalRegistrosCompetencia = registros.filter(r => r.dataHora.startsWith(competencia)).length;
+  const totalRegistrosCompetencia = registros.filter(
+    (r) => getBrasiliaMonthYear(r.dataHora) === competencia
+  ).length;
 
   const handleGerarExportacaoERP = (sistema: SistemaERPAlvo) => {
     let conteudo = '';

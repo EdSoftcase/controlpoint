@@ -574,9 +574,13 @@ export function matchBiometricFace(
   liveVector: number[] | undefined,
   colaboradorId: string,
   storedHashOrTemplate?: string,
-  simulatedMismatchForce = false
+  simulatedMismatchForce = false,
+  customThreshold?: number
 ): BiometricMatchResult {
-  const threshold = 82.0; // Limiar corporativo estrito REP-P
+  const threshold =
+    typeof customThreshold === 'number' && !Number.isNaN(customThreshold) && customThreshold >= 50 && customThreshold <= 99.9
+      ? Number(customThreshold.toFixed(1))
+      : 82.0;
 
   if (simulatedMismatchForce) {
     return {
@@ -740,4 +744,123 @@ const LIVENESS_CHALLENGES: LivenessChallenge[] = [
 export function getRandomLivenessChallenge(): LivenessChallenge {
   const index = Math.floor(Math.random() * LIVENESS_CHALLENGES.length);
   return LIVENESS_CHALLENGES[index];
+}
+
+export interface LivenessSample {
+  landmarks?: FaceLandmarks;
+  faceBox?: { x: number; y: number; width: number; height: number };
+  vector?: number[];
+  livenessScore?: number;
+}
+
+export interface LivenessEvaluationResult {
+  passed: boolean;
+  score: number;
+  message: string;
+}
+
+/**
+ * Avalia variação geométrica e vetorial real entre múltiplos quadros consecutivos
+ * durante o desafio de Prova de Vida Ativa (anti-foto estática / anti-replay).
+ */
+export function evaluateLivenessMotion(
+  challengeId: LivenessChallenge['id'],
+  samples: LivenessSample[]
+): LivenessEvaluationResult {
+  const valid = (samples || []).filter((s) => s && (s.landmarks || s.faceBox || (s.vector && s.vector.length === 64)));
+  if (valid.length < 2) {
+    return {
+      passed: false,
+      score: 0,
+      message: 'Quadros insuficientes para validar movimento natural na prova de vida.'
+    };
+  }
+
+  let maxVectorDelta = 0;
+  let deltaX = 0;
+  let deltaY = 0;
+  let maxEyeLumaDelta = 0;
+
+  for (let i = 1; i < valid.length; i++) {
+    const prev = valid[i - 1];
+    const curr = valid[i];
+
+    if (prev.vector && curr.vector && prev.vector.length === 64 && curr.vector.length === 64) {
+      let vecDiff = 0;
+      for (let k = 0; k < 64; k++) {
+        vecDiff += Math.abs(curr.vector[k] - prev.vector[k]);
+      }
+      if (vecDiff > maxVectorDelta) maxVectorDelta = vecDiff;
+
+      // Células superiores centrais (linhas 2-3, cols 2-5 -> região ocular no grid 8x8)
+      let eyeDiff = 0;
+      for (let r = 2; r <= 3; r++) {
+        for (let c = 2; c <= 5; c++) {
+          const idx = r * 8 + c;
+          eyeDiff += Math.abs(curr.vector[idx] - prev.vector[idx]);
+        }
+      }
+      if (eyeDiff > maxEyeLumaDelta) maxEyeLumaDelta = eyeDiff;
+    }
+
+    const prevX = prev.landmarks?.nose?.x ?? (prev.faceBox ? prev.faceBox.x + prev.faceBox.width / 2 : 0);
+    const currX = curr.landmarks?.nose?.x ?? (curr.faceBox ? curr.faceBox.x + curr.faceBox.width / 2 : 0);
+    const prevY = prev.landmarks?.nose?.y ?? (prev.faceBox ? prev.faceBox.y + prev.faceBox.height / 2 : 0);
+    const currY = curr.landmarks?.nose?.y ?? (curr.faceBox ? curr.faceBox.y + curr.faceBox.height / 2 : 0);
+
+    deltaX += currX - prevX;
+    deltaY += currY - prevY;
+  }
+
+  const first = valid[0];
+  const last = valid[valid.length - 1];
+  const netDx =
+    (last.landmarks?.nose?.x ?? (last.faceBox ? last.faceBox.x + last.faceBox.width / 2 : 0)) -
+    (first.landmarks?.nose?.x ?? (first.faceBox ? first.faceBox.x + first.faceBox.width / 2 : 0));
+  const netDy =
+    (last.landmarks?.nose?.y ?? (last.faceBox ? last.faceBox.y + last.faceBox.height / 2 : 0)) -
+    (first.landmarks?.nose?.y ?? (first.faceBox ? first.faceBox.y + first.faceBox.height / 2 : 0));
+
+  const totalMotion = Math.hypot(deltaX, deltaY) + maxVectorDelta * 12;
+
+  // Foto congelada ou vídeo estático tem variação quase nula
+  if (maxVectorDelta < 0.015 && Math.hypot(netDx, netDy) < 1.5) {
+    return {
+      passed: false,
+      score: 35,
+      message: 'Nenhum movimento facial detectado. Evite fotos estáticas e execute a ação solicitada.'
+    };
+  }
+
+  if (challengeId === 'PISCAR') {
+    const passed = maxEyeLumaDelta >= 0.035 || maxVectorDelta >= 0.06;
+    return {
+      passed,
+      score: passed ? Math.min(99, Math.round(82 + maxEyeLumaDelta * 120)) : 48,
+      message: passed
+        ? 'Variação ocular confirmada com sucesso.'
+        : 'Piscada não detectada. Pisque naturalmente olhando para a câmera.'
+    };
+  }
+
+  if (challengeId === 'VIRAR_DIREITA' || challengeId === 'VIRAR_ESQUERDA') {
+    const passed = Math.abs(netDx) >= 2.0 || maxVectorDelta >= 0.075;
+    return {
+      passed,
+      score: passed ? Math.min(99, Math.round(84 + Math.min(15, totalMotion * 0.8))) : 52,
+      message: passed
+        ? 'Movimento lateral confirmado com sucesso.'
+        : 'Movimento lateral insuficiente. Gire levemente o rosto conforme instruído.'
+    };
+  }
+
+  // INCLINAR_CABECA
+  const passed = Math.abs(netDy) >= 2.0 || maxVectorDelta >= 0.075;
+  return {
+    passed,
+    score: passed ? Math.min(99, Math.round(84 + Math.min(15, totalMotion * 0.8))) : 52,
+    message: passed
+      ? 'Inclinação facial confirmada com sucesso.'
+      : 'Movimento insuficiente. Incline levemente a cabeça frente à câmera.'
+  };
 }

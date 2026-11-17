@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Tenant,
   Estabelecimento,
@@ -35,7 +35,8 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
   feriados,
   onAddFeriado
 }) => {
-  const { supabase } = useAuth();
+  const { session, authToken, supabase } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
   const hojeBrtYmd = getBrasiliaYmd();
   const anoAtualBrt = getBrasiliaParts().year;
   const [subTab, setSubTab] = useState<'catalogo' | 'calendario-colaborador'>('catalogo');
@@ -72,6 +73,18 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
     diasUteisSemana: 5,
     domingosEFeriadosSemana: 2
   });
+
+  useEffect(() => {
+    if (colaboradores.length > 0 && !colaboradores.some((c) => c.id === selectedColaboradorId)) {
+      setSelectedColaboradorId(colaboradores[0].id);
+    }
+  }, [colaboradores, selectedColaboradorId]);
+
+  useEffect(() => {
+    if (feriados.length > 0 && !feriados.some((f) => f.id === simulacaoData.feriadoId)) {
+      setSimulacaoData((prev) => ({ ...prev, feriadoId: feriados[0].id }));
+    }
+  }, [feriados, simulacaoData.feriadoId]);
 
   // Feriados do tenant ativo
   const tenantFeriados = useMemo(() => {
@@ -195,22 +208,43 @@ export const GestaoFeriados: React.FC<GestaoFeriadosProps> = ({
     };
 
     try {
-      await supabase.from('holidays').upsert({
-        holiday_id: novo.id,
-        tenant_id: novo.tenantId,
-        nome: novo.nome,
-        data: novo.data,
-        tipo: novo.tipo,
-        uf: novo.uf || null,
-        municipio: novo.municipio || null,
-        recorrente_anual: novo.recorrenteAnual,
-        legislacao_base: novo.legislacaoBase,
-        adicional_hora_extra_percentual: novo.adicionalHoraExtraPercentual,
-        gera_folga_compensatoria: novo.geraFolgaCompensatoria,
-        afeta_dsr: novo.afetaDSR
-      }, { onConflict: 'holiday_id' });
-    } catch (err) {
-      console.warn('Aviso sincronização Supabase feriado:', err);
+      if (bearerToken) {
+        const res = await fetch('/api/holidays', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(novo)
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          setModalError(errData?.error || `Erro ao salvar feriado no servidor (${res.status}).`);
+          return;
+        }
+      } else if (supabase) {
+        const { error } = await supabase.from('holidays').upsert({
+          holiday_id: novo.id,
+          tenant_id: novo.tenantId,
+          nome: novo.nome,
+          data: novo.data,
+          tipo: novo.tipo,
+          uf: novo.uf || null,
+          municipio: novo.municipio || null,
+          recorrente_anual: novo.recorrenteAnual,
+          legislacao_base: novo.legislacaoBase,
+          adicional_hora_extra_percentual: novo.adicionalHoraExtraPercentual,
+          gera_folga_compensatoria: novo.geraFolgaCompensatoria,
+          afeta_dsr: novo.afetaDSR
+        }, { onConflict: 'holiday_id' });
+        if (error) {
+          setModalError(error.message);
+          return;
+        }
+      }
+    } catch (err: any) {
+      setModalError(err?.message || 'Erro de conexão ao salvar feriado.');
+      return;
     }
 
     onAddFeriado(novo);

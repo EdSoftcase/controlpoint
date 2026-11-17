@@ -76,8 +76,8 @@ export function calcularStatusDiaEscala(
   dataBaseCiclo: string = '2026-01-01'
 ): StatusDiaEscala {
   const [year, month, day] = dataYmd.split('-').map(Number);
-  const dataAtual = new Date(year, month - 1, day, 12, 0, 0);
-  const diaSemana = dataAtual.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  const dataAtual = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const diaSemana = dataAtual.getUTCDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
 
   // 1. Escala 5x2 Comercial
   if (tipoEscala === '5x2') {
@@ -113,15 +113,13 @@ export function calcularStatusDiaEscala(
 
   // 2. Escala 12x36 (Plantonista)
   if (tipoEscala === '12x36') {
-    const [baseY, baseM, baseD] = dataBaseCiclo.split('-').map(Number);
-    const dataBase = new Date(baseY, baseM - 1, baseD, 12, 0, 0);
-    
-    // Diferença em dias inteiros
+    const safeBaseStr = /^\d{4}-\d{2}-\d{2}$/.test(dataBaseCiclo) ? dataBaseCiclo : '2026-01-01';
+    const [baseY, baseM, baseD] = safeBaseStr.split('-').map(Number);
+    const dataBase = new Date(Date.UTC(baseY, baseM - 1, baseD, 12, 0, 0));
+
     const diffTime = dataAtual.getTime() - dataBase.getTime();
     const diffDays = Math.round(diffTime / (1000 * 3600 * 24));
-    
-    // Se Turma A: trabalha em dias com diferença par (0, 2, 4...)
-    // Se Turma B: trabalha em dias com diferença ímpar (1, 3, 5...)
+
     const isPlantaoTurmaA = Math.abs(diffDays) % 2 === 0;
     const trabalhaHoje = turma === 'A' ? isPlantaoTurmaA : !isPlantaoTurmaA;
 
@@ -170,7 +168,6 @@ export function calcularStatusDiaEscala(
     };
   }
 
-  // Fallback seguro
   return {
     dataYmd,
     tipoDia: diaSemana === 0 ? 'DSR' : (diaSemana === 6 ? 'FOLGA_PREVISTA' : 'TRABALHO'),
@@ -191,7 +188,7 @@ export function gerarCalendarioMesEscala(
   turma: 'A' | 'B' = 'A',
   dataBaseCiclo: string = '2026-01-01'
 ): StatusDiaEscala[] {
-  const diasNoMes = new Date(ano, mesZeroBased + 1, 0).getDate();
+  const diasNoMes = new Date(Date.UTC(ano, mesZeroBased + 1, 0)).getUTCDate();
   const lista: StatusDiaEscala[] = [];
 
   for (let dia = 1; dia <= diasNoMes; dia++) {

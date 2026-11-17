@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Departamento, Colaborador, SolicitacaoHoraExtra, SolicitacaoAjustePonto } from '../types/operational';
 import { AuthUser } from '../types/auth';
 import { useAuth } from './AuthContext';
@@ -18,7 +18,9 @@ import {
   Send,
   PenTool,
   Paperclip,
-  Megaphone
+  Megaphone,
+  ArrowLeftRight,
+  AlertTriangle
 } from 'lucide-react';
 import { GestaoMuralEAtendimento } from './rh/GestaoMuralEAtendimento';
 
@@ -45,9 +47,16 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   onUpdateSolicitacoesAjuste,
   currentUser
 }) => {
-  const { supabase } = useAuth();
-  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'equipes' | 'ajustes' | 'mural_atendimento'>('aprovacoes');
+  const { supabase, session, authToken } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
+  const targetTenantId = currentUser?.tenantId || colaboradores[0]?.tenantId || departamentos[0]?.tenantId || 'tenant-01';
+  const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'ajustes' | 'trocas' | 'equipes' | 'mural_atendimento'>('aprovacoes');
   
+  // Trocas de Turno
+  const [shiftSwaps, setShiftSwaps] = useState<any[]>([]);
+  const [isLoadingSwaps, setIsLoadingSwaps] = useState<boolean>(false);
+  const [swapFeedback, setSwapFeedback] = useState<string | null>(null);
+
   // Filtros de Aprovação de Horas Extras
   const [statusFilter, setStatusFilter] = useState<'TODOS' | 'PENDENTE' | 'APROVADO' | 'REJEITADO'>('PENDENTE');
   const [selectedGestorFilter, setSelectedGestorFilter] = useState<string>(
@@ -75,6 +84,54 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
     tipoHoraExtra: 'NORMAL_50' as 'NORMAL_50' | 'FERIADO_100',
     justificativa: ''
   });
+
+  useEffect(() => {
+    if (colaboradores.length > 0 && !colaboradores.some((c) => c.id === novaHeForm.colaboradorId)) {
+      setNovaHeForm((prev) => ({ ...prev, colaboradorId: colaboradores[0].id }));
+    }
+  }, [colaboradores, novaHeForm.colaboradorId]);
+
+  const carregarShiftSwaps = async () => {
+    if (!bearerToken) return;
+    setIsLoadingSwaps(true);
+    try {
+      const res = await fetch(`/api/shift-swaps?tenantId=${encodeURIComponent(targetTenantId)}`, {
+        headers: { Authorization: `Bearer ${bearerToken}` }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setShiftSwaps(Array.isArray(json.swaps) ? json.swaps : []);
+      }
+    } catch (err) {
+      console.warn('Aviso ao buscar trocas de turno:', err);
+    } finally {
+      setIsLoadingSwaps(false);
+    }
+  };
+
+  useEffect(() => {
+    carregarShiftSwaps();
+  }, [targetTenantId, bearerToken]);
+
+  const handleDecidirTrocaTurno = async (swapId: string, status: 'APROVADO_SUPERVISOR' | 'REJEITADO_SUPERVISOR') => {
+    try {
+      const res = await fetch('/api/update-shift-swap', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({ swapId, status })
+      });
+      if (res.ok) {
+        setShiftSwaps((prev) => prev.map((s) => (s.swap_id === swapId ? { ...s, status } : s)));
+        setSwapFeedback(status === 'APROVADO_SUPERVISOR' ? 'Troca de plantão homologada com sucesso!' : 'Solicitação de troca recusada.');
+        setTimeout(() => setSwapFeedback(null), 4000);
+      }
+    } catch (err) {
+      console.warn('Erro ao atualizar troca de turno:', err);
+    }
+  };
 
   // Lista dinâmica de Gestores derivados dos departamentos, colaboradores e usuário logado
   const gestoresDisponiveis = useMemo(() => {
@@ -147,14 +204,15 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
 
     const brtNow = getBrasiliaParts();
     const decisaoStr = `${brtNow.formatted} · Destino: ${destinoAprovacao === 'BANCO_HORAS' ? 'Banco de Horas (Compensação)' : 'Folha de Pagamento'}`;
-    let approvedItem: SolicitacaoHoraExtra | null = null;
+    let approvedItem: (SolicitacaoHoraExtra & { destinoAprovacao?: string }) | null = null;
 
     const atualizadas = horasExtras.map((he) => {
       if (he.id === approvingHeId) {
         approvedItem = {
           ...he,
           status: 'APROVADO' as const,
-          dataDecisao: decisaoStr
+          dataDecisao: decisaoStr,
+          destinoAprovacao
         };
         return approvedItem;
       }
@@ -164,30 +222,22 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
     onUpdateHorasExtras(atualizadas);
     setApprovingHeId(null);
 
-    if (approvedItem && supabase) {
+    if (approvedItem && bearerToken) {
       try {
-        await supabase.from('overtime_requests').upsert({
-          request_id: (approvedItem as SolicitacaoHoraExtra).id,
-          tenant_id: (approvedItem as SolicitacaoHoraExtra).tenantId,
-          collaborator_id: (approvedItem as SolicitacaoHoraExtra).colaboradorId,
-          collaborator_name: (approvedItem as SolicitacaoHoraExtra).colaboradorNome,
-          collaborator_cpf: (approvedItem as SolicitacaoHoraExtra).colaboradorCpf,
-          departamento_id: (approvedItem as SolicitacaoHoraExtra).departamentoId,
-          departamento_nome: (approvedItem as SolicitacaoHoraExtra).departamentoNome,
-          gestor_id: (approvedItem as SolicitacaoHoraExtra).gestorId,
-          gestor_nome: (approvedItem as SolicitacaoHoraExtra).gestorNome,
-          data: (approvedItem as SolicitacaoHoraExtra).data,
-          horario_contratado: (approvedItem as SolicitacaoHoraExtra).horarioContratado,
-          horario_realizado: (approvedItem as SolicitacaoHoraExtra).horarioRealizado,
-          minutos_extras: (approvedItem as SolicitacaoHoraExtra).minutosExtras,
-          horas_extras_formatadas: (approvedItem as SolicitacaoHoraExtra).horasExtrasFormatadas,
-          tipo_hora_extra: (approvedItem as SolicitacaoHoraExtra).tipoHoraExtra,
-          justificativa: (approvedItem as SolicitacaoHoraExtra).justificativa,
-          status: 'APROVADO',
-          data_decisao: brtNow.iso
-        }, { onConflict: 'request_id' });
+        await fetch('/api/save-overtime', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            ...(approvedItem as any),
+            dataDecisao: brtNow.iso,
+            destinoAprovacao
+          })
+        });
       } catch (err) {
-        console.warn('Aviso ao salvar aprovação H.E. no Supabase:', err);
+        console.warn('Aviso ao salvar aprovação H.E. no servidor:', err);
       }
     }
   };
@@ -215,31 +265,21 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
     setRejectingHeId(null);
     setMotivoRejeicao('');
 
-    if (rejectedItem && supabase) {
+    if (rejectedItem && bearerToken) {
       try {
-        await supabase.from('overtime_requests').upsert({
-          request_id: (rejectedItem as SolicitacaoHoraExtra).id,
-          tenant_id: (rejectedItem as SolicitacaoHoraExtra).tenantId,
-          collaborator_id: (rejectedItem as SolicitacaoHoraExtra).colaboradorId,
-          collaborator_name: (rejectedItem as SolicitacaoHoraExtra).colaboradorNome,
-          collaborator_cpf: (rejectedItem as SolicitacaoHoraExtra).colaboradorCpf,
-          departamento_id: (rejectedItem as SolicitacaoHoraExtra).departamentoId,
-          departamento_nome: (rejectedItem as SolicitacaoHoraExtra).departamentoNome,
-          gestor_id: (rejectedItem as SolicitacaoHoraExtra).gestorId,
-          gestor_nome: (rejectedItem as SolicitacaoHoraExtra).gestorNome,
-          data: (rejectedItem as SolicitacaoHoraExtra).data,
-          horario_contratado: (rejectedItem as SolicitacaoHoraExtra).horarioContratado,
-          horario_realizado: (rejectedItem as SolicitacaoHoraExtra).horarioRealizado,
-          minutos_extras: (rejectedItem as SolicitacaoHoraExtra).minutosExtras,
-          horas_extras_formatadas: (rejectedItem as SolicitacaoHoraExtra).horasExtrasFormatadas,
-          tipo_hora_extra: (rejectedItem as SolicitacaoHoraExtra).tipoHoraExtra,
-          justificativa: (rejectedItem as SolicitacaoHoraExtra).justificativa,
-          status: 'REJEITADO',
-          motivo_recusa: (rejectedItem as SolicitacaoHoraExtra).motivoRecusa,
-          data_decisao: brtNow.iso
-        }, { onConflict: 'request_id' });
+        await fetch('/api/save-overtime', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            ...(rejectedItem as any),
+            dataDecisao: brtNow.iso
+          })
+        });
       } catch (err) {
-        console.warn('Aviso ao salvar rejeição H.E. no Supabase:', err);
+        console.warn('Aviso ao salvar rejeição H.E. no servidor:', err);
       }
     }
   };
@@ -252,26 +292,40 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
     onUpdateDepartamentos(novosDepts);
 
     try {
-      await supabase.from('departments').upsert({
-        department_id: editingDept.id,
-        tenant_id: editingDept.tenantId,
-        nome: editingDept.nome,
-        codigo: editingDept.codigo,
-        gestor_id: editingDept.gestorId,
-        gestor_nome: editingDept.gestorNome,
-        gestor_email: editingDept.gestorEmail,
-        horario_inicio_padrao: editingDept.horarioInicioPadrao,
-        carga_horaria_diaria: editingDept.cargaHorariaDiariaHoras,
-        intervalo_minutos: editingDept.intervaloMinutos,
-        max_minutos_antecedencia: editingDept.maxMinutosAntecedenciaPermitido,
-        regra_antecedencia_ativa: editingDept.regraAntecedenciaAtiva
-      }, { onConflict: 'department_id' });
+      if (bearerToken) {
+        const res = await fetch('/api/departments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(editingDept)
+        });
+        if (!res.ok) {
+          console.warn('Aviso ao salvar departamento no servidor:', res.status);
+        }
+      } else if (supabase) {
+        await supabase.from('departments').upsert({
+          department_id: editingDept.id,
+          tenant_id: editingDept.tenantId,
+          nome: editingDept.nome,
+          codigo: editingDept.codigo,
+          gestor_id: editingDept.gestorId,
+          gestor_nome: editingDept.gestorNome,
+          gestor_email: editingDept.gestorEmail,
+          horario_inicio_padrao: editingDept.horarioInicioPadrao,
+          carga_horaria_diaria: editingDept.cargaHorariaDiariaHoras,
+          intervalo_minutos: editingDept.intervaloMinutos,
+          max_minutos_antecedencia: editingDept.maxMinutosAntecedenciaPermitido,
+          regra_antecedencia_ativa: editingDept.regraAntecedenciaAtiva
+        }, { onConflict: 'department_id' });
+      }
     } catch (err) {
-      console.warn('Aviso ao salvar departamento no Supabase:', err);
+      console.warn('Aviso ao salvar departamento:', err);
     }
 
     const novosColabs = colaboradores.map((c) => {
-      if (c.departamentoId === editingDept.id) {
+      if (c.departamentoId === editingDept.id || c.departamentoId === editingDept.codigo || c.departamentoNome?.trim().toLowerCase() === editingDept.nome?.trim().toLowerCase()) {
         return {
           ...c,
           gestorId: editingDept.gestorId,
@@ -323,28 +377,19 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
       status: 'PENDENTE'
     };
 
-    try {
-      await supabase.from('overtime_requests').upsert({
-        request_id: nova.id,
-        tenant_id: nova.tenantId,
-        collaborator_id: nova.colaboradorId,
-        collaborator_name: nova.colaboradorNome,
-        collaborator_cpf: nova.colaboradorCpf,
-        departamento_id: nova.departamentoId,
-        departamento_nome: nova.departamentoNome,
-        gestor_id: nova.gestorId,
-        gestor_nome: nova.gestorNome,
-        data: nova.data,
-        horario_contratado: nova.horarioContratado,
-        horario_realizado: nova.horarioRealizado,
-        minutos_extras: nova.minutosExtras,
-        horas_extras_formatadas: nova.horasExtrasFormatadas,
-        tipo_hora_extra: nova.tipoHoraExtra,
-        justificativa: nova.justificativa,
-        status: 'PENDENTE'
-      }, { onConflict: 'request_id' });
-    } catch (err) {
-      console.warn('Aviso ao salvar H.E. no Supabase:', err);
+    if (bearerToken) {
+      try {
+        await fetch('/api/save-overtime', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(nova)
+        });
+      } catch (err) {
+        console.warn('Aviso ao salvar H.E. no servidor:', err);
+      }
     }
 
     onUpdateHorasExtras([nova, ...horasExtras]);
@@ -424,6 +469,23 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
         </button>
 
         <button
+          onClick={() => setActiveSubTab('trocas')}
+          className={`flex-1 py-2.5 px-3 rounded-lg transition-colors flex items-center justify-center text-center gap-2 min-w-0 ${
+            activeSubTab === 'trocas'
+              ? 'bg-white text-slate-900 shadow-xs font-bold'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <ArrowLeftRight className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          <span className="whitespace-nowrap sm:whitespace-normal">Trocas de Turno</span>
+          {shiftSwaps.filter(s => s.status === 'PENDENTE_SUPERVISOR' || s.status === 'PENDENTE').length > 0 && (
+            <span className="text-[10px] font-mono font-bold bg-amber-600 text-white px-1.5 py-0.2 rounded-full shrink-0">
+              {shiftSwaps.filter(s => s.status === 'PENDENTE_SUPERVISOR' || s.status === 'PENDENTE').length}
+            </span>
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveSubTab('equipes')}
           className={`flex-1 py-2.5 px-3 rounded-lg transition-colors flex items-center justify-center text-center gap-2 min-w-0 ${
             activeSubTab === 'equipes'
@@ -450,6 +512,97 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
 
       {activeSubTab === 'mural_atendimento' && (
         <GestaoMuralEAtendimento currentUser={currentUser} />
+      )}
+
+      {activeSubTab === 'trocas' && (
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <ArrowLeftRight className="w-4 h-4 text-amber-600" />
+              <span className="font-bold text-slate-900">
+                Solicitações de Troca de Plantão / Turno (CLT Art. 66 — Interjornada 11h)
+              </span>
+            </div>
+            <button
+              onClick={carregarShiftSwaps}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg"
+            >
+              Atualizar Lista
+            </button>
+          </div>
+
+          {swapFeedback && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{swapFeedback}</span>
+            </div>
+          )}
+
+          {isLoadingSwaps ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-xs text-slate-500">
+              Carregando trocas de turno...
+            </div>
+          ) : shiftSwaps.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-xs text-slate-500">
+              Nenhuma solicitação de troca de turno registrada nesta unidade.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {shiftSwaps.map((sw: any) => {
+                const isPendente = sw.status === 'PENDENTE_SUPERVISOR' || sw.status === 'PENDENTE';
+                return (
+                  <div key={sw.swap_id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                      <div>
+                        <span className="font-bold text-slate-900 text-sm">
+                          {sw.solicitante_nome} ⇄ {sw.substituto_nome}
+                        </span>
+                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                          Turno Origem: {sw.data_turno_original} • Compensação: {sw.data_turno_compensacao}
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border ${
+                        isPendente
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : sw.status?.includes('APROVAD')
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-rose-50 text-rose-800 border-rose-200'
+                      }`}>
+                        {sw.status}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-600 italic">"{sw.motivo || 'Solicitação de permuta de escala.'}"</p>
+
+                    {sw.regra_clt_ok === false && (
+                      <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-800 font-semibold flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{sw.alerta_conflito || 'Alerta CLT Art. 66: Possível violação de descanso interjornada de 11h.'}</span>
+                      </div>
+                    )}
+
+                    {isPendente && (
+                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          onClick={() => handleDecidirTrocaTurno(sw.swap_id, 'REJEITADO_SUPERVISOR')}
+                          className="px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-1"
+                        >
+                          <XCircle className="w-3.5 h-3.5" /> Negar Troca
+                        </button>
+                        <button
+                          onClick={() => handleDecidirTrocaTurno(sw.swap_id, 'APROVADO_SUPERVISOR')}
+                          className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg flex items-center gap-1 shadow-xs"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Homologar Troca
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ======================================================== */}
@@ -740,7 +893,18 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
                               const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'REJEITADO' as any, dataDecisao: brtNow.formatted} : s);
                               onUpdateSolicitacoesAjuste(novas);
                             }
-                            if (supabase) {
+                            if (bearerToken) {
+                              try {
+                                await fetch('/api/update-adjustment-status', {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    Authorization: `Bearer ${bearerToken}`
+                                  },
+                                  body: JSON.stringify({ requestId: ajuste.id, status: 'REJEITADO' })
+                                });
+                              } catch {}
+                            } else if (supabase) {
                               try {
                                 await supabase.from('adjustment_requests').update({ status: 'REJEITADO', data_decisao: brtNow.iso }).eq('request_id', ajuste.id);
                               } catch {}
@@ -757,7 +921,18 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
                               const novas = solicitacoesAjuste.map(s => s.id === ajuste.id ? {...s, status: 'APROVADO' as any, dataDecisao: brtNow.formatted} : s);
                               onUpdateSolicitacoesAjuste(novas);
                             }
-                            if (supabase) {
+                            if (bearerToken) {
+                              try {
+                                await fetch('/api/update-adjustment-status', {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    Authorization: `Bearer ${bearerToken}`
+                                  },
+                                  body: JSON.stringify({ requestId: ajuste.id, status: 'APROVADO' })
+                                });
+                              } catch {}
+                            } else if (supabase) {
                               try {
                                 await supabase.from('adjustment_requests').update({ status: 'APROVADO', data_decisao: brtNow.iso }).eq('request_id', ajuste.id);
                               } catch {}
@@ -795,7 +970,12 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {departamentos.map((dept) => {
-              const colabsDaEquipe = colaboradores.filter((c) => c.departamentoId === dept.id);
+              const colabsDaEquipe = colaboradores.filter((c) => 
+                c.departamentoId === dept.id || 
+                c.departamentoId === dept.codigo || 
+                c.departamentoId === dept.codigo?.toLowerCase() ||
+                c.departamentoNome?.trim().toLowerCase() === dept.nome?.trim().toLowerCase()
+              );
 
               return (
                 <div

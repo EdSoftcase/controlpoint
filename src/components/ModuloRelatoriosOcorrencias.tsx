@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   OcorrenciaDesconto, 
   Departamento, 
@@ -6,6 +6,7 @@ import {
   StatusTratamentoOcorrencia 
 } from '../types/operational';
 import { getBrasiliaParts, getBrasiliaNow, getBrasiliaYmd, getMonthLabelPtBr } from '../utils/brasiliaClock';
+import { useAuth } from './AuthContext';
 import {
   Filter,
   Clock,
@@ -15,7 +16,9 @@ import {
   ListFilter,
   FileSpreadsheet,
   Printer,
-  X
+  X,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 
 interface ModuloRelatoriosOcorrenciasProps {
@@ -23,14 +26,72 @@ interface ModuloRelatoriosOcorrenciasProps {
   onUpdateOcorrencias: (novas: OcorrenciaDesconto[]) => void;
   departamentos: Departamento[];
   colaboradores: Colaborador[];
+  activeTenantId?: string;
+  currentUserName?: string;
 }
 
 export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasProps> = ({
   ocorrencias,
   onUpdateOcorrencias,
-  departamentos
+  departamentos,
+  colaboradores,
+  activeTenantId,
+  currentUserName
 }) => {
+  const { session, authToken } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
+  const operatorName = currentUserName || (session?.user?.user_metadata?.nome as string | undefined) || session?.user?.email || 'Operador RH';
+  const targetTenantId = activeTenantId || ocorrencias[0]?.tenantId || colaboradores[0]?.tenantId || 'tenant-01';
   const [reportViewMode, setReportViewMode] = useState<'sintetico' | 'analitico' | 'detalhado'>('sintetico');
+  const [treatmentsMap, setTreatmentsMap] = useState<Record<string, any>>({});
+  const [tratamentoFeedback, setTratamentoFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSavingTratamento, setIsSavingTratamento] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const loadTreatments = async () => {
+      if (!bearerToken) return;
+      try {
+        const res = await fetch(`/api/occurrence-treatments?tenantId=${encodeURIComponent(targetTenantId)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!active || !Array.isArray(json.treatments)) return;
+        const map: Record<string, any> = {};
+        for (const t of json.treatments) {
+          if (t.treatment_id) map[t.treatment_id] = t;
+          const composite = `${t.collaborator_id}_${t.occurrence_date}_${t.occurrence_type}`;
+          map[composite] = t;
+        }
+        setTreatmentsMap(map);
+      } catch (err) {
+        console.warn('Aviso ao carregar tratamentos de ocorrências:', err);
+      }
+    };
+    loadTreatments();
+    return () => { active = false; };
+  }, [targetTenantId, bearerToken]);
+
+  const ocorrenciasResolvidas = useMemo(() => {
+    return ocorrencias.map((item) => {
+      const compositeKey = `${item.colaboradorId}_${item.data}_${item.tipo}`;
+      const saved = treatmentsMap[item.id] || treatmentsMap[compositeKey];
+      if (!saved) return item;
+      const isAbonado = saved.status === 'ABONADO_ATESTADO';
+      return {
+        ...item,
+        status: (saved.status || item.status) as StatusTratamentoOcorrencia,
+        justificativa: saved.justificativa || item.justificativa,
+        atestadoCid: isAbonado ? (saved.cid10 || item.atestadoCid || 'CID Não especificado') : undefined,
+        minutosADescontar: isAbonado ? 0 : item.minutosPerdidos,
+        valorEstimadoDesconto: isAbonado ? 0 : item.valorEstimadoDesconto,
+        perdeDsr: isAbonado ? false : item.perdeDsr,
+        dataTratamento: saved.treated_at || item.dataTratamento,
+        operadorTratamento: saved.treated_by || item.operadorTratamento
+      };
+    });
+  }, [ocorrencias, treatmentsMap]);
 
   const brtNow = getBrasiliaParts();
   const currentMonthStart = `${brtNow.mesAno}-01`;
@@ -75,7 +136,7 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
 
   // Filtragem dos Dados
   const ocorrenciasFiltradas = useMemo(() => {
-    return ocorrencias.filter((o) => {
+    return ocorrenciasResolvidas.filter((o) => {
       // Filtro de Data
       if (dataInicio && o.data < dataInicio) return false;
       if (dataFim && o.data > dataFim) return false;
@@ -106,7 +167,7 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
 
       return true;
     });
-  }, [ocorrencias, dataInicio, dataFim, selectedDepartamentoId, selectedTipoOcorrencia, selectedStatus, searchTerm]);
+  }, [ocorrenciasResolvidas, dataInicio, dataFim, selectedDepartamentoId, selectedTipoOcorrencia, selectedStatus, searchTerm]);
 
   // Cálculos Consolidados para os Relatórios
   const totais = useMemo(() => {
@@ -277,32 +338,98 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
   }, [ocorrenciasFiltradas]);
 
   // Ação: Salvar Tratamento / Abono pelo RH
-  const handleSalvarTratamento = () => {
+  const handleSalvarTratamento = async () => {
     if (!tratandoOcorrencia) return;
 
-    const agora = getBrasiliaParts().formatted;
-    const novas = ocorrencias.map((item) => {
+    setIsSavingTratamento(true);
+    const brtNow = getBrasiliaParts();
+    const agora = brtNow.formatted;
+    const isAbonado = novoStatusTratamento === 'ABONADO_ATESTADO';
+    const cidFinal = isAbonado ? (cidInput.trim() || 'CID Não especificado') : undefined;
+    const justificativaFinal = justificativaTratamento.trim() || tratandoOcorrencia.justificativa;
+
+    const novas = ocorrenciasResolvidas.map((item) => {
       if (item.id === tratandoOcorrencia.id) {
-        const isAbonado = novoStatusTratamento === 'ABONADO_ATESTADO';
         return {
           ...item,
           status: novoStatusTratamento,
-          justificativa: justificativaTratamento || item.justificativa,
-          atestadoCid: isAbonado ? (cidInput || 'CID Não especificado') : undefined,
+          justificativa: justificativaFinal,
+          atestadoCid: cidFinal,
           minutosADescontar: isAbonado ? 0 : item.minutosPerdidos,
           valorEstimadoDesconto: isAbonado ? 0 : item.valorEstimadoDesconto,
           perdeDsr: isAbonado ? false : item.perdeDsr,
           dataTratamento: agora,
-          operadorTratamento: 'Operador RH'
+          operadorTratamento: operatorName
         };
       }
       return item;
     });
 
     onUpdateOcorrencias(novas);
-    setTratandoOcorrencia(null);
-    setJustificativaTratamento('');
-    setCidInput('');
+
+    const compositeKey = `${tratandoOcorrencia.colaboradorId}_${tratandoOcorrencia.data}_${tratandoOcorrencia.tipo}`;
+    const localSavedRecord = {
+      treatment_id: tratandoOcorrencia.id,
+      collaborator_id: tratandoOcorrencia.colaboradorId,
+      occurrence_date: tratandoOcorrencia.data,
+      occurrence_type: tratandoOcorrencia.tipo,
+      status: novoStatusTratamento,
+      justificativa: justificativaFinal,
+      cid10: cidFinal || null,
+      treated_at: brtNow.iso,
+      treated_by: operatorName
+    };
+
+    setTreatmentsMap((prev) => ({
+      ...prev,
+      [tratandoOcorrencia.id]: localSavedRecord,
+      [compositeKey]: localSavedRecord
+    }));
+
+    try {
+      if (bearerToken) {
+        const res = await fetch('/api/occurrence-treatments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            tenantId: tratandoOcorrencia.tenantId || targetTenantId,
+            treatmentId: tratandoOcorrencia.id,
+            collaboratorId: tratandoOcorrencia.colaboradorId,
+            occurrenceDate: tratandoOcorrencia.data,
+            occurrenceType: tratandoOcorrencia.tipo,
+            status: novoStatusTratamento,
+            justificativa: justificativaFinal,
+            cid10: cidFinal || null,
+            observacao: justificativaTratamento.trim() || null
+          })
+        });
+        if (res.ok) {
+          setTratamentoFeedback({
+            type: 'success',
+            text: `Tratamento de ${tratandoOcorrencia.colaboradorNome} salvo no banco de dados.`
+          });
+        } else {
+          setTratamentoFeedback({
+            type: 'error',
+            text: 'Tratamento aplicado na tela, mas houve erro ao persistir no servidor.'
+          });
+        }
+      }
+    } catch {
+      setTratamentoFeedback({
+        type: 'error',
+        text: 'Erro de conexão ao persistir tratamento da ocorrência.'
+      });
+    } finally {
+      setIsSavingTratamento(false);
+      setTratandoOcorrencia(null);
+      setJustificativaTratamento('');
+      setCidInput('');
+      setTimeout(() => setTratamentoFeedback(null), 4000);
+    }
   };
 
   // Ação: Exportar Arquivo CSV de Descontos para Folha de Pagamento
@@ -1026,12 +1153,26 @@ export const ModuloRelatoriosOcorrencias: React.FC<ModuloRelatoriosOcorrenciasPr
               </button>
               <button
                 onClick={handleSalvarTratamento}
-                className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg shadow-xs"
+                disabled={isSavingTratamento}
+                className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg shadow-xs disabled:opacity-50"
               >
-                Confirmar Tratamento
+                {isSavingTratamento ? 'Salvando...' : 'Confirmar Tratamento'}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {tratamentoFeedback && (
+        <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl border shadow-lg text-xs font-semibold flex items-center gap-2 ${
+          tratamentoFeedback.type === 'success'
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            : 'bg-rose-50 text-rose-800 border-rose-200'
+        }`}>
+          {tratamentoFeedback.type === 'success'
+            ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+          <span>{tratamentoFeedback.text}</span>
         </div>
       )}
     </div>

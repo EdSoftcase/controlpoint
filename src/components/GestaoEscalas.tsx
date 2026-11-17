@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Colaborador } from '../types/operational';
 import { EscalaTrabalhoConfig } from '../types/rhAvancado';
 import { ESCALAS_PADRAO, gerarCalendarioMesEscala } from '../utils/shiftEngine';
@@ -39,6 +39,12 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
   // Estados do Calendário Anual
   const [colabAnualId, setColabAnualId] = useState<string>(colaboradores[0]?.id || '');
   const [anoAnual, setAnoAnual] = useState<number>(brtNow.year);
+
+  useEffect(() => {
+    if (colaboradores.length > 0 && !colaboradores.some((c) => c.id === colabAnualId)) {
+      setColabAnualId(colaboradores[0].id);
+    }
+  }, [colaboradores, colabAnualId]);
 
   const escalaAtiva = escalas.find((e) => e.id === escalaSelecionadaId) || escalas[0];
 
@@ -150,8 +156,8 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
         const currentVal = anualMap[yyyyMmDd];
         
         const [y, m, d] = yyyyMmDd.split('-').map(Number);
-        const dateObj = new Date(y, m - 1, d);
-        const dayOfWeek = dateObj.getDay();
+        const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+        const dayOfWeek = dateObj.getUTCDay();
         const defaultFolgas = c.tipoEscala === '12x36' ? [] : (c.tipoEscala === '6x1' ? [0] : [0, 6]);
         const defaultIsFolga = (c.diasFolgaSemana ?? defaultFolgas).includes(dayOfWeek);
 
@@ -237,6 +243,12 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
       {/* ========================================================= */}
       {/* ABA 1: CALENDÁRIO ANUAL DE FOLGAS                           */}
       {/* ========================================================= */}
+      {subTab === 'calendario_anual' && !colabAnualSelecionado && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-xs text-slate-500">
+          Nenhum colaborador ativo encontrado nesta empresa para exibição do calendário anual de folgas.
+        </div>
+      )}
+
       {subTab === 'calendario_anual' && colabAnualSelecionado && (
         <div className="space-y-6">
           {/* Seletor de Colaborador e Ano */}
@@ -302,11 +314,11 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
           {/* Grid Anual: 12 Meses (3 colunas x 4 linhas) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {mesesNomes.map((mesNome, mIndex) => {
-              // Gera os dias do mês mIndex no anoAnual
-              const firstDay = new Date(anoAnual, mIndex, 1);
-              const lastDay = new Date(anoAnual, mIndex + 1, 0);
-              const daysInMonth = lastDay.getDate();
-              const startDayOfWeek = firstDay.getDay(); // 0 = Dom
+              // Gera os dias do mês mIndex no anoAnual (em UTC ao meio-dia)
+              const firstDay = new Date(Date.UTC(anoAnual, mIndex, 1, 12, 0, 0));
+              const lastDay = new Date(Date.UTC(anoAnual, mIndex + 1, 0, 12, 0, 0));
+              const daysInMonth = lastDay.getUTCDate();
+              const startDayOfWeek = firstDay.getUTCDay(); // 0 = Dom
 
               const defaultFolgas = colabAnualSelecionado.tipoEscala === '12x36' 
                 ? [] 
@@ -340,12 +352,12 @@ export function GestaoEscalas({ colaboradores, onUpdateColaboradores }: GestaoEs
                     {/* Dias do mês */}
                     {Array.from({ length: daysInMonth }).map((_, i) => {
                       const dayNum = i + 1;
-                      const dateObj = new Date(anoAnual, mIndex, dayNum);
+                      const dateObj = new Date(Date.UTC(anoAnual, mIndex, dayNum, 12, 0, 0));
                       const yyyy = anoAnual;
                       const mm = String(mIndex + 1).padStart(2, '0');
                       const dd = String(dayNum).padStart(2, '0');
                       const yyyyMmDd = `${yyyy}-${mm}-${dd}`;
-                      const dayOfWeek = dateObj.getDay();
+                      const dayOfWeek = dateObj.getUTCDay();
 
                       const isDefaultFolga = diasFolgaEscala.includes(dayOfWeek);
                       const overrideVal = anualFolgasMap[yyyyMmDd];

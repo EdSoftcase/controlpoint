@@ -61,39 +61,35 @@ import {
 import { useAuth } from './components/AuthContext';
 import { syncBrasiliaClock, formatBrasiliaDate, formatBrasiliaTime } from './utils/brasiliaClock';
 import { hasRealBiometricTemplate } from './utils/biometricHelpers';
+import { OfflineIndicator, PWAInstallButton } from './components/PWAStatusAndInstall';
+import { RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS } from './types/permissions';
+import { TAB_PERMISSION_MAP, hasPermission } from './utils/permissionsHelper';
 
 export default function App() {
-  const { session, authToken, supabase, clearAuthToken } = useAuth();
+  const { session, authToken, loading: authLoading, supabase, clearAuthToken } = useAuth();
   const bearerToken = session?.access_token || authToken || '';
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap>(DEFAULT_ROLE_PERMISSIONS);
+  const [globalThreshold, setGlobalThreshold] = useState<number>(82.0);
   const [testFeedback, setTestFeedback] = useState<{ loading: boolean; message: string | null; success?: boolean }>({ loading: false, message: null });
 
   const handleTestSupabase = async () => {
     setTestFeedback({ loading: true, message: 'Testando conexão com Supabase...' });
     const start = Date.now();
     try {
-      const { error } = await supabase.from('tenants').select('count', { count: 'exact', head: true });
+      const res = await fetch('/api/status', { cache: 'no-store' });
+      const statusData = await res.json().catch(() => ({}));
       const latency = Date.now() - start;
-      if (error && error.code !== 'PGRST116') {
-        const res = await fetch('/api/status');
-        const statusData = await res.json();
-        if (statusData.supabaseConnected) {
-          setTestFeedback({ 
-            loading: false, 
-            success: true, 
-            message: `Supabase Ativo e Conectado via Backend! Latência: ${latency}ms` 
-          });
-        } else {
-          setTestFeedback({ 
-            loading: false, 
-            success: false, 
-            message: `Aviso Supabase: ${error.message}` 
-          });
-        }
+      if (res.ok && statusData?.supabaseConnected) {
+        setTestFeedback({
+          loading: false,
+          success: true,
+          message: `Conexão Cloud Segura Confirmada! (${latency}ms) — Servidor Ativo`
+        });
       } else {
-        setTestFeedback({ 
-          loading: false, 
-          success: true, 
-          message: `Conexão Cloud Segura Confirmada! (${latency}ms) — Servidor Ativo` 
+        setTestFeedback({
+          loading: false,
+          success: false,
+          message: 'Backend ativo, porém o banco Supabase não respondeu.'
         });
       }
     } catch (err: any) {
@@ -104,15 +100,51 @@ export default function App() {
       });
     }
   };
-  // Estado de Autenticação: Inicializa deslogado (null) para exibir a tela de login
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'welcome' | 'spec' | 'prototype' | 'legal' | 'plan'>('colaborador');
+  // Estado de Autenticação: Inicializa persistido no localStorage
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('sc_current_user');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const [activeView, setActiveView] = useState<'operational' | 'colaborador' | 'welcome' | 'spec' | 'prototype' | 'legal' | 'plan'>(() => {
+    try {
+      const savedView = localStorage.getItem('sc_active_view');
+      if (savedView) return savedView as any;
+    } catch {
+      // ignore
+    }
+    return 'colaborador';
+  });
+
   const [prototypeTargetScreen, setPrototypeTargetScreen] = useState<string>('adm-02');
+
+  const updateCurrentUser = (user: AuthUser | null, view?: 'operational' | 'colaborador' | 'welcome' | 'spec' | 'prototype' | 'legal' | 'plan') => {
+    setCurrentUser(user);
+    try {
+      if (user) {
+        localStorage.setItem('sc_current_user', JSON.stringify(user));
+        if (view) {
+          setActiveView(view);
+          localStorage.setItem('sc_active_view', view);
+        }
+      } else {
+        localStorage.removeItem('sc_current_user');
+        localStorage.removeItem('sc_active_view');
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const handleLogout = () => {
     clearAuthToken();
     supabase.auth.signOut().catch(() => {});
-    setCurrentUser(null);
+    updateCurrentUser(null);
     setIsMobileMenuOpen(false);
   };
 
@@ -122,9 +154,82 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const isOperatorAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN';
+  const isOperatorAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN' || currentUser?.role === 'GESTOR';
 
-  // Enforce colaborador view for non-admin users (unless viewing welcome guide)
+  // Validar e reidratar sessão autenticada via /api/auth/session ao carregar / recarregar
+  React.useEffect(() => {
+    if (authLoading) return;
+    let active = true;
+
+    async function validateSession() {
+      if (!bearerToken) {
+        if (!session && currentUser) {
+          updateCurrentUser(null);
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/session', {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          if (active) {
+            clearAuthToken();
+            supabase.auth.signOut().catch(() => {});
+            updateCurrentUser(null);
+          }
+          return;
+        }
+
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!active || !data?.user) return;
+
+        const meta = data.user.user_metadata || {};
+        const colab = data.colaborador || null;
+        const isSuper = data.user.email === 'admin@softcase.com.br';
+        const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
+
+        const hydratedUser: AuthUser = {
+          id: colab?.id || meta.collaboratorId || data.user.id,
+          nome: colab?.nome || meta.nome || currentUser?.nome || 'Usuário',
+          email: colab?.email || data.user.email || currentUser?.email || '',
+          cpf: colab?.cpf || meta.cpf || currentUser?.cpf || '',
+          role,
+          roleLabel: meta.roleLabel || currentUser?.roleLabel || (isSuper ? 'Super Administrador Softcase' : role === 'GESTOR' ? 'Gestor de Equipe' : role === 'RH_ADMIN' ? 'RH & Departamento Pessoal' : 'Colaborador CLT'),
+          tenantId: colab?.tenantId || meta.tenantId || currentUser?.tenantId || 'tenant-01',
+          tenantNome: meta.tenantNome || currentUser?.tenantNome || 'Empresa',
+          departamentoNome: colab?.departamentoNome || currentUser?.departamentoNome,
+          cargoTitulo: colab?.cargoTitulo || currentUser?.cargoTitulo,
+          mfaHabilitado: currentUser?.mfaHabilitado ?? false
+        };
+
+        setCurrentUser(hydratedUser);
+        try {
+          localStorage.setItem('sc_current_user', JSON.stringify(hydratedUser));
+        } catch {
+          // ignore
+        }
+        if (colab) {
+          setColaboradores(prev => {
+            const exists = prev.some(c => c.id === colab.id);
+            return exists ? prev.map(c => (c.id === colab.id ? { ...c, ...colab } : c)) : [colab, ...prev];
+          });
+        }
+      } catch {
+        // Offline ou falha de rede: mantém cache local sc_current_user para uso PWA offline
+      }
+    }
+
+    validateSession();
+    return () => {
+      active = false;
+    };
+  }, [authLoading, bearerToken, session]);
+
+  // Enforce colaborador view for non-admin/non-gestor users (unless viewing welcome guide)
   React.useEffect(() => {
     if (currentUser && !isOperatorAdmin) {
       if (activeView !== 'welcome') {
@@ -132,6 +237,7 @@ export default function App() {
       }
     }
   }, [currentUser, isOperatorAdmin]);
+
   // Estado do Menu Hambúrguer Responsivo (Mobile & Tablet)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -148,114 +254,37 @@ export default function App() {
   const [solicitacoesAjuste, setSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>([]);
   const [assinaturasEspelho, setAssinaturasEspelho] = useState<AssinaturaEspelhoPonto[]>([]);
 
-  // Carregar dados iniciais do Supabase de forma resiliente
+  // Redirecionar aba caso RBAC bloqueie acesso
   React.useEffect(() => {
+    if (!currentUser || !isOperatorAdmin) return;
+    const permKey = TAB_PERMISSION_MAP[operationalTab];
+    if (!hasPermission(rolePermissions, currentUser.role, permKey)) {
+      setOperationalTab('relatorios');
+    }
+  }, [currentUser, isOperatorAdmin, operationalTab, rolePermissions]);
+
+  // Carregar dados iniciais via endpoint autenticado /api/bootstrap-data (Server-Side RLS / Multi-Tenant Guard)
+  React.useEffect(() => {
+    let active = true;
+
     async function fetchGlobalData() {
+      if (!bearerToken) return;
       try {
-        const { data: colabs } = await supabase.from('collaborators').select('*');
-        let mappedColabs: Colaborador[] = [];
-        if (colabs && colabs.length > 0) {
-          let contactsMap: Record<string, any> = {};
-          if (typeof window !== 'undefined') {
-            try {
-              contactsMap = JSON.parse(localStorage.getItem('sc_all_colab_contacts') || '{}');
-            } catch (_) {}
-          }
+        const tenantQuery = currentUser?.tenantId ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
+        const res = await fetch(`/api/bootstrap-data${tenantQuery}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!active || !data?.success) return;
 
-          mappedColabs = colabs.map(c => {
-            const cleanCpf = (c.cpf || '').replace(/\D/g, '');
-            let parsedEmail = c.email || '';
-            let parsedTelefone = c.telefone || '';
-            let parsedPretensaoDepto = '';
-            let parsedPretensaoCargo = '';
-
-            if (c.biometric_template) {
-              try {
-                let bioData = typeof c.biometric_template === 'string' ? JSON.parse(c.biometric_template) : c.biometric_template;
-                if (typeof bioData === 'string') {
-                  try { bioData = JSON.parse(bioData); } catch (_) {}
-                }
-                if (bioData && typeof bioData === 'object') {
-                  if (bioData.email && !parsedEmail) parsedEmail = bioData.email;
-                  if (bioData.telefone && !parsedTelefone) parsedTelefone = bioData.telefone;
-                  if (bioData.pretensaoDepto) parsedPretensaoDepto = bioData.pretensaoDepto;
-                  if (bioData.pretensaoCargo) parsedPretensaoCargo = bioData.pretensaoCargo;
-                }
-              } catch (_) {}
-            }
-
-            if (typeof window !== 'undefined') {
-              try {
-                const specificMeta = localStorage.getItem(`sc_colab_meta_${cleanCpf}`) || localStorage.getItem(`sc_colab_meta_${c.cpf}`);
-                if (specificMeta) {
-                  const metaObj = JSON.parse(specificMeta);
-                  if (metaObj.email && !parsedEmail) parsedEmail = metaObj.email;
-                  if (metaObj.telefone && !parsedTelefone) parsedTelefone = metaObj.telefone;
-                  if (metaObj.pretensaoDepto && !parsedPretensaoDepto) parsedPretensaoDepto = metaObj.pretensaoDepto;
-                  if (metaObj.pretensaoCargo && !parsedPretensaoCargo) parsedPretensaoCargo = metaObj.pretensaoCargo;
-                }
-                const mappedContact = contactsMap[cleanCpf] || contactsMap[c.cpf];
-                if (mappedContact) {
-                  if (mappedContact.email && !parsedEmail) parsedEmail = mappedContact.email;
-                  if (mappedContact.telefone && !parsedTelefone) parsedTelefone = mappedContact.telefone;
-                  if (mappedContact.pretensaoDepto && !parsedPretensaoDepto) parsedPretensaoDepto = mappedContact.pretensaoDepto;
-                  if (mappedContact.pretensaoCargo && !parsedPretensaoCargo) parsedPretensaoCargo = mappedContact.pretensaoCargo;
-                }
-              } catch (_) {}
-            }
-
-            const deptoFinal = c.departamento_nome || parsedPretensaoDepto || 'Geral';
-            const cargoFinal = c.cargo_titulo || parsedPretensaoCargo || 'Colaborador';
-            const rawBio = c.biometric_template || c.biometria_hash_template;
-            const realBio = hasRealBiometricTemplate({
-              biometriaHashTemplate: rawBio,
-              biometriaCadastrada: c.biometria_cadastrada
-            });
-
-            return {
-              id: c.collaborator_id || c.id,
-              tenantId: c.tenant_id || 'tenant-01',
-              nome: c.nome,
-              cpf: c.cpf,
-              matricula: c.matricula || 'MAT-001',
-              pis: c.pis || '000.00000.00-0',
-              dataAdmissao: c.data_admissao || '2024-01-01',
-              cargoId: c.cargo_id || 'crg-01',
-              cargoTitulo: cargoFinal,
-              departamentoId: c.departamento_id || 'dep-01',
-              departamentoNome: deptoFinal,
-              gestorId: c.gestor_id || 'colab-admin',
-              gestorNome: c.gestor_nome || 'Administrador',
-              estabelecimentoId: c.estabelecimento_id || 'est-01',
-              estabelecimentoNome: c.estabelecimento_nome || 'Matriz',
-              regime: (c.regime as any) || 'REGULAR',
-              horarioInicio: c.horario_inicio || '08:00',
-              horarioFim: c.horario_fim || '17:00',
-              cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria) || 8,
-              intervaloMinutos: Number(c.intervalo_minutos) || 60,
-              maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia) ?? 15,
-              regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
-              pinColetor: c.pin_coletor || '',
-              status: (c.status as any) || 'ATIVO',
-              biometriaCadastrada: realBio,
-              biometriaHashTemplate: rawBio || undefined,
-              limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 82.0,
-              tipoEscala: (c.tipo_escala as any) || '5x2',
-              turmaEscala: (c.turma_escala as any) || 'A',
-              diasFolgaSemana: Array.isArray(c.dias_folga_semana) ? c.dias_folga_semana : undefined,
-              anualFolgas: c.anual_folgas && typeof c.anual_folgas === 'object' ? c.anual_folgas : undefined,
-              email: parsedEmail,
-              telefone: parsedTelefone,
-              pretensaoDepto: parsedPretensaoDepto,
-              pretensaoCargo: parsedPretensaoCargo
-            } as any;
-          });
+        const mappedColabs: Colaborador[] = Array.isArray(data.colaboradores) ? data.colaboradores : [];
+        if (mappedColabs.length > 0) {
           setColaboradores(mappedColabs);
         }
 
-        const { data: ests } = await supabase.from('establishments').select('*');
-        if (ests && ests.length > 0) {
-          setEstabelecimentos(ests.map(e => ({
+        if (Array.isArray(data.estabelecimentos)) {
+          setEstabelecimentos(data.estabelecimentos.map((e: any) => ({
             id: e.establishment_id || e.id,
             tenantId: e.tenant_id,
             nome: e.nome,
@@ -267,16 +296,15 @@ export default function App() {
             uf: e.uf || 'SP',
             municipio: e.municipio || e.cidade || 'São Paulo',
             enderecoCompleto: e.endereco_completo || '',
-            latitude: Number(e.latitude) || -23.5615,
-            longitude: Number(e.longitude) || -46.6559,
+            latitude: e.latitude != null ? Number(e.latitude) : Number.NaN,
+            longitude: e.longitude != null ? Number(e.longitude) : Number.NaN,
             cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
             bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
           })));
         }
 
-        const { data: depts } = await supabase.from('departments').select('*');
-        if (depts && depts.length > 0) {
-          setDepartamentos(depts.map(d => ({
+        if (Array.isArray(data.departamentos)) {
+          setDepartamentos(data.departamentos.map((d: any) => ({
             id: d.department_id || d.id,
             tenantId: d.tenant_id,
             nome: d.nome,
@@ -292,9 +320,8 @@ export default function App() {
           })));
         }
 
-        const { data: holis } = await supabase.from('holidays').select('*').order('data', { ascending: true });
-        if (holis && holis.length > 0) {
-          setFeriados(holis.map(h => ({
+        if (Array.isArray(data.feriados)) {
+          setFeriados(data.feriados.map((h: any) => ({
             id: h.holiday_id || h.id,
             tenantId: h.tenant_id,
             nome: h.nome,
@@ -311,9 +338,8 @@ export default function App() {
           })));
         }
 
-        const { data: overtimes } = await supabase.from('overtime_requests').select('*').order('data', { ascending: false });
-        if (overtimes && overtimes.length > 0) {
-          setHorasExtras(overtimes.map(o => ({
+        if (Array.isArray(data.horasExtras)) {
+          setHorasExtras(data.horasExtras.map((o: any) => ({
             id: o.request_id || o.id,
             tenantId: o.tenant_id,
             colaboradorId: o.collaborator_id,
@@ -323,6 +349,7 @@ export default function App() {
             departamentoNome: o.departamento_nome || '',
             gestorId: o.gestor_id || '',
             gestorNome: o.gestor_nome || '',
+            destinoAprovacao: o.destino_aprovacao || 'BANCO_HORAS',
             data: o.data,
             horarioContratado: o.horario_contratado || '',
             horarioRealizado: o.horario_realizado || '',
@@ -336,10 +363,9 @@ export default function App() {
           })));
         }
 
-        const { data: pontos } = await supabase.from('point_registrations').select('*').order('created_at', { ascending: false });
-        if (pontos && pontos.length > 0) {
-          setRegistros(pontos.map(p => {
-            const parsed = p.detalhes ? (typeof p.detalhes === 'string' ? JSON.parse(p.detalhes) : p.detalhes) : {};
+        if (Array.isArray(data.registros)) {
+          setRegistros(data.registros.map((p: any) => {
+            const parsed = p.detalhes ? (typeof p.detalhes === 'string' ? (() => { try { return JSON.parse(p.detalhes); } catch { return {}; } })() : p.detalhes) : {};
             return {
               nsr: p.nsr,
               tenantId: p.tenant_id,
@@ -365,9 +391,8 @@ export default function App() {
           }));
         }
 
-        const { data: sigs } = await supabase.from('point_signatures').select('*').order('created_at', { ascending: false });
-        if (sigs && sigs.length > 0) {
-          setAssinaturasEspelho(sigs.map(s => {
+        if (Array.isArray(data.assinaturas)) {
+          setAssinaturasEspelho(data.assinaturas.map((s: any) => {
             const matchedColab = mappedColabs.find(c => c.id === s.collaborator_id);
             return {
               id: s.id,
@@ -386,10 +411,9 @@ export default function App() {
           }));
         }
 
-        const { data: adjs } = await supabase.from('adjustment_requests').select('*').order('created_at', { ascending: false });
-        if (adjs && adjs.length > 0) {
-          setSolicitacoesAjuste(adjs.map(a => {
-            const details = a.detalhes ? (typeof a.detalhes === 'string' ? JSON.parse(a.detalhes) : a.detalhes) : {};
+        if (Array.isArray(data.ajustes)) {
+          setSolicitacoesAjuste(data.ajustes.map((a: any) => {
+            const details = a.detalhes ? (typeof a.detalhes === 'string' ? (() => { try { return JSON.parse(a.detalhes); } catch { return {}; } })() : a.detalhes) : {};
             return {
               id: a.request_id,
               tenantId: a.tenant_id,
@@ -415,33 +439,52 @@ export default function App() {
             };
           }));
         }
+
+        if (data.appSettings?.biometric_threshold != null) {
+          const parsedThreshold = Number(data.appSettings.biometric_threshold);
+          if (!Number.isNaN(parsedThreshold) && parsedThreshold >= 50 && parsedThreshold <= 99.9) {
+            setGlobalThreshold(parsedThreshold);
+          }
+        }
+
+        if (Array.isArray(data.rolePermissions) && data.rolePermissions.length > 0) {
+          const merged: RolePermissionsMap = { ...DEFAULT_ROLE_PERMISSIONS };
+          for (const row of data.rolePermissions) {
+            if (row?.role && Array.isArray(row.permissions)) {
+              merged[row.role as keyof RolePermissionsMap] = row.permissions;
+            }
+          }
+          setRolePermissions(merged);
+        }
       } catch (e) {
-        console.warn('Carregamento inicial Supabase aviso:', e);
+        console.warn('Carregamento inicial bootstrap-data aviso:', e);
       }
     }
-    fetchGlobalData();
-  }, [supabase]);
 
-  // Sync currentUser with session metadata if Supabase session exists
+    fetchGlobalData();
+    return () => {
+      active = false;
+    };
+  }, [bearerToken, currentUser?.tenantId]);
+
+  // Sync currentUser with Supabase Auth session metadata if available
   React.useEffect(() => {
     if (session && session.user && !currentUser) {
-      const meta = session.user.user_metadata;
+      const meta = session.user.user_metadata || {};
       const isSuper = session.user.email === 'admin@softcase.com.br';
       const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
-      setCurrentUser({
-        id: session.user.id,
-        nome: meta.nome || 'Usuário Supabase',
+      const u: AuthUser = {
+        id: meta.collaboratorId || session.user.id,
+        nome: meta.nome || 'Usuário',
         email: session.user.email || '',
         cpf: meta.cpf || '',
         role,
-        roleLabel: meta.roleLabel || (isSuper ? 'Super Administrador Softcase' : 'Colaborador CLT'),
+        roleLabel: meta.roleLabel || (isSuper ? 'Super Administrador Softcase' : role === 'GESTOR' ? 'Gestor de Equipe' : 'Colaborador CLT'),
         tenantId: meta.tenantId || 'tenant-01',
         tenantNome: meta.tenantNome || 'Empresa',
         mfaHabilitado: false
-      });
-      if (role === 'SUPER_ADMIN' || role === 'RH_ADMIN') {
-        setActiveView('operational');
-      }
+      };
+      updateCurrentUser(u, (role === 'SUPER_ADMIN' || role === 'RH_ADMIN' || role === 'GESTOR') ? 'operational' : 'colaborador');
     }
   }, [session, currentUser]);
 
@@ -450,8 +493,7 @@ export default function App() {
     return (
       <LoginScreen
         onLoginSuccess={(user, redirectView) => {
-          setCurrentUser(user);
-          setActiveView(redirectView);
+          updateCurrentUser(user, redirectView);
         }}
         onCollaboratorRegistered={(novoColab) => {
           setColaboradores(prev => [novoColab, ...prev.filter(c => c.id !== novoColab.id && c.cpf !== novoColab.cpf)]);
@@ -525,53 +567,45 @@ export default function App() {
 
                 {activeView === 'operational' && (
                   <div className="pl-3 py-1 space-y-0.5 border-l-2 border-slate-200 ml-3 text-[11px]">
-                    <button onClick={() => setOperationalTab('relatorios')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'relatorios' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Atrasos & Descontos
-                    </button>
-                    <button onClick={() => setOperationalTab('equipes')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'equipes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Equipes & Gestores
-                    </button>
-                    <button onClick={() => setOperationalTab('coletor')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'coletor' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Coletor Tablet REP-P
-                    </button>
-                    <button onClick={() => setOperationalTab('biometria')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'biometria' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Biometria Facial
-                    </button>
-                    <button onClick={() => setOperationalTab('ipa')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'ipa' ? 'bg-amber-100 text-amber-900 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · IPA & Premiações (Scoring)
-                    </button>
-                    <button onClick={() => setOperationalTab('feriados')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'feriados' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Feriados & DSR
-                    </button>
-                    <button onClick={() => setOperationalTab('empresa')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'empresa' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Colaboradores & RH
-                    </button>
-                    <button onClick={() => setOperationalTab('estrutura')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'estrutura' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Estrutura (Deptos/Cargos)
-                    </button>
-                    <button onClick={() => setOperationalTab('permissoes')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'permissoes' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Matriz de Permissões
-                    </button>
-                    <button onClick={() => setOperationalTab('registros')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'registros' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Registros & AFD Fiscal
-                    </button>
-                    <button onClick={() => setOperationalTab('tenants')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === 'tenants' ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Painel Multi-tenant
-                    </button>
+                    {[
+                      { tab: 'relatorios', label: '· Atrasos & Descontos', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'equipes', label: '· Equipes & Gestores', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'coletor', label: '· Coletor Tablet REP-P', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'biometria', label: '· Biometria Facial', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'ipa', label: '· IPA & Premiações (Scoring)', activeCls: 'bg-amber-100 text-amber-900 font-bold' },
+                      { tab: 'feriados', label: '· Feriados & DSR', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'empresa', label: '· Colaboradores & RH', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'estrutura', label: '· Estrutura (Deptos/Cargos)', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'permissoes', label: '· Matriz de Permissões', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'registros', label: '· Registros & AFD Fiscal', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
+                      { tab: 'tenants', label: '· Painel Multi-tenant', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' }
+                    ]
+                      .filter(item => hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP[item.tab]))
+                      .map(item => (
+                        <button
+                          key={item.tab}
+                          onClick={() => setOperationalTab(item.tab as any)}
+                          className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === item.tab ? item.activeCls : 'text-slate-600 hover:bg-slate-100'}`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
                   </div>
                 )}
               </div>
 
-              <button 
-                onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
-                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
-                  activeView === 'operational' && operationalTab === 'config' 
-                    ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                  <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
-              </button>
+              {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
+                <button 
+                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
+                  className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
+                    activeView === 'operational' && operationalTab === 'config' 
+                      ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                    <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
+                </button>
+              )}
 
               <div className="space-y-1 pt-2 border-t border-slate-200">
                 <button
@@ -671,6 +705,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-3 ml-auto shrink-0">
+                <PWAInstallButton />
                 {isOperatorAdmin && (
                   <>
                     <button 
@@ -803,6 +838,10 @@ export default function App() {
               onUpdateEstabelecimentos={setEstabelecimentos}
               operationalTab={operationalTab}
               onSelectOperationalTab={setOperationalTab}
+              rolePermissions={rolePermissions}
+              onRolePermissionsChange={setRolePermissions}
+              globalThreshold={globalThreshold}
+              onThresholdChange={setGlobalThreshold}
             />
           )}
 
@@ -812,28 +851,20 @@ export default function App() {
               registros={registros}
               feriados={feriados}
               horasExtras={horasExtras}
+              globalThreshold={globalThreshold}
               onAddHoraExtra={async (nova) => {
                 setHorasExtras([nova, ...horasExtras]);
                 try {
-                  await supabase.from('overtime_requests').upsert({
-                    request_id: nova.id,
-                    tenant_id: nova.tenantId,
-                    collaborator_id: nova.colaboradorId,
-                    collaborator_name: nova.colaboradorNome,
-                    collaborator_cpf: nova.colaboradorCpf,
-                    departamento_id: nova.departamentoId,
-                    departamento_nome: nova.departamentoNome,
-                    gestor_id: nova.gestorId,
-                    gestor_nome: nova.gestorNome,
-                    data: nova.data,
-                    horario_contratado: nova.horarioContratado,
-                    horario_realizado: nova.horarioRealizado,
-                    minutos_extras: nova.minutosExtras,
-                    horas_extras_formatadas: nova.horasExtrasFormatadas,
-                    tipo_hora_extra: nova.tipoHoraExtra,
-                    justificativa: nova.justificativa,
-                    status: nova.status
-                  }, { onConflict: 'request_id' });
+                  if (bearerToken) {
+                    await fetch('/api/save-overtime', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${bearerToken}`
+                      },
+                      body: JSON.stringify(nova)
+                    });
+                  }
                 } catch (err) {
                   console.warn('Erro ao persistir hora extra:', err);
                 }
@@ -959,64 +990,70 @@ export default function App() {
             </button>
 
             {/* 2. Escalas */}
-            <button
-              onClick={() => {
-                setActiveView('operational');
-                setOperationalTab('escalas');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
-                activeView === 'operational' && operationalTab === 'escalas'
-                  ? 'text-emerald-400 font-bold scale-105'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <CalendarDays className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Escalas</span>
-              {activeView === 'operational' && operationalTab === 'escalas' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
-              )}
-            </button>
+            {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['escalas']) && (
+              <button
+                onClick={() => {
+                  setActiveView('operational');
+                  setOperationalTab('escalas');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
+                  activeView === 'operational' && operationalTab === 'escalas'
+                    ? 'text-emerald-400 font-bold scale-105'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <CalendarDays className="w-5 h-5 mb-0.5" />
+                <span className="text-[10px] tracking-tight">Escalas</span>
+                {activeView === 'operational' && operationalTab === 'escalas' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
+                )}
+              </button>
+            )}
 
             {/* 3. Férias & Afastamentos */}
-            <button
-              onClick={() => {
-                setActiveView('operational');
-                setOperationalTab('afastamentos');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
-                activeView === 'operational' && operationalTab === 'afastamentos'
-                  ? 'text-emerald-400 font-bold scale-105'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Plane className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Férias</span>
-              {activeView === 'operational' && operationalTab === 'afastamentos' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
-              )}
-            </button>
+            {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['afastamentos']) && (
+              <button
+                onClick={() => {
+                  setActiveView('operational');
+                  setOperationalTab('afastamentos');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
+                  activeView === 'operational' && operationalTab === 'afastamentos'
+                    ? 'text-emerald-400 font-bold scale-105'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Plane className="w-5 h-5 mb-0.5" />
+                <span className="text-[10px] tracking-tight">Férias</span>
+                {activeView === 'operational' && operationalTab === 'afastamentos' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
+                )}
+              </button>
+            )}
 
             {/* 4. Colaboradores / RH */}
-            <button
-              onClick={() => {
-                setActiveView('operational');
-                setOperationalTab('empresa');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
-                activeView === 'operational' && operationalTab === 'empresa'
-                  ? 'text-emerald-400 font-bold scale-105'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Users className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Equipe</span>
-              {activeView === 'operational' && operationalTab === 'empresa' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
-              )}
-            </button>
+            {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['empresa']) && (
+              <button
+                onClick={() => {
+                  setActiveView('operational');
+                  setOperationalTab('empresa');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-all ${
+                  activeView === 'operational' && operationalTab === 'empresa'
+                    ? 'text-emerald-400 font-bold scale-105'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Users className="w-5 h-5 mb-0.5" />
+                <span className="text-[10px] tracking-tight">Equipe</span>
+                {activeView === 'operational' && operationalTab === 'empresa' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-0.5" />
+                )}
+              </button>
+            )}
 
             {/* 5. Mais Módulos */}
             <button
@@ -1144,119 +1181,131 @@ export default function App() {
                       Operação & Controle de Ponto
                     </span>
                     <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('relatorios');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'relatorios'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <BarChart3 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Atrasos & Descontos</div>
-                          <div className="text-[9px] text-slate-400">Apuração diária</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['relatorios']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('relatorios');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'relatorios'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <BarChart3 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Atrasos & Descontos</div>
+                            <div className="text-[9px] text-slate-400">Apuração diária</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('coletor');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'coletor'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Tablet className="w-4 h-4 text-blue-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Coletor Tablet</div>
-                          <div className="text-[9px] text-slate-400">Modo Totem REP-P</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['coletor']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('coletor');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'coletor'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Tablet className="w-4 h-4 text-blue-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Coletor Tablet</div>
+                            <div className="text-[9px] text-slate-400">Modo Totem REP-P</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('biometria');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'biometria'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <ScanFace className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Biometria Facial</div>
-                          <div className="text-[9px] text-slate-400">Prova de vida</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['biometria']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('biometria');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'biometria'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <ScanFace className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Biometria Facial</div>
+                            <div className="text-[9px] text-slate-400">Prova de vida</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('equipes');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'equipes'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Users className="w-4 h-4 text-indigo-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Equipes & Gestores</div>
-                          <div className="text-[9px] text-slate-400">Aprovação H.E.</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['equipes']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('equipes');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'equipes'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Users className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Equipes & Gestores</div>
+                            <div className="text-[9px] text-slate-400">Aprovação H.E.</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('feriados');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'feriados'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Calendar className="w-4 h-4 text-rose-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Feriados & DSR</div>
-                          <div className="text-[9px] text-slate-400">Reflexo folha</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['feriados']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('feriados');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'feriados'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Calendar className="w-4 h-4 text-rose-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Feriados & DSR</div>
+                            <div className="text-[9px] text-slate-400">Reflexo folha</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('ipa');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'ipa'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Award className="w-4 h-4 text-amber-500 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">IPA & Premiação</div>
-                          <div className="text-[9px] text-slate-400">Assiduidade</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['ipa']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('ipa');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'ipa'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Award className="w-4 h-4 text-amber-500 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">IPA & Premiação</div>
+                            <div className="text-[9px] text-slate-400">Assiduidade</div>
+                          </div>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1266,119 +1315,131 @@ export default function App() {
                       Gestão de Pessoas, Escalas & CLT
                     </span>
                     <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('escalas');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'escalas'
-                            ? 'bg-indigo-500/20 border-indigo-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <CalendarDays className="w-4 h-4 text-indigo-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Escalas & 12x36</div>
-                          <div className="text-[9px] text-slate-400">Calendário anual</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['escalas']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('escalas');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'escalas'
+                              ? 'bg-indigo-500/20 border-indigo-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <CalendarDays className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Escalas & 12x36</div>
+                            <div className="text-[9px] text-slate-400">Calendário anual</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('afastamentos');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'afastamentos'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Plane className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Férias & Atestados</div>
-                          <div className="text-[9px] text-slate-400">Controle Art. 134</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['afastamentos']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('afastamentos');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'afastamentos'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Plane className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Férias & Atestados</div>
+                            <div className="text-[9px] text-slate-400">Controle Art. 134</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('empresa');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'empresa'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <UserCheck className="w-4 h-4 text-teal-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Colaboradores & RH</div>
-                          <div className="text-[9px] text-slate-400">Cadastro geral</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['empresa']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('empresa');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'empresa'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <UserCheck className="w-4 h-4 text-teal-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Colaboradores & RH</div>
+                            <div className="text-[9px] text-slate-400">Cadastro geral</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('estrutura');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'estrutura'
-                            ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Building2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Estrutura Deptos</div>
-                          <div className="text-[9px] text-slate-400">Cargos e locais</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['estrutura']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('estrutura');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'estrutura'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Building2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Estrutura Deptos</div>
+                            <div className="text-[9px] text-slate-400">Cargos e locais</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('permissoes');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'permissoes'
-                            ? 'bg-purple-500/20 border-purple-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Permissões (RBAC)</div>
-                          <div className="text-[9px] text-slate-400">Perfis de acesso</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['permissoes']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('permissoes');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'permissoes'
+                              ? 'bg-purple-500/20 border-purple-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Permissões (RBAC)</div>
+                            <div className="text-[9px] text-slate-400">Perfis de acesso</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('riscos');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'riscos'
-                            ? 'bg-rose-500/20 border-rose-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Riscos & CLT</div>
-                          <div className="text-[9px] text-slate-400">Auditoria passivos</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['riscos']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('riscos');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'riscos'
+                              ? 'bg-rose-500/20 border-rose-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Riscos & CLT</div>
+                            <div className="text-[9px] text-slate-400">Auditoria passivos</div>
+                          </div>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1388,100 +1449,110 @@ export default function App() {
                       Fiscal, Integrações & Totem
                     </span>
                     <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('registros');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'registros'
-                            ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <FileText className="w-4 h-4 text-orange-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">AFD & AEJ Fiscal</div>
-                          <div className="text-[9px] text-slate-400">Portaria 671</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['registros']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('registros');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'registros'
+                              ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <FileText className="w-4 h-4 text-orange-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">AFD & AEJ Fiscal</div>
+                            <div className="text-[9px] text-slate-400">Portaria 671</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('exportador');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'exportador'
-                            ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Server className="w-4 h-4 text-sky-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Exportador ERP</div>
-                          <div className="text-[9px] text-slate-400">Folha de pagamento</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['exportador']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('exportador');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'exportador'
+                              ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Server className="w-4 h-4 text-sky-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Exportador ERP</div>
+                            <div className="text-[9px] text-slate-400">Folha de pagamento</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('mobile');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'mobile'
-                            ? 'bg-violet-500/20 border-violet-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Smartphone className="w-4 h-4 text-violet-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">App Totem Kiosk</div>
-                          <div className="text-[9px] text-slate-400">Modo tablet offline</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['mobile']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('mobile');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'mobile'
+                              ? 'bg-violet-500/20 border-violet-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Smartphone className="w-4 h-4 text-violet-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">App Totem Kiosk</div>
+                            <div className="text-[9px] text-slate-400">Modo tablet offline</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('tenants');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'tenants'
-                            ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Globe className="w-4 h-4 text-sky-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Multi-tenant</div>
-                          <div className="text-[9px] text-slate-400">Empresas e filiais</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['tenants']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('tenants');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'tenants'
+                              ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Globe className="w-4 h-4 text-sky-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Multi-tenant</div>
+                            <div className="text-[9px] text-slate-400">Empresas e filiais</div>
+                          </div>
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => {
-                          setActiveView('operational');
-                          setOperationalTab('config');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`col-span-2 p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'operational' && operationalTab === 'config'
-                            ? 'bg-amber-500/20 border-amber-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Key className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Chaves de Conexão Supabase</div>
-                          <div className="text-[9px] text-slate-400">Configuração de banco e API</div>
-                        </div>
-                      </button>
+                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
+                        <button
+                          onClick={() => {
+                            setActiveView('operational');
+                            setOperationalTab('config');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`col-span-2 p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                            activeView === 'operational' && operationalTab === 'config'
+                              ? 'bg-amber-500/20 border-amber-500/50 text-white font-bold'
+                              : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Key className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div className="truncate">
+                            <div className="text-xs font-semibold truncate">Chaves de Conexão Supabase</div>
+                            <div className="text-[9px] text-slate-400">Configuração de banco e API</div>
+                          </div>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1767,6 +1838,7 @@ export default function App() {
           </div>
         </div>
       )}
+      <OfflineIndicator />
     </div>
   );
 }

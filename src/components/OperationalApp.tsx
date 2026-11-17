@@ -58,12 +58,16 @@ import {
   resetLivenessState,
   FaceLandmarks,
   getRandomLivenessChallenge,
-  LivenessChallenge
+  LivenessChallenge,
+  evaluateLivenessMotion,
+  LivenessSample
 } from '../utils/facialBiometricsEngine';
 import {
   saveOfflinePunchToIDB,
   initBackgroundSyncListener
 } from '../utils/pwaBackgroundSync';
+import { RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS } from '../types/permissions';
+import { TAB_PERMISSION_MAP, hasPermission } from '../utils/permissionsHelper';
 import {
   getOfflineQueue,
   getDeviceHealthStatus
@@ -84,6 +88,8 @@ import {
   Lock,
   Printer,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Radio,
   FileCheck,
   Calendar,
@@ -137,252 +143,6 @@ import {
 } from '../utils/brasiliaClock';
 import { hasRealBiometricTemplate } from '../utils/biometricHelpers';
 
-export const DEFAULT_TENANT: Tenant = {
-  id: 'tenant-01',
-  cnpj: '58.392.102/0001-44',
-  razaoSocial: 'Softcase Tecnologia e Sistemas Ltda',
-  nomeFantasia: 'Softcase Tecnologia',
-  slug: 'softcase',
-  plano: 'REP-P Corporativo',
-  licencasContratadas: 500,
-  licencasEmUso: 0,
-  status: 'ATIVO',
-  dataAdesao: '2026-01-01T00:00:00.000Z',
-  emailAdmin: 'admin@softcase.com.br'
-};
-
-export const DEFAULT_DEPARTAMENTOS: Departamento[] = [
-  {
-    id: 'dep-01',
-    tenantId: 'tenant-01',
-    nome: 'Administrativo & Operações',
-    codigo: 'DEP-01',
-    gestorId: 'colab-admin',
-    gestorNome: 'Administrador Softcase',
-    gestorEmail: 'admin@softcase.com.br',
-    horarioInicioPadrao: '08:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true
-  },
-  {
-    id: 'dep-02',
-    tenantId: 'tenant-01',
-    nome: 'Recursos Humanos & DP',
-    codigo: 'DEP-02',
-    gestorId: 'colab-02',
-    gestorNome: 'Luciana Mendonça',
-    gestorEmail: 'rh@softcase.com.br',
-    horarioInicioPadrao: '08:30',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true
-  },
-  {
-    id: 'dep-03',
-    tenantId: 'tenant-01',
-    nome: 'Tecnologia & Desenvolvimento',
-    codigo: 'DEP-03',
-    gestorId: 'colab-03',
-    gestorNome: 'Carlos Silva',
-    gestorEmail: 'ti@softcase.com.br',
-    horarioInicioPadrao: '09:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true
-  },
-  {
-    id: 'dep-04',
-    tenantId: 'tenant-01',
-    nome: 'Logística & Expedição',
-    codigo: 'DEP-04',
-    gestorId: 'colab-04',
-    gestorNome: 'Marcos Ribeiro',
-    gestorEmail: 'logistica@softcase.com.br',
-    horarioInicioPadrao: '07:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true
-  }
-];
-
-export const DEFAULT_DEP: Departamento = DEFAULT_DEPARTAMENTOS[0];
-
-export const DEFAULT_CARGOS: Cargo[] = [
-  { id: 'crg-01', tenantId: 'tenant-01', titulo: 'Super Administrador', codigo: 'CRG-01', cbo: '2124-05', cboDescricao: 'Especialista em Sistemas de Informação', cargaHorariaSemanal: 40 },
-  { id: 'crg-02', tenantId: 'tenant-01', titulo: 'Analista de Recursos Humanos', codigo: 'CRG-02', cbo: '2524-05', cboDescricao: 'Profissionais de Recursos Humanos', cargaHorariaSemanal: 40 },
-  { id: 'crg-03', tenantId: 'tenant-01', titulo: 'Analista de Departamento Pessoal', codigo: 'CRG-03', cbo: '4110-05', cboDescricao: 'Auxiliar de Pessoal / Folha de Pagamento', cargaHorariaSemanal: 44 },
-  { id: 'crg-04', tenantId: 'tenant-01', titulo: 'Engenheiro de Software', codigo: 'CRG-04', cbo: '2124-20', cboDescricao: 'Desenvolvedor de Sistemas', cargaHorariaSemanal: 40 },
-  { id: 'crg-05', tenantId: 'tenant-01', titulo: 'Coordenador Operacional', codigo: 'CRG-05', cbo: '1421-05', cboDescricao: 'Gerente Administrativo', cargaHorariaSemanal: 40 },
-  { id: 'crg-06', tenantId: 'tenant-01', titulo: 'Assistente Administrativo', codigo: 'CRG-06', cbo: '4110-10', cboDescricao: 'Assistente Administrativo', cargaHorariaSemanal: 44 }
-];
-
-export const DEFAULT_CRG: Cargo = DEFAULT_CARGOS[0];
-
-export const DEFAULT_ESTABELECIMENTOS: Estabelecimento[] = [
-  {
-    id: 'est-01',
-    tenantId: 'tenant-01',
-    codigo: '0001',
-    nome: 'Matriz Principal - Sede (Av. Paulista)',
-    cnpj: '58.392.102/0001-44',
-    tipo: 'MATRIZ',
-    fusoHorario: 'America/Sao_Paulo',
-    cercaRaioMetros: 100,
-    latitude: -23.561684,
-    longitude: -46.655981,
-    uf: 'SP',
-    municipio: 'São Paulo',
-    enderecoCompleto: 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP',
-    bloquearForaDoRaio: true
-  },
-  {
-    id: 'est-02',
-    tenantId: 'tenant-01',
-    codigo: '0002',
-    nome: 'Filial Campinas - Polo Tecnológico',
-    cnpj: '58.392.102/0002-25',
-    tipo: 'FILIAL',
-    fusoHorario: 'America/Sao_Paulo',
-    cercaRaioMetros: 150,
-    latitude: -22.90556,
-    longitude: -47.06083,
-    uf: 'SP',
-    municipio: 'Campinas',
-    enderecoCompleto: 'Rua Barão de Jaguara, 500 - Centro, Campinas - SP',
-    bloquearForaDoRaio: true
-  }
-];
-
-export const DEFAULT_EST: Estabelecimento = DEFAULT_ESTABELECIMENTOS[0];
-
-export const DEFAULT_COLABORADORES: Colaborador[] = [
-  {
-    id: 'colab-01',
-    tenantId: 'tenant-01',
-    nome: 'Carlos Silva',
-    cpf: '123.456.789-01',
-    matricula: 'SC-1001',
-    pis: '123.45678.90-1',
-    dataAdmissao: '2023-01-15',
-    cargoId: 'crg-04',
-    cargoTitulo: 'Engenheiro de Software',
-    departamentoId: 'dep-03',
-    departamentoNome: 'Tecnologia & Desenvolvimento',
-    gestorId: 'colab-admin',
-    gestorNome: 'Administrador Softcase',
-    estabelecimentoId: 'est-01',
-    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
-    regime: 'REGULAR',
-    horarioInicio: '09:00',
-    horarioFim: '18:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true,
-    pinColetor: '1001',
-    biometriaCadastrada: true,
-    biometriaHashTemplate: 'SHA256:7B8F9A01C2D3E4F5',
-    limiarConfiancaMinimo: 95.0,
-    status: 'ATIVO',
-    email: 'carlos.silva@softcase.com.br'
-  },
-  {
-    id: 'colab-02',
-    tenantId: 'tenant-01',
-    nome: 'Luciana Mendonça',
-    cpf: '234.567.890-12',
-    matricula: 'SC-1002',
-    pis: '234.56789.01-2',
-    dataAdmissao: '2022-05-10',
-    cargoId: 'crg-02',
-    cargoTitulo: 'Analista de Recursos Humanos',
-    departamentoId: 'dep-02',
-    departamentoNome: 'Recursos Humanos & DP',
-    gestorId: 'colab-admin',
-    gestorNome: 'Administrador Softcase',
-    estabelecimentoId: 'est-01',
-    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
-    regime: 'REGULAR',
-    horarioInicio: '08:30',
-    horarioFim: '17:30',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true,
-    pinColetor: '1002',
-    biometriaCadastrada: true,
-    biometriaHashTemplate: 'SHA256:A1C2E3B4D5F60718',
-    limiarConfiancaMinimo: 95.0,
-    status: 'ATIVO',
-    email: 'rh@softcase.com.br'
-  },
-  {
-    id: 'colab-03',
-    tenantId: 'tenant-01',
-    nome: 'Marcos Ribeiro',
-    cpf: '345.678.901-23',
-    matricula: 'SC-1003',
-    pis: '345.67890.12-3',
-    dataAdmissao: '2024-02-01',
-    cargoId: 'crg-05',
-    cargoTitulo: 'Coordenador Operacional',
-    departamentoId: 'dep-04',
-    departamentoNome: 'Logística & Expedição',
-    gestorId: 'colab-admin',
-    gestorNome: 'Administrador Softcase',
-    estabelecimentoId: 'est-01',
-    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
-    regime: 'REGULAR',
-    horarioInicio: '07:00',
-    horarioFim: '16:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true,
-    pinColetor: '1003',
-    biometriaCadastrada: false,
-    status: 'ATIVO',
-    email: 'marcos.ribeiro@softcase.com.br'
-  },
-  {
-    id: 'colab-04',
-    tenantId: 'tenant-01',
-    nome: 'Juliana Ferreira',
-    cpf: '456.789.012-34',
-    matricula: 'SC-1004',
-    pis: '456.78901.23-4',
-    dataAdmissao: '2023-08-20',
-    cargoId: 'crg-06',
-    cargoTitulo: 'Assistente Administrativo',
-    departamentoId: 'dep-01',
-    departamentoNome: 'Administrativo & Operações',
-    gestorId: 'colab-admin',
-    gestorNome: 'Administrador Softcase',
-    estabelecimentoId: 'est-01',
-    estabelecimentoNome: 'Matriz Principal - Sede (Av. Paulista)',
-    regime: 'REGULAR',
-    horarioInicio: '08:00',
-    horarioFim: '17:00',
-    cargaHorariaDiariaHoras: 8,
-    intervaloMinutos: 60,
-    maxMinutosAntecedenciaPermitido: 15,
-    regraAntecedenciaAtiva: true,
-    pinColetor: '1004',
-    biometriaCadastrada: true,
-    biometriaHashTemplate: 'SHA256:5E6F7A8B9C0D1E2F',
-    limiarConfiancaMinimo: 95.0,
-    status: 'ATIVO',
-    email: 'juliana.ferreira@softcase.com.br'
-  }
-];
-
-export const DEFAULT_COLAB: Colaborador = DEFAULT_COLABORADORES[0];
-
 interface OperationalAppProps {
   currentUser?: AuthUser;
   departamentos?: Departamento[];
@@ -405,19 +165,23 @@ interface OperationalAppProps {
   onUpdateEstabelecimentos?: (novos: Estabelecimento[]) => void;
   operationalTab?: 'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa' | 'escalas' | 'afastamentos' | 'exportador' | 'riscos' | 'mobile';
   onSelectOperationalTab?: (tab: any) => void;
+  rolePermissions?: RolePermissionsMap;
+  onRolePermissionsChange?: (next: RolePermissionsMap) => void;
+  globalThreshold?: number;
+  onThresholdChange?: (next: number) => void;
 }
 
 export const OperationalApp: React.FC<OperationalAppProps> = ({
   currentUser = {
-    id: 'user-02',
-    nome: 'Luciana Mendonça',
-    email: 'rh@softcase.com.br',
-    cpf: '234.567.890-12',
+    id: '',
+    nome: 'Operador',
+    email: '',
+    cpf: '',
     role: 'RH_ADMIN',
     roleLabel: 'RH & Departamento Pessoal',
-    tenantId: 'tenant-01',
-    tenantNome: 'Softcase Tecnologia e Sistemas Ltda',
-    mfaHabilitado: true
+    tenantId: '',
+    tenantNome: '',
+    mfaHabilitado: false
   },
   estabelecimentos: propEstabelecimentos,
   onUpdateEstabelecimentos: propOnUpdateEstabelecimentos,
@@ -438,26 +202,45 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   assinaturasEspelho: propAssinaturasEspelho,
   onUpdateAssinaturasEspelho: propOnUpdateAssinaturasEspelho,
   operationalTab: propOperationalTab,
-  onSelectOperationalTab: propOnSelectOperationalTab
+  onSelectOperationalTab: propOnSelectOperationalTab,
+  rolePermissions: propRolePermissions,
+  onRolePermissionsChange: propOnRolePermissionsChange,
+  globalThreshold: propGlobalThreshold,
+  onThresholdChange: propOnThresholdChange
 }) => {
   const { session, authToken, updateSupabaseConfig, supabase } = useAuth();
   const bearerToken = authToken || session?.access_token || '';
-  
-  // Inicializa listener de Background Sync para PWA Offline -> Supabase
+  const [localRolePermissions, setLocalRolePermissions] = useState<RolePermissionsMap>(DEFAULT_ROLE_PERMISSIONS);
+  const [localThreshold, setLocalThreshold] = useState<number>(82.0);
+  const effectivePermissions = propRolePermissions || localRolePermissions;
+  const effectiveThreshold = propGlobalThreshold ?? localThreshold;
+
+  const handlePermissionsChange = (next: RolePermissionsMap) => {
+    setLocalRolePermissions(next);
+    propOnRolePermissionsChange?.(next);
+  };
+
+  const handleThresholdChange = (next: number) => {
+    setLocalThreshold(next);
+    propOnThresholdChange?.(next);
+  };
+
+  // Inicializa listener de Background Sync para PWA Offline -> API autenticada
   useEffect(() => {
-    const cleanup = initBackgroundSyncListener(supabase, (count) => {
-      console.log(`${count} batidas de ponto offline sincronizadas com sucesso para o Supabase.`);
+    const cleanup = initBackgroundSyncListener(bearerToken, (count) => {
+      console.log(`${count} batidas de ponto offline sincronizadas com sucesso.`);
     });
     return cleanup;
-  }, [supabase]);
+  }, [bearerToken]);
 
-  // Efeito para carregar dados reais do Supabase
+  const [isBootstrapping, setIsBootstrapping] = useState<boolean>(true);
+
+  // Efeito para carregar dados reais via /api/bootstrap-data (com fallback Supabase apenas sem JWT)
   useEffect(() => {
+    let active = true;
     async function fetchData() {
-      // Carrega dados do Supabase diretamente pelo client autenticado ou público
-      
+      setIsBootstrapping(true);
       try {
-        // Carrega Tenants + metadados locais de endereço/coordenadas
         let cachedTenantLocations: Record<string, any> = {};
         if (typeof window !== 'undefined') {
           try {
@@ -465,150 +248,369 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           } catch (_) {}
         }
 
-        const { data: tenantsData } = await supabase.from('tenants').select('*');
-        if (tenantsData && tenantsData.length > 0) {
-          setTenants(tenantsData.map(t => {
-            const loc = cachedTenantLocations[t.tenant_id] || {};
-            return {
-              id: t.tenant_id,
-              cnpj: t.cnpj || '58.392.102/0001-44',
-              razaoSocial: t.razao_social || 'Softcase Tecnologia e Sistemas Ltda',
-              nomeFantasia: t.nome_fantasia || 'Softcase Tecnologia',
-              slug: t.slug || 'softcase',
-              plano: (t.plano as any) || 'REP-P Corporativo',
-              licencasContratadas: Number(t.licencas_contratadas) || 500,
-              licencasEmUso: 0,
-              status: (t.status as any) || 'ATIVO',
-              dataAdesao: t.created_at || getBrasiliaParts().iso,
-              emailAdmin: t.email_admin || 'admin@softcase.com.br',
-              cep: t.cep ?? loc.cep,
-              logradouro: t.logradouro ?? loc.logradouro,
-              numero: t.numero ?? loc.numero,
-              complemento: t.complemento ?? loc.complemento,
-              bairro: t.bairro ?? loc.bairro,
-              municipio: t.municipio ?? loc.municipio,
-              uf: t.uf ?? loc.uf,
-              enderecoCompleto: t.endereco_completo ?? loc.enderecoCompleto,
-              latitude: t.latitude != null ? Number(t.latitude) : loc.latitude,
-              longitude: t.longitude != null ? Number(t.longitude) : loc.longitude,
-              cercaRaioMetros: t.cerca_raio_metros != null ? Number(t.cerca_raio_metros) : loc.cercaRaioMetros,
-              bloquearForaDoRaio: t.bloquear_fora_do_raio ?? loc.bloquearForaDoRaio ?? true
-            };
-          }));
-        } else {
-          setTenants([DEFAULT_TENANT]);
+        if (bearerToken) {
+          const tenantQuery = currentUser?.tenantId ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
+          const res = await fetch(`/api/bootstrap-data${tenantQuery}`, {
+            headers: { Authorization: `Bearer ${bearerToken}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (!active) return;
+            if (data?.success) {
+              const mappedTenants: Tenant[] = Array.isArray(data.tenants)
+                ? data.tenants.map((t: any) => {
+                    const loc = cachedTenantLocations[t.tenant_id] || {};
+                    return {
+                      id: t.tenant_id,
+                      cnpj: t.cnpj || '',
+                      razaoSocial: t.razao_social || '',
+                      nomeFantasia: t.nome_fantasia || t.razao_social || '',
+                      slug: t.slug || '',
+                      plano: (t.plano as any) || 'REP-P Corporativo',
+                      licencasContratadas: Number(t.licencas_contratadas) || 500,
+                      licencasEmUso: 0,
+                      status: (t.status as any) || 'ATIVO',
+                      dataAdesao: t.created_at || getBrasiliaParts().iso,
+                      emailAdmin: t.email_admin || '',
+                      cep: t.cep ?? loc.cep,
+                      logradouro: t.logradouro ?? loc.logradouro,
+                      numero: t.numero ?? loc.numero,
+                      complemento: t.complemento ?? loc.complemento,
+                      bairro: t.bairro ?? loc.bairro,
+                      municipio: t.municipio ?? loc.municipio,
+                      uf: t.uf ?? loc.uf,
+                      enderecoCompleto: t.endereco_completo ?? loc.enderecoCompleto,
+                      latitude: t.latitude != null ? Number(t.latitude) : loc.latitude,
+                      longitude: t.longitude != null ? Number(t.longitude) : loc.longitude,
+                      cercaRaioMetros: t.cerca_raio_metros != null ? Number(t.cerca_raio_metros) : loc.cercaRaioMetros,
+                      bloquearForaDoRaio: t.bloquear_fora_do_raio ?? loc.bloquearForaDoRaio ?? true
+                    };
+                  })
+                : [];
+              setTenants(mappedTenants);
+              setSelectedTenantId(prev => {
+                if (prev && mappedTenants.some(t => t.id === prev)) return prev;
+                if (currentUser?.tenantId && mappedTenants.some(t => t.id === currentUser.tenantId)) {
+                  return currentUser.tenantId;
+                }
+                return mappedTenants[0]?.id || '';
+              });
+
+              if (Array.isArray(data.colaboradores)) {
+                setLocalColaboradores(data.colaboradores);
+                propOnUpdateColaboradores?.(data.colaboradores);
+              }
+              if (Array.isArray(data.estabelecimentos)) {
+                const mappedEsts: Estabelecimento[] = data.estabelecimentos.map((e: any) => ({
+                  id: e.establishment_id || e.id,
+                  tenantId: e.tenant_id,
+                  nome: e.nome,
+                  cnpj: e.cnpj,
+                  codigo: (e.establishment_id || '').split('-')[0] || 'EST',
+                  tipo: (e.tipo as any) || ((e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL'),
+                  fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
+                  uf: e.uf || 'SP',
+                  municipio: e.municipio || 'São Paulo',
+                  enderecoCompleto: e.endereco_completo || '',
+                  cep: e.cep || '',
+                  latitude: e.latitude != null ? Number(e.latitude) : Number.NaN,
+                  longitude: e.longitude != null ? Number(e.longitude) : Number.NaN,
+                  cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
+                  bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
+                }));
+                setLocalEstabelecimentos(mappedEsts);
+                propOnUpdateEstabelecimentos?.(mappedEsts);
+              }
+              if (Array.isArray(data.departamentos)) {
+                const mappedDepts: Departamento[] = data.departamentos.map((d: any) => ({
+                  id: d.department_id || d.id,
+                  tenantId: d.tenant_id,
+                  nome: d.nome,
+                  codigo: d.codigo || '',
+                  gestorId: d.gestor_id || '',
+                  gestorNome: d.gestor_nome || '',
+                  gestorEmail: d.gestor_email || '',
+                  horarioInicioPadrao: d.horario_inicio_padrao || '08:00',
+                  cargaHorariaDiariaHoras: Number(d.carga_horaria_diaria) || 8,
+                  intervaloMinutos: Number(d.intervalo_minutos) || 60,
+                  maxMinutosAntecedenciaPermitido: Number(d.max_minutos_antecedencia) ?? 15,
+                  regraAntecedenciaAtiva: d.regra_antecedencia_ativa ?? true
+                }));
+                setLocalDepartamentos(mappedDepts);
+                propOnUpdateDepartamentos?.(mappedDepts);
+              }
+              if (Array.isArray(data.cargos)) {
+                setCargosState(data.cargos.map((c: any) => ({
+                  id: c.position_id || c.id,
+                  tenantId: c.tenant_id,
+                  titulo: c.titulo || '',
+                  codigo: c.codigo || (c.position_id || '').toUpperCase().slice(0, 8),
+                  cbo: c.cbo || '',
+                  cboDescricao: c.cbo_descricao || '',
+                  cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40
+                })));
+              }
+              if (Array.isArray(data.registros) && (!propRegistros || propRegistros.length === 0)) {
+                setRegistrosPonto(data.registros.map((p: any) => {
+                  const detalhes = typeof p.detalhes === 'string' ? JSON.parse(p.detalhes) : p.detalhes;
+                  return {
+                    nsr: p.nsr,
+                    tenantId: p.tenant_id,
+                    empregadorRazaoSocial: detalhes?.empregadorRazaoSocial || '',
+                    empregadorCnpj: detalhes?.empregadorCnpj || '',
+                    colaboradorId: p.collaborator_id,
+                    colaboradorNome: detalhes?.colaboradorNome || 'Colaborador',
+                    colaboradorCpf: detalhes?.colaboradorCpf || '',
+                    colaboradorMatricula: detalhes?.colaboradorMatricula || '',
+                    dataHora: p.data_hora,
+                    dataHoraFormatada: getBrasiliaParts(p.data_hora).formatted,
+                    fusoHorario: '-03:00',
+                    coletorId: detalhes?.coletorId || '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+                    tipoMarcacao: p.tipo_marcacao as any,
+                    latitude: p.latitude != null ? Number(p.latitude) : 0,
+                    longitude: p.longitude != null ? Number(p.longitude) : 0,
+                    hashSha256: p.hash_sha256,
+                    modoDispositivo: p.modo_dispositivo as any,
+                    alertaAntecedencia: detalhes?.alertaAntecedencia,
+                    alertaIntervalo: detalhes?.alertaIntervalo
+                  };
+                }));
+              }
+              if (data.appSettings?.biometric_threshold != null && propGlobalThreshold == null) {
+                setLocalThreshold(Number(data.appSettings.biometric_threshold));
+              }
+              if (Array.isArray(data.rolePermissions) && data.rolePermissions.length > 0 && !propRolePermissions) {
+                const nextMatrix: RolePermissionsMap = { ...DEFAULT_ROLE_PERMISSIONS };
+                for (const row of data.rolePermissions) {
+                  if (row.role && Array.isArray(row.permissions)) {
+                    (nextMatrix as any)[row.role] = row.permissions;
+                  }
+                }
+                setLocalRolePermissions(nextMatrix);
+              }
+              return;
+            }
+          }
         }
 
-        // Carrega Colaboradores
-        const { data: colabsData } = await supabase.from('collaborators').select('*');
-        if (colabsData && colabsData.length > 0) {
-          setColaboradores(colabsData.map(c => {
-            const localVecRaw = typeof window !== 'undefined' ? localStorage.getItem(`sc_bio_vec_${c.collaborator_id}`) : null;
-            const rawTemplate = c.biometric_template || c.biometria_hash_template || localVecRaw || undefined;
-            const hasBio = hasRealBiometricTemplate({
-              biometriaCadastrada: c.biometria_cadastrada,
-              biometriaHashTemplate: rawTemplate
-            });
-            return {
-              id: c.collaborator_id,
-              tenantId: c.tenant_id,
-              nome: c.nome,
-              cpf: c.cpf,
-              matricula: c.matricula,
-              pis: c.pis,
-              dataAdmissao: c.data_admissao,
-              cargoId: c.cargo_id,
-              cargoTitulo: c.cargo_titulo,
-              departamentoId: c.departamento_id,
-              departamentoNome: c.departamento_nome,
-              gestorId: c.gestor_id,
-              gestorNome: c.gestor_nome,
-              estabelecimentoId: c.estabelecimento_id,
-              estabelecimentoNome: c.estabelecimento_nome,
-              regime: c.regime as any,
-              horarioInicio: c.horario_inicio,
-              horarioFim: c.horario_fim,
-              cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria),
-              intervaloMinutos: c.intervalo_minutos,
-              maxMinutosAntecedenciaPermitido: c.max_minutos_antecedencia,
-              regraAntecedenciaAtiva: c.regra_antecedencia_ativa,
-              pinColetor: c.pin_coletor,
-              status: c.status as any,
-              biometriaCadastrada: hasBio,
-              biometriaHashTemplate: rawTemplate,
-              limiarConfiancaMinimo: c.limiar_confianca_minimo || 95.0,
-              email: c.email || ''
-            };
-          }));
-        } else {
-          setColaboradores(DEFAULT_COLABORADORES);
-        }
+        if (!supabase || !active) return;
 
-        // Carrega Estabelecimentos
-        const { data: estsData } = await supabase.from('establishments').select('*');
-        if (estsData && estsData.length > 0) setEstabelecimentos(estsData.map(e => ({
-            id: e.establishment_id,
-            tenantId: e.tenant_id,
-            nome: e.nome,
-            cnpj: e.cnpj,
-            codigo: (e.establishment_id || '').split('-')[0] || 'EST',
-            tipo: (e.tipo as any) || ((e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL'),
-            fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
-            uf: e.uf || 'SP',
-            municipio: e.municipio || 'São Paulo',
-            enderecoCompleto: e.endereco_completo || '',
-            cep: e.cep || '',
-            latitude: e.latitude != null ? Number(e.latitude) : Number.NaN,
-            longitude: e.longitude != null ? Number(e.longitude) : Number.NaN,
-            cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
-            bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
+        // Fallback direto Supabase apenas quando não há bearerToken autenticado
+        const [
+          { data: tenantsData },
+          { data: colabsData },
+          { data: estsData },
+          { data: deptsData },
+          { data: posData },
+          { data: pointsData }
+        ] = await Promise.all([
+          supabase.from('tenants').select('*'),
+          supabase.from('collaborators').select('*'),
+          supabase.from('establishments').select('*'),
+          supabase.from('departments').select('*'),
+          supabase.from('positions').select('*'),
+          supabase.from('point_registrations').select('*').order('data_hora', { ascending: false })
+        ]);
+
+        if (!active) return;
+
+        const fallbackTenants: Tenant[] = (tenantsData || []).map(t => {
+          const loc = cachedTenantLocations[t.tenant_id] || {};
+          return {
+            id: t.tenant_id,
+            cnpj: t.cnpj || '',
+            razaoSocial: t.razao_social || '',
+            nomeFantasia: t.nome_fantasia || t.razao_social || '',
+            slug: t.slug || '',
+            plano: (t.plano as any) || 'REP-P Corporativo',
+            licencasContratadas: Number(t.licencas_contratadas) || 500,
+            licencasEmUso: 0,
+            status: (t.status as any) || 'ATIVO',
+            dataAdesao: t.created_at || getBrasiliaParts().iso,
+            emailAdmin: t.email_admin || '',
+            cep: t.cep ?? loc.cep,
+            logradouro: t.logradouro ?? loc.logradouro,
+            numero: t.numero ?? loc.numero,
+            complemento: t.complemento ?? loc.complemento,
+            bairro: t.bairro ?? loc.bairro,
+            municipio: t.municipio ?? loc.municipio,
+            uf: t.uf ?? loc.uf,
+            enderecoCompleto: t.endereco_completo ?? loc.enderecoCompleto,
+            latitude: t.latitude != null ? Number(t.latitude) : loc.latitude,
+            longitude: t.longitude != null ? Number(t.longitude) : loc.longitude,
+            cercaRaioMetros: t.cerca_raio_metros != null ? Number(t.cerca_raio_metros) : loc.cercaRaioMetros,
+            bloquearForaDoRaio: t.bloquear_fora_do_raio ?? loc.bloquearForaDoRaio ?? true
+          };
+        });
+        setTenants(fallbackTenants);
+        setSelectedTenantId(prev => {
+          if (prev && fallbackTenants.some(t => t.id === prev)) return prev;
+          if (currentUser?.tenantId && fallbackTenants.some(t => t.id === currentUser.tenantId)) {
+            return currentUser.tenantId;
+          }
+          return fallbackTenants[0]?.id || '';
+        });
+
+        const fallbackColabs: Colaborador[] = (colabsData || []).map(c => {
+          const localVecRaw = typeof window !== 'undefined' ? localStorage.getItem(`sc_bio_vec_${c.collaborator_id}`) : null;
+          const rawTemplate = c.biometric_template || c.biometria_hash_template || localVecRaw || undefined;
+          const hasBio = hasRealBiometricTemplate({
+            biometriaCadastrada: c.biometria_cadastrada,
+            biometriaHashTemplate: rawTemplate
+          });
+          return {
+            id: c.collaborator_id,
+            tenantId: c.tenant_id,
+            nome: c.nome,
+            cpf: c.cpf,
+            matricula: c.matricula,
+            pis: c.pis,
+            dataAdmissao: c.data_admissao,
+            cargoId: c.cargo_id,
+            cargoTitulo: c.cargo_titulo,
+            departamentoId: c.departamento_id,
+            departamentoNome: c.departamento_nome,
+            gestorId: c.gestor_id,
+            gestorNome: c.gestor_nome,
+            estabelecimentoId: c.estabelecimento_id,
+            estabelecimentoNome: c.estabelecimento_nome,
+            regime: c.regime as any,
+            horarioInicio: c.horario_inicio,
+            horarioFim: c.horario_fim,
+            cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria),
+            intervaloMinutos: c.intervalo_minutos,
+            maxMinutosAntecedenciaPermitido: c.max_minutos_antecedencia,
+            regraAntecedenciaAtiva: c.regra_antecedencia_ativa,
+            tipoEscala: (c.tipo_escala as any) || '5x2',
+            turmaEscala: (c.turma_escala as any) || 'A',
+            diasFolgaSemana: Array.isArray(c.dias_folga_semana) ? c.dias_folga_semana : undefined,
+            anualFolgas: c.anual_folgas && typeof c.anual_folgas === 'object' ? c.anual_folgas : undefined,
+            dataBaseCiclo: c.data_base_ciclo || undefined,
+            pinColetor: '',
+            status: c.status as any,
+            biometriaCadastrada: hasBio,
+            biometriaHashTemplate: rawTemplate,
+            limiarConfiancaMinimo: c.limiar_confianca_minimo || 82.0,
+            email: c.email || ''
+          };
+        });
+        setLocalColaboradores(fallbackColabs);
+        propOnUpdateColaboradores?.(fallbackColabs);
+
+        const fallbackEsts: Estabelecimento[] = (estsData || []).map(e => ({
+          id: e.establishment_id,
+          tenantId: e.tenant_id,
+          nome: e.nome,
+          cnpj: e.cnpj,
+          codigo: (e.establishment_id || '').split('-')[0] || 'EST',
+          tipo: (e.tipo as any) || ((e.establishment_id || '').includes('matriz') ? 'MATRIZ' : 'FILIAL'),
+          fusoHorario: e.fuso_horario || 'America/Sao_Paulo',
+          uf: e.uf || 'SP',
+          municipio: e.municipio || 'São Paulo',
+          enderecoCompleto: e.endereco_completo || '',
+          cep: e.cep || '',
+          latitude: e.latitude != null ? Number(e.latitude) : Number.NaN,
+          longitude: e.longitude != null ? Number(e.longitude) : Number.NaN,
+          cercaRaioMetros: Number(e.cerca_raio_metros) || 100,
+          bloquearForaDoRaio: e.bloquear_fora_do_raio ?? true
+        }));
+        setLocalEstabelecimentos(fallbackEsts);
+        propOnUpdateEstabelecimentos?.(fallbackEsts);
+
+        const fallbackDepts: Departamento[] = (deptsData || []).map(d => ({
+          id: d.department_id,
+          tenantId: d.tenant_id,
+          nome: d.nome,
+          codigo: d.codigo || '',
+          gestorId: d.gestor_id || '',
+          gestorNome: d.gestor_nome || '',
+          gestorEmail: d.gestor_email || '',
+          horarioInicioPadrao: d.horario_inicio_padrao || '08:00',
+          cargaHorariaDiariaHoras: Number(d.carga_horaria_diaria) || 8,
+          intervaloMinutos: Number(d.intervalo_minutos) || 60,
+          maxMinutosAntecedenciaPermitido: Number(d.max_minutos_antecedencia) ?? 15,
+          regraAntecedenciaAtiva: d.regra_antecedencia_ativa ?? true
+        }));
+        setLocalDepartamentos(fallbackDepts);
+        propOnUpdateDepartamentos?.(fallbackDepts);
+
+        setCargosState((posData || []).map(c => ({
+          id: c.position_id,
+          tenantId: c.tenant_id,
+          titulo: c.titulo || '',
+          codigo: c.codigo || (c.position_id || '').toUpperCase().slice(0, 8),
+          cbo: c.cbo || '',
+          cboDescricao: c.cbo_descricao || '',
+          cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40
         })));
 
-        // Carrega Registros de Ponto
-        const { data: pointsData } = await supabase.from('point_registrations').select('*').order('data_hora', { ascending: false });
-        if (pointsData) setRegistrosPonto(pointsData.map(p => {
+        if (pointsData) {
+          setRegistrosPonto(pointsData.map(p => {
             const detalhes = typeof p.detalhes === 'string' ? JSON.parse(p.detalhes) : p.detalhes;
             return {
-                nsr: p.nsr,
-                tenantId: p.tenant_id,
-                empregadorRazaoSocial: detalhes?.empregadorRazaoSocial || 'Softcase',
-                empregadorCnpj: detalhes?.empregadorCnpj || '00.000.000/0001-91',
-                colaboradorId: p.collaborator_id,
-                colaboradorNome: detalhes?.colaboradorNome || 'Colaborador', 
-                colaboradorCpf: detalhes?.colaboradorCpf || '000.000.000-00',
-                colaboradorMatricula: detalhes?.colaboradorMatricula || 'SC-0000',
-                dataHora: p.data_hora,
-                dataHoraFormatada: getBrasiliaParts(p.data_hora).formatted,
-                fusoHorario: '-03:00',
-                coletorId: detalhes?.coletorId || '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
-                tipoMarcacao: p.tipo_marcacao as any,
-                latitude: p.latitude != null ? Number(p.latitude) : 0,
-                longitude: p.longitude != null ? Number(p.longitude) : 0,
-                hashSha256: p.hash_sha256,
-                modoDispositivo: p.modo_dispositivo as any,
-                alertaAntecedencia: detalhes?.alertaAntecedencia,
-                alertaIntervalo: detalhes?.alertaIntervalo
+              nsr: p.nsr,
+              tenantId: p.tenant_id,
+              empregadorRazaoSocial: detalhes?.empregadorRazaoSocial || '',
+              empregadorCnpj: detalhes?.empregadorCnpj || '',
+              colaboradorId: p.collaborator_id,
+              colaboradorNome: detalhes?.colaboradorNome || 'Colaborador',
+              colaboradorCpf: detalhes?.colaboradorCpf || '',
+              colaboradorMatricula: detalhes?.colaboradorMatricula || '',
+              dataHora: p.data_hora,
+              dataHoraFormatada: getBrasiliaParts(p.data_hora).formatted,
+              fusoHorario: '-03:00',
+              coletorId: detalhes?.coletorId || '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
+              tipoMarcacao: p.tipo_marcacao as any,
+              latitude: p.latitude != null ? Number(p.latitude) : 0,
+              longitude: p.longitude != null ? Number(p.longitude) : 0,
+              hashSha256: p.hash_sha256,
+              modoDispositivo: p.modo_dispositivo as any,
+              alertaAntecedencia: detalhes?.alertaAntecedencia,
+              alertaIntervalo: detalhes?.alertaIntervalo
             };
-        }));
-
+          }));
+        }
       } catch (error) {
-        console.error('Erro ao carregar dados do Supabase:', error);
+        console.error('Erro ao carregar dados operacionais:', error);
+      } finally {
+        if (active) setIsBootstrapping(false);
       }
     }
-    
+
     fetchData();
-  }, [session, authToken, supabase]);
-  
-  // Estado dos Dados Operacionais (com fallback local seguro)
-  const [tenants, setTenants] = useState<Tenant[]>([DEFAULT_TENANT]);
-  const [selectedTenantId, setSelectedTenantId] = useState<string>('tenant-01');
-  const [localEstabelecimentos, setLocalEstabelecimentos] = useState<Estabelecimento[]>(DEFAULT_ESTABELECIMENTOS);
-  const estabelecimentos = (propEstabelecimentos && propEstabelecimentos.length > 0) ? propEstabelecimentos : (localEstabelecimentos.length > 0 ? localEstabelecimentos : DEFAULT_ESTABELECIMENTOS);
+    return () => {
+      active = false;
+    };
+  }, [session, bearerToken, supabase, currentUser?.tenantId]);
+
+  // Estado dos Dados Operacionais (inicializado vazio até hidratar do servidor)
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(currentUser?.tenantId || '');
+  const [localEstabelecimentos, setLocalEstabelecimentos] = useState<Estabelecimento[]>([]);
+  const estabelecimentos = propEstabelecimentos !== undefined ? propEstabelecimentos : localEstabelecimentos;
   const setEstabelecimentos = async (ests: Estabelecimento[]) => {
-    setLocalEstabelecimentos(ests.length > 0 ? ests : DEFAULT_ESTABELECIMENTOS);
+    setLocalEstabelecimentos(ests);
     propOnUpdateEstabelecimentos?.(ests);
 
-    if (supabase) {
+    if (ests.length === 0) return;
+
+    if (bearerToken) {
+      try {
+        const res = await fetch('/api/establishments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({ establishments: ests })
+        });
+        if (!res.ok) {
+          console.warn('Falha ao persistir estabelecimentos no servidor:', await res.text().catch(() => ''));
+        }
+      } catch (err) {
+        console.warn('Erro de rede ao salvar estabelecimentos:', err);
+      }
+    } else if (supabase) {
       const dbEsts = ests.map(e => ({
         establishment_id: e.id,
         tenant_id: e.tenantId,
@@ -630,20 +632,20 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   };
 
   const [coletores, setColetores] = useState<ColetorTablet[]>([]);
-  const [cargosState, setCargosState] = useState<Cargo[]>(DEFAULT_CARGOS);
-  const cargos = cargosState.length > 0 ? cargosState : DEFAULT_CARGOS;
+  const [cargosState, setCargosState] = useState<Cargo[]>([]);
+  const cargos = cargosState;
   const setCargos = setCargosState;
 
   // Estados sincronizáveis
-  const [localDepartamentos, setLocalDepartamentos] = useState<Departamento[]>(DEFAULT_DEPARTAMENTOS);
-  const departamentos = (propDepartamentos && propDepartamentos.length > 0) ? propDepartamentos : (localDepartamentos.length > 0 ? localDepartamentos : DEFAULT_DEPARTAMENTOS);
+  const [localDepartamentos, setLocalDepartamentos] = useState<Departamento[]>([]);
+  const departamentos = propDepartamentos !== undefined ? propDepartamentos : localDepartamentos;
   const setDepartamentos = (depts: Departamento[]) => {
-    setLocalDepartamentos(depts.length > 0 ? depts : DEFAULT_DEPARTAMENTOS);
+    setLocalDepartamentos(depts);
     propOnUpdateDepartamentos?.(depts);
   };
 
-  const [localColaboradores, setLocalColaboradores] = useState<Colaborador[]>(DEFAULT_COLABORADORES);
-  const colaboradores = (propColaboradores && propColaboradores.length > 0) ? propColaboradores : localColaboradores;
+  const [localColaboradores, setLocalColaboradores] = useState<Colaborador[]>([]);
+  const colaboradores = propColaboradores !== undefined ? propColaboradores : localColaboradores;
   const setColaboradores = (colabs: Colaborador[]) => {
     setLocalColaboradores(colabs);
     propOnUpdateColaboradores?.(colabs);
@@ -687,12 +689,19 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
 
   // Sub-abas do Ambiente Operacional (sincronizada com App.tsx ou local)
-  const [localOperationalTab, setLocalOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa'>('relatorios');
+  const [localOperationalTab, setLocalOperationalTab] = useState<'relatorios' | 'equipes' | 'coletor' | 'biometria' | 'empresa' | 'estrutura' | 'permissoes' | 'registros' | 'feriados' | 'tenants' | 'config' | 'ipa' | 'escalas' | 'afastamentos' | 'exportador' | 'riscos' | 'mobile'>('relatorios');
   const operationalTab = propOperationalTab || localOperationalTab;
   const setOperationalTab = (tab: any) => {
     setLocalOperationalTab(tab);
     propOnSelectOperationalTab?.(tab);
   };
+
+  useEffect(() => {
+    const permKey = TAB_PERMISSION_MAP[operationalTab];
+    if (!hasPermission(effectivePermissions, currentUser.role, permKey)) {
+      setOperationalTab('relatorios');
+    }
+  }, [operationalTab, effectivePermissions, currentUser.role]);
 
   // Relógio em tempo real do Coletor Tablet (Horário Oficial de Brasília)
   const [currentDateTime, setCurrentDateTime] = useState<Date>(() => getBrasiliaNow());
@@ -706,7 +715,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   // Estado de Fila Offline e Saúde do Dispositivo (Dashboard Ponto 2)
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
-  const [deviceHealth, setDeviceHealth] = useState<{ batteryLevel: number | null; storageQuotaPercent: number | null; isCharging: boolean | null }>({ batteryLevel: 92, storageQuotaPercent: 14, isCharging: true });
+  const [deviceHealth, setDeviceHealth] = useState<{ batteryLevel: number | null; storageQuotaPercent: number | null; isCharging: boolean | null }>({ batteryLevel: null, storageQuotaPercent: null, isCharging: null });
   const [currentLivenessChallenge, setCurrentLivenessChallenge] = useState<LivenessChallenge | null>(null);
   const [livenessConfirmed, setLivenessConfirmed] = useState<boolean>(false);
 
@@ -818,9 +827,22 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   const [generatedCredentials, setGeneratedCredentials] = useState<{ email: string; senha: string; nome: string; cpf?: string; pin?: string; colabId?: string } | null>(null);
 
-  const activeTenant = tenants.find((t) => t.id === selectedTenantId) || tenants[0];
-  const activeColaboradores = colaboradores.filter((c) => c.tenantId === selectedTenantId);
-  const activeRegistros = registrosPonto.filter((r) => r.tenantId === selectedTenantId);
+  const emptyTenantPlaceholder: Tenant = {
+    id: selectedTenantId || currentUser?.tenantId || '',
+    cnpj: '',
+    razaoSocial: currentUser?.tenantNome || (isBootstrapping ? 'Carregando empresa...' : 'Nenhuma empresa cadastrada'),
+    nomeFantasia: currentUser?.tenantNome || (isBootstrapping ? 'Carregando...' : 'Nenhuma empresa cadastrada'),
+    slug: '',
+    plano: 'REP-P Corporativo',
+    licencasContratadas: 0,
+    licencasEmUso: 0,
+    status: 'ATIVO',
+    dataAdesao: '',
+    emailAdmin: currentUser?.email || ''
+  };
+  const activeTenant = tenants.find((t) => t.id === selectedTenantId) || tenants[0] || emptyTenantPlaceholder;
+  const activeColaboradores = colaboradores.filter((c) => c.tenantId === activeTenant.id);
+  const activeRegistros = registrosPonto.filter((r) => r.tenantId === activeTenant.id);
 
   // Estados para Gestão e Homologação de Auto-Cadastros de Colaboradores
   const [colabFilterStatus, setColabFilterStatus] = useState<'TODOS' | 'ATIVO' | 'PENDENTE'>('TODOS');
@@ -903,11 +925,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     if (!colab) return;
 
     const contact = getColabContactInfo(colab);
-    const chosenTenantId = tenantIdParam || colab.tenantId || selectedTenantId || tenants[0]?.id || 'tenant-01';
+    const chosenTenantId = tenantIdParam || colab.tenantId || selectedTenantId || tenants[0]?.id || '';
     const tenantEsts = estabelecimentos.filter((e) => e.tenantId === chosenTenantId);
-    const chosenEstId = estIdParam || colab.estabelecimentoId || tenantEsts[0]?.id || estabelecimentos[0]?.id || 'est-01';
-    const chosenDeptoId = deptoIdParam || pendingDeptoSelection[colabId] || colab.departamentoId || departamentos[0]?.id || 'dep-01';
-    const chosenCargoId = cargoIdParam || pendingCargoSelection[colabId] || colab.cargoId || cargos[0]?.id || 'crg-01';
+    const chosenEstId = estIdParam || colab.estabelecimentoId || tenantEsts[0]?.id || estabelecimentos[0]?.id || '';
+    const chosenDeptoId = deptoIdParam || pendingDeptoSelection[colabId] || colab.departamentoId || departamentos[0]?.id || '';
+    const chosenCargoId = cargoIdParam || pendingCargoSelection[colabId] || colab.cargoId || cargos[0]?.id || '';
 
     const estObj = estabelecimentos.find((e) => e.id === chosenEstId) || tenantEsts[0] || estabelecimentos[0];
     const deptoObj = departamentos.find((d) => d.id === chosenDeptoId) || departamentos[0];
@@ -925,22 +947,19 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       estabelecimentoNome: estObj?.nome || colab.estabelecimentoNome || 'Matriz Principal',
       status: 'ATIVO',
       matricula: matriculaFinal,
-      departamentoId: deptoObj.id,
-      departamentoNome: deptoObj.nome,
-      cargoId: cargoObj.id,
-      cargoTitulo: cargoObj.titulo,
-      horarioInicio: deptoObj.horarioInicioPadrao || colab.horarioInicio || '08:00',
+      departamentoId: deptoObj?.id || chosenDeptoId,
+      departamentoNome: deptoObj?.nome || colab.departamentoNome || 'Não definido',
+      cargoId: cargoObj?.id || chosenCargoId,
+      cargoTitulo: cargoObj?.titulo || colab.cargoTitulo || 'Não definido',
+      horarioInicio: deptoObj?.horarioInicioPadrao || colab.horarioInicio || '08:00',
       horarioFim: '17:00',
       email: contact.hasEmail ? contact.email : colab.email,
       telefone: contact.hasTelefone ? contact.telefone : colab.telefone
     };
 
-    const novosColabs = colaboradores.map((c) => (c.id === colabId ? colabAtualizado : c));
-    setColaboradores(novosColabs);
-
     try {
       if (bearerToken) {
-        await fetch('/api/save-collaborator', {
+        const res = await fetch('/api/save-collaborator', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -948,56 +967,46 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           },
           body: JSON.stringify(colabAtualizado)
         });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+      } else if (supabase) {
+        const { error: sbErr } = await supabase.from('collaborators').update({
+          status: 'ATIVO',
+          tenant_id: colabAtualizado.tenantId,
+          estabelecimento_id: colabAtualizado.estabelecimentoId,
+          estabelecimento_nome: colabAtualizado.estabelecimentoNome,
+          matricula: matriculaFinal,
+          departamento_id: colabAtualizado.departamentoId,
+          departamento_nome: colabAtualizado.departamentoNome,
+          cargo_id: colabAtualizado.cargoId,
+          cargo_titulo: colabAtualizado.cargoTitulo,
+          updated_at: getBrasiliaParts().iso
+        }).eq('collaborator_id', colabId);
+        if (sbErr) throw sbErr;
       }
 
-      await supabase.from('collaborators').update({
-        status: 'ATIVO',
-        tenant_id: colabAtualizado.tenantId,
-        estabelecimento_id: colabAtualizado.estabelecimentoId,
-        estabelecimento_nome: colabAtualizado.estabelecimentoNome,
-        matricula: matriculaFinal,
-        departamento_id: deptoObj.id,
-        departamento_nome: deptoObj.nome,
-        cargo_id: cargoObj.id,
-        cargo_titulo: cargoObj.titulo,
-        updated_at: getBrasiliaParts().iso
-      }).eq('collaborator_id', colabId);
-    } catch (err) {
-      console.warn('Aviso ao sincronizar aprovação no Supabase:', err);
-    }
+      const novosColabs = colaboradores.map((c) => (c.id === colabId ? colabAtualizado : c));
+      setColaboradores(novosColabs);
 
-    setColabApprovalNotice(
-      `Colaborador ${colab.nome} homologado em "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || chosenTenantId}" (${colabAtualizado.estabelecimentoNome}) com matrícula ${matriculaFinal}.`
-    );
-    setTimeout(() => setColabApprovalNotice(null), 5000);
+      setColabApprovalNotice(
+        `Colaborador ${colab.nome} homologado em "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || chosenTenantId}" (${colabAtualizado.estabelecimentoNome}) com matrícula ${matriculaFinal}.`
+      );
+      setTimeout(() => setColabApprovalNotice(null), 5000);
+    } catch (err: any) {
+      console.warn('Erro ao sincronizar aprovação:', err);
+      setColabApprovalNotice(`Falha ao homologar colaborador no servidor: ${err?.message || 'erro desconhecido'}`);
+      setTimeout(() => setColabApprovalNotice(null), 5000);
+    }
   };
 
   const handleUpdateColaborador = async (updatedColab: Colaborador) => {
-    const novosColabs = colaboradores.map((c) => (c.id === updatedColab.id ? updatedColab : c));
-    setColaboradores(novosColabs);
-
     const tenantObj = tenants.find((t) => t.id === updatedColab.tenantId);
 
     try {
-      const { error: sbErr } = await supabase.from('collaborators').update({
-        tenant_id: updatedColab.tenantId,
-        estabelecimento_id: updatedColab.estabelecimentoId,
-        estabelecimento_nome: updatedColab.estabelecimentoNome,
-        departamento_id: updatedColab.departamentoId,
-        departamento_nome: updatedColab.departamentoNome,
-        cargo_id: updatedColab.cargoId,
-        cargo_titulo: updatedColab.cargoTitulo,
-        regime: updatedColab.regime,
-        status: updatedColab.status,
-        updated_at: getBrasiliaParts().iso
-      }).eq('collaborator_id', updatedColab.id);
-
-      if (sbErr) {
-        console.warn('Aviso ao atualizar alocação no Supabase:', sbErr);
-      }
-
       if (bearerToken) {
-        await fetch('/api/save-collaborator', {
+        const res = await fetch('/api/save-collaborator', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1005,15 +1014,38 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           },
           body: JSON.stringify(updatedColab)
         });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+      } else if (supabase) {
+        const { error: sbErr } = await supabase.from('collaborators').update({
+          tenant_id: updatedColab.tenantId,
+          estabelecimento_id: updatedColab.estabelecimentoId,
+          estabelecimento_nome: updatedColab.estabelecimentoNome,
+          departamento_id: updatedColab.departamentoId,
+          departamento_nome: updatedColab.departamentoNome,
+          cargo_id: updatedColab.cargoId,
+          cargo_titulo: updatedColab.cargoTitulo,
+          regime: updatedColab.regime,
+          status: updatedColab.status,
+          updated_at: getBrasiliaParts().iso
+        }).eq('collaborator_id', updatedColab.id);
+        if (sbErr) throw sbErr;
       }
-    } catch (err) {
-      console.warn('Aviso ao sincronizar alocação do colaborador:', err);
-    }
 
-    setColabApprovalNotice(
-      `Alocação de ${updatedColab.nome} atualizada para "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || updatedColab.tenantId}" · ${updatedColab.estabelecimentoNome}.`
-    );
-    setTimeout(() => setColabApprovalNotice(null), 4500);
+      const novosColabs = colaboradores.map((c) => (c.id === updatedColab.id ? updatedColab : c));
+      setColaboradores(novosColabs);
+
+      setColabApprovalNotice(
+        `Alocação de ${updatedColab.nome} atualizada para "${tenantObj?.nomeFantasia || tenantObj?.razaoSocial || updatedColab.tenantId}" · ${updatedColab.estabelecimentoNome}.`
+      );
+      setTimeout(() => setColabApprovalNotice(null), 4500);
+    } catch (err: any) {
+      console.warn('Aviso ao sincronizar alocação do colaborador:', err);
+      setColabApprovalNotice(`Falha ao atualizar alocação no servidor: ${err?.message || 'erro desconhecido'}`);
+      setTimeout(() => setColabApprovalNotice(null), 4500);
+    }
   };
 
   const executeRejectColabIds = async (ids: string[]) => {
@@ -1021,20 +1053,40 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     const removed = colaboradores.filter((c) => idSet.has(c.id));
     if (removed.length === 0) return;
 
-    setColaboradores(colaboradores.filter((c) => !idSet.has(c.id)));
-
     try {
-      await supabase.from('collaborators').delete().in('collaborator_id', ids);
-    } catch (err) {
-      console.warn('Aviso ao excluir no Supabase:', err);
-    }
+      let deletedOnServer = false;
+      if (bearerToken) {
+        const res = await fetch('/api/delete-collaborator', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({ ids })
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+        deletedOnServer = true;
+      }
 
-    setColabApprovalNotice(
-      removed.length === 1
-        ? `Auto-cadastro de ${removed[0].nome} foi recusado.`
-        : `${removed.length} auto-cadastros recusados.`
-    );
-    setTimeout(() => setColabApprovalNotice(null), 3000);
+      if (!deletedOnServer) {
+        await supabase.from('collaborators').delete().in('collaborator_id', ids);
+      }
+
+      setColaboradores(colaboradores.filter((c) => !idSet.has(c.id)));
+      setColabApprovalNotice(
+        removed.length === 1
+          ? `Auto-cadastro de ${removed[0].nome} foi recusado.`
+          : `${removed.length} auto-cadastros recusados.`
+      );
+      setTimeout(() => setColabApprovalNotice(null), 3000);
+    } catch (err: any) {
+      console.warn('Erro ao recusar auto-cadastro:', err);
+      setColabApprovalNotice(`Falha ao excluir auto-cadastro no servidor: ${err?.message || 'erro desconhecido'}`);
+      setTimeout(() => setColabApprovalNotice(null), 4000);
+    }
   };
 
   const handleRecusarAutoCadastro = (colabId: string, skipConfirm = false) => {
@@ -1102,6 +1154,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const consecutiveDetectedRef = React.useRef<number>(0);
   const countdownTriggeredRef = React.useRef<boolean>(false);
   const collectedVectorsRef = React.useRef<number[][]>([]);
+  const livenessSamplesRef = React.useRef<LivenessSample[]>([]);
 
   // Efeito de Contador para Prova de Vida Ativa
   useEffect(() => {
@@ -1148,6 +1201,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     consecutiveDetectedRef.current = 0;
     countdownTriggeredRef.current = false;
     collectedVectorsRef.current = [];
+    livenessSamplesRef.current = [];
 
     if (!biometricTargetColab) {
       setIsCameraActive(false);
@@ -1237,8 +1291,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       if (isProcessing || isAnalyzingInstantRef.current) return;
 
       const currentState = biometricStateRef.current;
+      const awaitingLiveness = currentState === 'verified' && Boolean(currentLivenessRef.current) && !livenessConfirmedRef.current;
       if (
-        currentState === 'verified' ||
+        (currentState === 'verified' && !awaitingLiveness) ||
         currentState === 'rejected_mismatch' ||
         currentState === 'unregistered_biometrics' ||
         currentState === 'no_camera' ||
@@ -1257,6 +1312,27 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       try {
         const result = await detectFaceAndBiometrics(video, canvas);
         setLightingCondition(result.lightingQuality);
+
+        if (result.detected && result.vector) {
+          livenessSamplesRef.current.push({
+            landmarks: result.landmarks,
+            faceBox: result.faceBox,
+            vector: result.vector,
+            livenessScore: result.livenessScore
+          });
+          if (livenessSamplesRef.current.length > 24) {
+            livenessSamplesRef.current.shift();
+          }
+        }
+
+        if (awaitingLiveness) {
+          if (result.detected) {
+            setDetectedFaceBox(result.faceBox || null);
+            setDetectedLandmarks(result.landmarks || null);
+            setBiometricLivenessScore(result.livenessScore);
+          }
+          return;
+        }
 
         if (!result.detected || !result.vector) {
           consecutiveDetectedRef.current = 0;
@@ -1340,7 +1416,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             stabilizedVector.length === 64 ? stabilizedVector : result.vector,
             biometricTargetColab.id,
             biometricTargetColab.biometriaHashTemplate,
-            simulatedMismatch
+            simulatedMismatch,
+            effectiveThreshold
           );
 
           setBiometricConfidence(match.similarity.toString());
@@ -1366,7 +1443,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }, 250);
 
     return () => clearInterval(interval);
-  }, [biometricTargetColab, isCameraActive, simulatedMismatch]);
+  }, [biometricTargetColab, isCameraActive, simulatedMismatch, effectiveThreshold]);
 
   // Captura & Validação Estendida Manual ("Capturar e Validar Face Agora")
   const handleInstantCaptureAndValidate = async () => {
@@ -1401,6 +1478,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         setLightingCondition(result.lightingQuality);
         if (result.detected && result.vector) {
           sampledVectors.push(result.vector);
+          livenessSamplesRef.current.push({
+            landmarks: result.landmarks,
+            faceBox: result.faceBox,
+            vector: result.vector,
+            livenessScore: result.livenessScore
+          });
+          if (livenessSamplesRef.current.length > 24) {
+            livenessSamplesRef.current.shift();
+          }
           lastResult = result;
           setDetectedFaceBox(result.faceBox || null);
           setDetectedLandmarks(result.landmarks || null);
@@ -1426,7 +1512,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           averagedVector,
           biometricTargetColab.id,
           biometricTargetColab.biometriaHashTemplate,
-          simulatedMismatch
+          simulatedMismatch,
+          effectiveThreshold
         );
 
         setBiometricConfidence(match.similarity.toString());
@@ -2177,27 +2264,42 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     };
 
     try {
-      await supabase.from('establishments').upsert({
-        establishment_id: novaMatriz.id,
-        tenant_id: novaMatriz.tenantId,
-        nome: novaMatriz.nome,
-        cnpj: novaMatriz.cnpj,
-        tipo: 'MATRIZ',
-        cep: novaMatriz.cep || null,
-        latitude: Number.isFinite(novaMatriz.latitude) ? novaMatriz.latitude : null,
-        longitude: Number.isFinite(novaMatriz.longitude) ? novaMatriz.longitude : null,
-        cerca_raio_metros: novaMatriz.cercaRaioMetros,
-        bloquear_fora_do_raio: novaMatriz.bloquearForaDoRaio,
-        endereco_completo: novaMatriz.enderecoCompleto,
-        municipio: novaMatriz.municipio,
-        uf: novaMatriz.uf,
-        fuso_horario: novaMatriz.fusoHorario
-      }, { onConflict: 'establishment_id' });
+      if (bearerToken) {
+        const resEst = await fetch('/api/establishments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(novaMatriz)
+        });
+        if (!resEst.ok) {
+          console.warn('Aviso ao criar estabelecimento matriz via API:', await resEst.text().catch(() => ''));
+        }
+      } else if (supabase) {
+        await supabase.from('establishments').upsert({
+          establishment_id: novaMatriz.id,
+          tenant_id: novaMatriz.tenantId,
+          nome: novaMatriz.nome,
+          cnpj: novaMatriz.cnpj,
+          tipo: 'MATRIZ',
+          cep: novaMatriz.cep || null,
+          latitude: Number.isFinite(novaMatriz.latitude) ? novaMatriz.latitude : null,
+          longitude: Number.isFinite(novaMatriz.longitude) ? novaMatriz.longitude : null,
+          cerca_raio_metros: novaMatriz.cercaRaioMetros,
+          bloquear_fora_do_raio: novaMatriz.bloquearForaDoRaio,
+          endereco_completo: novaMatriz.enderecoCompleto,
+          municipio: novaMatriz.municipio,
+          uf: novaMatriz.uf,
+          fuso_horario: novaMatriz.fusoHorario
+        }, { onConflict: 'establishment_id' });
+      }
     } catch (err) {
-      console.warn('Aviso ao criar estabelecimento matriz no Supabase:', err);
+      console.warn('Aviso ao criar estabelecimento matriz:', err);
     }
 
-    setEstabelecimentos([novaMatriz, ...estabelecimentos]);
+    setLocalEstabelecimentos([novaMatriz, ...estabelecimentos]);
+    propOnUpdateEstabelecimentos?.([novaMatriz, ...estabelecimentos]);
     setTenants([novo, ...tenants]);
     setSelectedTenantId(novo.id);
     setIsNewTenantModalOpen(false);
@@ -2238,18 +2340,23 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
-    const currentTenant = tenants.find((t) => t.id === (newColabForm.tenantId || selectedTenantId)) || activeTenant || DEFAULT_TENANT;
+    const currentTenant = tenants.find((t) => t.id === (newColabForm.tenantId || selectedTenantId)) || (activeTenant.id ? activeTenant : null);
+    if (!currentTenant) {
+      setNewColabError('Cadastre ou selecione uma empresa antes de admitir colaboradores.');
+      return;
+    }
+
     const tenantEsts = estabelecimentos.filter((e) => e.tenantId === currentTenant.id);
-    const depId = newColabForm.departamentoId || (departamentos && departamentos[0]?.id);
-    const dep = (depId ? departamentos.find((d) => d.id === depId) : null) || (departamentos && departamentos[0]) || DEFAULT_DEP;
-    const crg = (newColabForm.cargoId ? cargos.find((c) => c.id === newColabForm.cargoId) : null) || (cargos && cargos[0]) || DEFAULT_CRG;
-    const est = (newColabForm.estabelecimentoId ? estabelecimentos.find((e) => e.id === newColabForm.estabelecimentoId) : null) || tenantEsts[0] || (estabelecimentos && estabelecimentos[0]) || DEFAULT_EST;
+    const depId = newColabForm.departamentoId || departamentos[0]?.id;
+    const dep = (depId ? departamentos.find((d) => d.id === depId) : null) || departamentos[0];
+    const crg = (newColabForm.cargoId ? cargos.find((c) => c.id === newColabForm.cargoId) : null) || cargos[0];
+    const est = (newColabForm.estabelecimentoId ? estabelecimentos.find((e) => e.id === newColabForm.estabelecimentoId) : null) || tenantEsts[0] || estabelecimentos[0];
 
     // Gerar credenciais e PIN individual seguro (sem padrão fraco '123456')
     let generatedPass = '';
-    const targetEmail = newColabForm.email.trim() || `${newColabForm.nome.split(' ')[0].toLowerCase()}.${newColabForm.cpf.replace(/\D/g, '').slice(0, 4)}@${currentTenant.slug || 'softcase'}.com`;
+    const targetEmail = newColabForm.email.trim() || `${newColabForm.nome.split(' ')[0].toLowerCase()}.${newColabForm.cpf.replace(/\D/g, '').slice(0, 4)}@${currentTenant.slug || 'empresa'}.com`;
     const pinFinal = newColabForm.pinColetor.trim() || String(Math.floor(100000 + Math.random() * 900000));
-    
+
     if (newColabForm.gerarAcessoSistema) {
       generatedPass = Math.random().toString(36).slice(-8).toUpperCase() + '@' + Math.floor(100 + Math.random() * 900);
     }
@@ -2262,96 +2369,49 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       cpf: newColabForm.cpf,
       matricula: newColabForm.matricula || `SC-${Math.floor(1000 + Math.random() * 9000)}`,
       dataAdmissao: brNow.ymd,
-      cargoId: crg.id,
-      cargoTitulo: crg.titulo,
-      departamentoId: dep.id,
-      departamentoNome: dep.nome,
-      gestorId: dep.gestorId || 'gestor-01',
-      gestorNome: dep.gestorNome || 'Administrador',
-      estabelecimentoId: est.id,
-      estabelecimentoNome: est.nome,
+      cargoId: crg?.id || '',
+      cargoTitulo: crg?.titulo || 'Não definido',
+      departamentoId: dep?.id || '',
+      departamentoNome: dep?.nome || 'Não definido',
+      gestorId: dep?.gestorId || 'gestor-01',
+      gestorNome: dep?.gestorNome || 'Administrador',
+      estabelecimentoId: est?.id || '',
+      estabelecimentoNome: est?.nome || 'Matriz Principal',
       regime: newColabForm.regime,
-      horarioInicio: dep.horarioInicioPadrao || '08:00',
+      horarioInicio: dep?.horarioInicioPadrao || '08:00',
       horarioFim: '17:00',
-      cargaHorariaDiariaHoras: dep.cargaHorariaDiariaHoras || 8,
-      intervaloMinutos: dep.intervaloMinutos || 60,
-      maxMinutosAntecedenciaPermitido: dep.maxMinutosAntecedenciaPermitido || 15,
-      regraAntecedenciaAtiva: dep.regraAntecedenciaAtiva ?? true,
+      cargaHorariaDiariaHoras: dep?.cargaHorariaDiariaHoras || 8,
+      intervaloMinutos: dep?.intervaloMinutos || 60,
+      maxMinutosAntecedenciaPermitido: dep?.maxMinutosAntecedenciaPermitido || 15,
+      regraAntecedenciaAtiva: dep?.regraAntecedenciaAtiva ?? true,
       pinColetor: pinFinal,
       status: 'ATIVO',
       email: targetEmail,
       senhaTemporaria: generatedPass
     };
 
-    // PERSISTÊNCIA NO SUPABASE (DIRETA E ROBUSTA)
     try {
-      const { error: sbColabError } = await supabase
-        .from('collaborators')
-        .upsert({
-          collaborator_id: novoColab.id,
-          tenant_id: novoColab.tenantId,
-          nome: novoColab.nome,
-          cpf: novoColab.cpf,
-          matricula: novoColab.matricula,
-          pis: novoColab.pis,
-          data_admissao: novoColab.dataAdmissao,
-          cargo_id: novoColab.cargoId,
-          cargo_titulo: novoColab.cargoTitulo,
-          departamento_id: novoColab.departamentoId,
-          departamento_nome: novoColab.departamentoNome,
-          gestor_id: novoColab.gestorId,
-          gestor_nome: novoColab.gestorNome,
-          estabelecimento_id: novoColab.estabelecimentoId,
-          estabelecimento_nome: novoColab.estabelecimentoNome,
-          regime: novoColab.regime,
-          horario_inicio: novoColab.horarioInicio,
-          horario_fim: novoColab.horarioFim,
-          carga_horaria_diaria: novoColab.cargaHorariaDiariaHoras,
-          intervalo_minutos: novoColab.intervaloMinutos,
-          max_minutos_antecedencia: novoColab.maxMinutosAntecedenciaPermitido,
-          regra_antecedencia_ativa: novoColab.regraAntecedenciaAtiva,
-          pin_coletor: novoColab.pinColetor,
-          email: novoColab.email,
-          status: novoColab.status,
-          updated_at: brNow.iso
-        }, { onConflict: 'collaborator_id' });
-
-      if (sbColabError) {
-        console.warn('Aviso ao salvar direto no Supabase:', sbColabError);
-      }
-
       if (bearerToken) {
-        fetch('/api/save-collaborator', {
+        const res = await fetch('/api/save-collaborator', {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${bearerToken}` 
+            'Authorization': `Bearer ${bearerToken}`
           },
           body: JSON.stringify(novoColab)
-        }).catch(err => console.warn('Aviso backend save-collaborator:', err));
-      }
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          setNewColabError(errData?.error || 'Falha ao salvar colaborador no servidor.');
+          return;
+        }
 
-      if (newColabForm.gerarAcessoSistema && generatedPass) {
-        supabase.auth.signUp({
-          email: targetEmail,
-          password: generatedPass,
-          options: {
-            data: {
-              nome: newColabForm.nome,
-              tenantId: currentTenant.id,
-              cpf: newColabForm.cpf,
-              role: 'COLABORADOR',
-              roleLabel: 'Colaborador CLT'
-            }
-          }
-        }).catch(err => console.warn('Aviso signUp colaborador:', err));
-
-        if (bearerToken) {
-          fetch('/api/create-auth-user', {
+        if (newColabForm.gerarAcessoSistema && generatedPass) {
+          await fetch('/api/create-auth-user', {
             method: 'POST',
-            headers: { 
+            headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${bearerToken}` 
+              'Authorization': `Bearer ${bearerToken}`
             },
             body: JSON.stringify({
               email: targetEmail,
@@ -2363,9 +2423,62 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             })
           }).catch(() => {});
         }
+      } else if (supabase) {
+        const { error: sbColabError } = await supabase
+          .from('collaborators')
+          .upsert({
+            collaborator_id: novoColab.id,
+            tenant_id: novoColab.tenantId,
+            nome: novoColab.nome,
+            cpf: novoColab.cpf,
+            matricula: novoColab.matricula,
+            pis: novoColab.pis,
+            data_admissao: novoColab.dataAdmissao,
+            cargo_id: novoColab.cargoId,
+            cargo_titulo: novoColab.cargoTitulo,
+            departamento_id: novoColab.departamentoId,
+            departamento_nome: novoColab.departamentoNome,
+            gestor_id: novoColab.gestorId,
+            gestor_nome: novoColab.gestorNome,
+            estabelecimento_id: novoColab.estabelecimentoId,
+            estabelecimento_nome: novoColab.estabelecimentoNome,
+            regime: novoColab.regime,
+            horario_inicio: novoColab.horarioInicio,
+            horario_fim: novoColab.horarioFim,
+            carga_horaria_diaria: novoColab.cargaHorariaDiariaHoras,
+            intervalo_minutos: novoColab.intervaloMinutos,
+            max_minutos_antecedencia: novoColab.maxMinutosAntecedenciaPermitido,
+            regra_antecedencia_ativa: novoColab.regraAntecedenciaAtiva,
+            pin_coletor: novoColab.pinColetor,
+            email: novoColab.email,
+            status: novoColab.status,
+            updated_at: brNow.iso
+          }, { onConflict: 'collaborator_id' });
+
+        if (sbColabError) {
+          setNewColabError(sbColabError.message || 'Erro ao salvar colaborador no banco.');
+          return;
+        }
+
+        if (newColabForm.gerarAcessoSistema && generatedPass) {
+          supabase.auth.signUp({
+            email: targetEmail,
+            password: generatedPass,
+            options: {
+              data: {
+                nome: newColabForm.nome,
+                tenantId: currentTenant.id,
+                cpf: newColabForm.cpf,
+                role: 'COLABORADOR',
+                roleLabel: 'Colaborador CLT'
+              }
+            }
+          }).catch(err => console.warn('Aviso signUp colaborador:', err));
+        }
       }
-    } catch (err) {
-      console.warn('Erro de persistência:', err);
+    } catch (err: any) {
+      setNewColabError(err?.message || 'Erro de conexão ao salvar colaborador.');
+      return;
     }
 
     setColaboradores([...colaboradores, novoColab]);
@@ -2398,6 +2511,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   // Período para o Gráfico de Barras do Painel Executivo
   const [chartPeriod, setChartPeriod] = useState<'semana' | 'mes'>('semana');
+  const [isExecutiveMinimized, setIsExecutiveMinimized] = useState(() => operationalTab !== 'relatorios');
+
+  useEffect(() => {
+    if (operationalTab !== 'relatorios') {
+      setIsExecutiveMinimized(true);
+    } else {
+      setIsExecutiveMinimized(false);
+    }
+  }, [operationalTab]);
 
   // 1. Total de Colaboradores Ativos
   const totalColaboradoresAtivos = activeColaboradores.filter(
@@ -2527,285 +2649,348 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
   return (
     <div className="space-y-6">
+      {isBootstrapping && tenants.length === 0 && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs flex items-center gap-3 text-xs font-medium text-slate-600">
+          <RefreshCw className="w-4 h-4 text-emerald-600 animate-spin shrink-0" />
+          <span>Carregando empresas, colaboradores e registros do servidor...</span>
+        </div>
+      )}
+
+      {!isBootstrapping && tenants.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 text-xs text-amber-900">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold block">Nenhuma empresa cadastrada no banco de dados</span>
+              <span className="text-amber-800">Cadastre sua primeira empresa empregadora para iniciar admissões, registros de ponto e apurações fiscais.</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setNewTenantError(null);
+              setIsNewTenantModalOpen(true);
+            }}
+            className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer"
+          >
+            + Nova Empresa
+          </button>
+        </div>
+      )}
+
       {/* CARD DO TOPO DO PAINEL ADMINISTRATIVO: Métricas Rápidas & Gráfico de Barras Recharts */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs overflow-hidden relative">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs overflow-hidden relative">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 text-white flex items-center justify-center shadow-xs shrink-0">
-              <BarChart3 className="w-5 h-5 text-emerald-400" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 text-white flex items-center justify-center shadow-xs shrink-0">
+              <BarChart3 className="w-4 h-4 text-emerald-400" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
                   Painel Executivo & Indicadores Estratégicos
                 </h2>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Tempo Real
+                  {totalColaboradoresAtivos} Ativos • {taxaPontualidade}% Pontualidade
                 </span>
               </div>
-              <p className="text-xs text-slate-500">
-                Acompanhamento consolidado de vidas ativas, homologações pendentes e conformidade de jornada • Portaria 671 MTE
+              <p className="text-[11px] text-slate-500">
+                {isExecutiveMinimized
+                  ? 'Painel minimizado. Clique em Expandir para visualizar métricas detalhadas e gráficos.'
+                  : 'Acompanhamento consolidado de vidas ativas, homologações pendentes e conformidade de jornada • Portaria 671 MTE'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-start lg:self-auto">
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-semibold">
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            {isExecutiveMinimized ? (
               <button
                 type="button"
-                onClick={() => setChartPeriod('semana')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
-                  chartPeriod === 'semana'
-                    ? 'bg-white text-slate-900 shadow-xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900'
-                }`}
+                onClick={() => setIsExecutiveMinimized(false)}
+                className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-all flex items-center gap-1.5"
               >
-                Semana Vigente
+                <span>Expandir Painel</span>
+                <ChevronDown className="w-3.5 h-3.5" />
               </button>
+            ) : (
               <button
                 type="button"
-                onClick={() => setChartPeriod('mes')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
-                  chartPeriod === 'mes'
-                    ? 'bg-white text-slate-900 shadow-xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900'
-                }`}
+                onClick={() => setIsExecutiveMinimized(true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold transition-all flex items-center gap-1.5"
               >
-                Mês Corrente
+                <span>Minimizar</span>
+                <ChevronUp className="w-3.5 h-3.5" />
               </button>
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Grid com os 3 cards de métricas e o gráfico Recharts */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-5">
-          {/* Coluna da esquerda: 3 Métricas Rápidas Principais */}
-          <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-3.5">
-            {/* Métrica 1: Total de Colaboradores Ativos */}
-            <div 
-              onClick={() => setOperationalTab('estrutura')}
-              className="group cursor-pointer bg-slate-50 hover:bg-slate-100/90 border border-slate-200/90 rounded-xl p-4 transition-all hover:border-slate-300 relative overflow-hidden"
-              title="Clique para gerenciar cargos, departamentos e estabelecimentos"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-emerald-600" />
-                  Total Colaboradores Ativos
-                </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
-                  {totalColaboradoresAtivos} de {activeTenant.licencasContratadas}
-                </span>
+        {!isExecutiveMinimized && (
+          <>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-100 mt-4">
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-500 font-medium">Período de Análise</span>
               </div>
-              <div className="mt-2.5 flex items-baseline justify-between">
-                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-mono">
-                  {totalColaboradoresAtivos}
+
+              <div className="flex items-center gap-2 self-start lg:self-auto">
+                <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setChartPeriod('semana')}
+                    className={`px-3 py-1.5 rounded-lg transition-all ${
+                      chartPeriod === 'semana'
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    Semana Vigente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChartPeriod('mes')}
+                    className={`px-3 py-1.5 rounded-lg transition-all ${
+                      chartPeriod === 'mes'
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    Mês Corrente
+                  </button>
                 </div>
-                <div className="text-[11px] font-medium text-emerald-600 flex items-center gap-0.5">
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  100% elegíveis REP-P
-                </div>
-              </div>
-              <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span className="truncate">{departamentos.length} departamentos ativos</span>
-                <span className="text-slate-400 group-hover:text-slate-600 font-medium flex items-center gap-0.5">
-                  Gerenciar <ArrowUpRight className="w-3 h-3" />
-                </span>
               </div>
             </div>
 
-            {/* Métrica 2: Horas Extras Pendentes de Aprovação */}
-            <div 
-              onClick={() => setOperationalTab('equipes')}
-              className={`group cursor-pointer border rounded-xl p-4 transition-all relative overflow-hidden ${
-                pendentesHeCount > 0 
-                  ? 'bg-amber-50/70 hover:bg-amber-50 border-amber-200 hover:border-amber-300' 
-                  : 'bg-slate-50 hover:bg-slate-100/90 border-slate-200/90 hover:border-slate-300'
-              }`}
-              title="Clique para ir à tela de Aprovação de Horas Extras e Gestão de Equipes"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                  <Clock className={`w-4 h-4 ${pendentesHeCount > 0 ? 'text-amber-600' : 'text-slate-500'}`} />
-                  Horas Extras Pendentes
-                </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                  pendentesHeCount > 0 ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-700'
-                }`}>
-                  {pendentesHeCount > 0 ? 'Requer Aprovação' : 'Homologadas'}
-                </span>
-              </div>
-              <div className="mt-2.5 flex items-baseline justify-between">
-                <div className={`text-2xl sm:text-3xl font-extrabold tracking-tight font-mono ${
-                  pendentesHeCount > 0 ? 'text-amber-700' : 'text-slate-900'
-                }`}>
-                  {pendentesHeCount}
-                </div>
-                <div className="text-[11px] font-medium text-slate-600 flex items-center gap-1">
-                  {pendentesHeCount > 0 ? (
-                    <span className="text-amber-700 font-semibold flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                      Homologar gestor
-                    </span>
-                  ) : (
-                    <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      Sem pendências
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span className="truncate">{horasExtras.length} solicitações registradas</span>
-                <span className="text-slate-400 group-hover:text-slate-600 font-medium flex items-center gap-0.5">
-                  Ver fila <ArrowUpRight className="w-3 h-3" />
-                </span>
-              </div>
-            </div>
-
-            {/* Métrica 3: Taxa de Pontualidade do Mês Atual */}
-            <div 
-              onClick={() => setOperationalTab('relatorios')}
-              className="group cursor-pointer bg-slate-50 hover:bg-slate-100/90 border border-slate-200/90 rounded-xl p-4 transition-all hover:border-slate-300 relative overflow-hidden"
-              title="Clique para abrir Relatório Detalhado de Atrasos e Ocorrências"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-indigo-600" />
-                  Taxa de Pontualidade (Mês Atual)
-                </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                  taxaPontualidade >= 95 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
-                }`}>
-                  Meta: ≥ 95.0%
-                </span>
-              </div>
-              <div className="mt-2.5 flex items-baseline justify-between">
-                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-mono">
-                  {taxaPontualidade}%
-                </div>
-                <div className="text-[11px] font-semibold text-indigo-600 flex items-center gap-0.5">
-                  <TrendingUp className="w-3.5 h-3.5 text-indigo-600" />
-                  {taxaPontualidade >= 95 ? '+1.4% vs meta' : 'Abaixo da meta'}
-                </div>
-              </div>
-              {/* Barra de progresso visual */}
-              <div className="mt-2 w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+            {/* Grid com os 3 cards de métricas e o gráfico Recharts */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-5">
+              {/* Coluna da esquerda: 3 Métricas Rápidas Principais */}
+              <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-3.5">
+                {/* Métrica 1: Total de Colaboradores Ativos */}
                 <div 
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    taxaPontualidade >= 95 ? 'bg-indigo-600' : 'bg-amber-500'
-                  }`}
-                  style={{ width: `${taxaPontualidade}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Coluna da direita: Gráfico de Barras com Recharts */}
-          <div className="lg:col-span-7 bg-slate-50/70 border border-slate-200/90 rounded-xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <BarChart3 className="w-3.5 h-3.5 text-slate-600" />
-                  Distribuição de Pontualidade & Exceções ({chartPeriod === 'semana' ? 'Semana Vigente' : 'Mês Corrente'})
-                </h3>
-                <span className="text-[11px] text-slate-500">
-                  Registros pontuais vs desvios e horas suplementares
-                </span>
-              </div>
-              <div className="flex items-center gap-3 text-[11px] font-medium text-slate-600 shrink-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500"></span>
-                  <span>Pontuais</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-xs bg-rose-500"></span>
-                  <span>Atrasos</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-xs bg-indigo-500"></span>
-                  <span>H. Extras</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full h-56 sm:h-64 pt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={dadosGraficoBarras}
-                  margin={{ top: 12, right: 12, left: -20, bottom: 4 }}
-                  barGap={4}
-                  barCategoryGap={18}
+                  onClick={() => setOperationalTab('estrutura')}
+                  className="group cursor-pointer bg-slate-50 hover:bg-slate-100/90 border border-slate-200/90 rounded-xl p-4 transition-all hover:border-slate-300 relative overflow-hidden"
+                  title="Clique para gerenciar cargos, departamentos e estabelecimentos"
                 >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis 
-                    dataKey="periodo" 
-                    tickLine={false} 
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tick={{ fill: '#64748b', fontSize: 11, fontWeight: 500 }}
-                  />
-                  <YAxis 
-                    tickLine={false} 
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    content={({ active, payload, label }) => {
-                      if (active && payload && payload.length) {
-                        const dataItem = payload[0].payload;
-                        return (
-                          <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-800 text-xs min-w-[170px]">
-                            <p className="font-bold text-slate-200 border-b border-slate-800 pb-1.5 mb-2">
-                              {dataItem.nomeCompleto || label}
-                            </p>
-                            <div className="space-y-1.5 font-mono text-[11px]">
-                              <div className="flex items-center justify-between text-emerald-400">
-                                <span className="text-slate-300">Pontuais:</span>
-                                <span className="font-bold">{dataItem.pontuais}</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-emerald-600" />
+                      Total Colaboradores Ativos
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
+                      {totalColaboradoresAtivos} de {activeTenant.licencasContratadas}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex items-baseline justify-between">
+                    <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-mono">
+                      {totalColaboradoresAtivos}
+                    </div>
+                    <div className="text-[11px] font-medium text-emerald-600 flex items-center gap-0.5">
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      100% elegíveis REP-P
+                    </div>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="truncate">{departamentos.length} departamentos ativos</span>
+                    <span className="text-slate-400 group-hover:text-slate-600 font-medium flex items-center gap-0.5">
+                      Gerenciar <ArrowUpRight className="w-3 h-3" />
+                    </span>
+                  </div>
+                </div>
+
+                {/* Métrica 2: Horas Extras Pendentes de Aprovação */}
+                <div 
+                  onClick={() => setOperationalTab('equipes')}
+                  className={`group cursor-pointer border rounded-xl p-4 transition-all relative overflow-hidden ${
+                    pendentesHeCount > 0 
+                      ? 'bg-amber-50/70 hover:bg-amber-50 border-amber-200 hover:border-amber-300' 
+                      : 'bg-slate-50 hover:bg-slate-100/90 border-slate-200/90 hover:border-slate-300'
+                  }`}
+                  title="Clique para ir à tela de Aprovação de Horas Extras e Gestão de Equipes"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      <Clock className={`w-4 h-4 ${pendentesHeCount > 0 ? 'text-amber-600' : 'text-slate-500'}`} />
+                      Horas Extras Pendentes
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                      pendentesHeCount > 0 ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {pendentesHeCount > 0 ? 'Requer Aprovação' : 'Homologadas'}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex items-baseline justify-between">
+                    <div className={`text-2xl sm:text-3xl font-extrabold tracking-tight font-mono ${
+                      pendentesHeCount > 0 ? 'text-amber-700' : 'text-slate-900'
+                    }`}>
+                      {pendentesHeCount}
+                    </div>
+                    <div className="text-[11px] font-medium text-slate-600 flex items-center gap-1">
+                      {pendentesHeCount > 0 ? (
+                        <span className="text-amber-700 font-semibold flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                          Homologar gestor
+                        </span>
+                      ) : (
+                        <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Sem pendências
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="truncate">{horasExtras.length} solicitações registradas</span>
+                    <span className="text-slate-400 group-hover:text-slate-600 font-medium flex items-center gap-0.5">
+                      Ver fila <ArrowUpRight className="w-3 h-3" />
+                    </span>
+                  </div>
+                </div>
+
+                {/* Métrica 3: Taxa de Pontualidade do Mês Atual */}
+                <div 
+                  onClick={() => setOperationalTab('relatorios')}
+                  className="group cursor-pointer bg-slate-50 hover:bg-slate-100/90 border border-slate-200/90 rounded-xl p-4 transition-all hover:border-slate-300 relative overflow-hidden"
+                  title="Clique para abrir Relatório Detalhado de Atrasos e Ocorrências"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                      Taxa de Pontualidade (Mês Atual)
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                      taxaPontualidade >= 95 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      Meta: ≥ 95.0%
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex items-baseline justify-between">
+                    <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-mono">
+                      {taxaPontualidade}%
+                    </div>
+                    <div className="text-[11px] font-semibold text-indigo-600 flex items-center gap-0.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-indigo-600" />
+                      {taxaPontualidade >= 95 ? '+1.4% vs meta' : 'Abaixo da meta'}
+                    </div>
+                  </div>
+                  {/* Barra de progresso visual */}
+                  <div className="mt-2 w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        taxaPontualidade >= 95 ? 'bg-indigo-600' : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${taxaPontualidade}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Coluna da direita: Gráfico de Barras com Recharts */}
+              <div className="lg:col-span-7 bg-slate-50/70 border border-slate-200/90 rounded-xl p-4 sm:p-5 flex flex-col justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <BarChart3 className="w-3.5 h-3.5 text-slate-600" />
+                      Distribuição de Pontualidade & Exceções ({chartPeriod === 'semana' ? 'Semana Vigente' : 'Mês Corrente'})
+                    </h3>
+                    <span className="text-[11px] text-slate-500">
+                      Registros pontuais vs desvios e horas suplementares
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] font-medium text-slate-600 shrink-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500"></span>
+                      <span>Pontuais</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-rose-500"></span>
+                      <span>Atrasos</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-indigo-500"></span>
+                      <span>H. Extras</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="w-full h-56 sm:h-64 pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={dadosGraficoBarras}
+                      margin={{ top: 12, right: 12, left: -20, bottom: 4 }}
+                      barGap={4}
+                      barCategoryGap={18}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis 
+                        dataKey="periodo" 
+                        tickLine={false} 
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tick={{ fill: '#64748b', fontSize: 11, fontWeight: 500 }}
+                      />
+                      <YAxis 
+                        tickLine={false} 
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        allowDecimals={false}
+                      />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (active && payload && payload.length) {
+                            const dataItem = payload[0].payload;
+                            return (
+                              <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-800 text-xs min-w-[170px]">
+                                <p className="font-bold text-slate-200 border-b border-slate-800 pb-1.5 mb-2">
+                                  {dataItem.nomeCompleto || label}
+                                </p>
+                                <div className="space-y-1.5 font-mono text-[11px]">
+                                  <div className="flex items-center justify-between text-emerald-400">
+                                    <span className="text-slate-300">Pontuais:</span>
+                                    <span className="font-bold">{dataItem.pontuais}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-rose-400">
+                                    <span className="text-slate-300">Atrasos/Desvios:</span>
+                                    <span className="font-bold">{dataItem.atrasos}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-indigo-300">
+                                    <span className="text-slate-300">Horas Extras:</span>
+                                    <span className="font-bold">{dataItem.horasExtras}</span>
+                                  </div>
+                                  <div className="pt-1.5 mt-1 border-t border-slate-800 flex items-center justify-between text-slate-300 font-sans">
+                                    <span>Conformidade:</span>
+                                    <span className="font-bold text-white font-mono">{dataItem.taxa}%</span>
+                                  </div>
+                                </div>
                               </div>
-                              <div className="flex items-center justify-between text-rose-400">
-                                <span className="text-slate-300">Atrasos/Desvios:</span>
-                                <span className="font-bold">{dataItem.atrasos}</span>
-                              </div>
-                              <div className="flex items-center justify-between text-indigo-300">
-                                <span className="text-slate-300">Horas Extras:</span>
-                                <span className="font-bold">{dataItem.horasExtras}</span>
-                              </div>
-                              <div className="pt-1.5 mt-1 border-t border-slate-800 flex items-center justify-between text-slate-300 font-sans">
-                                <span>Conformidade:</span>
-                                <span className="font-bold text-white font-mono">{dataItem.taxa}%</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-                  <Bar 
-                    dataKey="pontuais" 
-                    name="Registros Pontuais" 
-                    fill="#10b981" 
-                    radius={[4, 4, 0, 0]} 
-                  />
-                  <Bar 
-                    dataKey="atrasos" 
-                    name="Atrasos / Exceções" 
-                    fill="#f43f5e" 
-                    radius={[4, 4, 0, 0]} 
-                  />
-                  <Bar 
-                    dataKey="horasExtras" 
-                    name="Horas Extras" 
-                    fill="#6366f1" 
-                    radius={[4, 4, 0, 0]} 
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Bar 
+                        dataKey="pontuais" 
+                        name="Registros Pontuais" 
+                        fill="#10b981" 
+                        radius={[4, 4, 0, 0]} 
+                      />
+                      <Bar 
+                        dataKey="atrasos" 
+                        name="Atrasos / Exceções" 
+                        fill="#f43f5e" 
+                        radius={[4, 4, 0, 0]} 
+                      />
+                      <Bar 
+                        dataKey="horasExtras" 
+                        name="Horas Extras" 
+                        fill="#6366f1" 
+                        radius={[4, 4, 0, 0]} 
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
       {/* Barra de Seleção de Empresa Empregadora (Multi-tenant) */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 min-w-0">
@@ -2818,20 +3003,28 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               Empresa Empregadora Selecionada
             </span>
             <div className="flex flex-wrap items-center gap-2 min-w-0">
-              <select
-                value={selectedTenantId}
-                onChange={(e) => setSelectedTenantId(e.target.value)}
-                className="text-sm font-bold text-slate-900 bg-transparent border-0 focus:ring-0 p-0 cursor-pointer truncate max-w-full sm:max-w-xs md:max-w-sm"
-              >
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.razaoSocial} ({t.cnpj})
-                  </option>
-                ))}
-              </select>
-              <span className="text-[11px] font-mono font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
-                Plano {activeTenant.plano}
-              </span>
+              {tenants.length === 0 ? (
+                <span className="text-sm font-bold text-slate-500">
+                  {isBootstrapping ? 'Carregando empresas...' : 'Nenhuma empresa cadastrada'}
+                </span>
+              ) : (
+                <select
+                  value={selectedTenantId || activeTenant.id}
+                  onChange={(e) => setSelectedTenantId(e.target.value)}
+                  className="text-sm font-bold text-slate-900 bg-transparent border-0 focus:ring-0 p-0 cursor-pointer truncate max-w-full sm:max-w-xs md:max-w-sm"
+                >
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.razaoSocial} ({t.cnpj})
+                    </option>
+                  ))}
+                </select>
+              )}
+              {tenants.length > 0 && (
+                <span className="text-[11px] font-mono font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
+                  Plano {activeTenant.plano}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -2867,193 +3060,227 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 
       {/* Barra de Navegação de Módulos Operacionais */}
       <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs flex items-center gap-1.5 overflow-x-auto">
-        <button
-          onClick={() => setOperationalTab('relatorios')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'relatorios'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
-          Atrasos & Descontos
-        </button>
-        <button
-          onClick={() => setOperationalTab('equipes')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'equipes'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Users className="w-3.5 h-3.5 text-indigo-400" />
-          Equipes & Gestores
-        </button>
-        <button
-          onClick={() => setOperationalTab('coletor')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'coletor'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Tablet className="w-3.5 h-3.5 text-blue-400" />
-          Coletor REP-P
-        </button>
-        <button
-          onClick={() => setOperationalTab('biometria')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'biometria'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <ScanFace className="w-3.5 h-3.5 text-amber-400" />
-          Biometria Facial
-        </button>
-        <button
-          onClick={() => setOperationalTab('feriados')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'feriados'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Calendar className="w-3.5 h-3.5 text-rose-400" />
-          Feriados & DSR
-        </button>
-        <button
-          onClick={() => setOperationalTab('ipa')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'ipa'
-              ? 'bg-slate-900 text-white shadow-xs ring-2 ring-amber-400/50'
-              : 'text-slate-700 bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200'
-          }`}
-        >
-          <Award className="w-3.5 h-3.5 text-amber-600" />
-          IPA & Premiações
-        </button>
-        <button
-          onClick={() => setOperationalTab('empresa')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'empresa'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <UserCheck className="w-3.5 h-3.5 text-teal-400" />
-          Colaboradores & RH
-        </button>
-        <button
-          onClick={() => setOperationalTab('estrutura')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'estrutura'
-              ? 'bg-slate-900 text-white shadow-xs ring-2 ring-emerald-400/40'
-              : 'text-slate-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
-          }`}
-        >
-          <Building2 className="w-3.5 h-3.5 text-emerald-600" />
-          Estrutura (Deptos/Cargos/Unidades)
-        </button>
-        <button
-          onClick={() => setOperationalTab('permissoes')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'permissoes'
-              ? 'bg-slate-900 text-white shadow-xs ring-2 ring-purple-400/40'
-              : 'text-slate-700 bg-purple-50/70 hover:bg-purple-100/80 border border-purple-200'
-          }`}
-        >
-          <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-          Matriz de Permissões (RBAC)
-        </button>
-        <button
-          onClick={() => setOperationalTab('registros')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'registros'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <FileText className="w-3.5 h-3.5 text-orange-400" />
-          AFD & AEJ Fiscal
-        </button>
-        <button
-          onClick={() => setOperationalTab('tenants')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'tenants'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Globe className="w-3.5 h-3.5 text-sky-400" />
-          Multi-tenant
-        </button>
-        <button
-          onClick={() => setOperationalTab('config')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'config'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Key className="w-3.5 h-3.5 text-amber-400" />
-          Chaves
-        </button>
-        <button
-          onClick={() => setOperationalTab('escalas')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'escalas'
-              ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
-              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80 border border-indigo-200'
-          }`}
-        >
-          <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
-          Escalas & 12x36
-        </button>
-        <button
-          onClick={() => setOperationalTab('afastamentos')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'afastamentos'
-              ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
-              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
-          }`}
-        >
-          <Stethoscope className="w-3.5 h-3.5 text-emerald-500" />
-          Afastamentos & Férias
-        </button>
-        <button
-          onClick={() => setOperationalTab('exportador')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'exportador'
-              ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-400/50'
-              : 'text-sky-700 bg-sky-50/70 hover:bg-sky-100/80 border border-sky-200'
-          }`}
-        >
-          <Server className="w-3.5 h-3.5 text-sky-500" />
-          Exportador ERP & 671
-        </button>
-        <button
-          onClick={() => setOperationalTab('riscos')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'riscos'
-              ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-400/50'
-              : 'text-rose-700 bg-rose-50/70 hover:bg-rose-100/80 border border-rose-200'
-          }`}
-        >
-          <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
-          Riscos & Compliance CLT
-        </button>
-        <button
-          onClick={() => setOperationalTab('mobile')}
-          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-            operationalTab === 'mobile'
-              ? 'bg-violet-600 text-white shadow-xs ring-2 ring-violet-400/50'
-              : 'text-violet-700 bg-violet-50/70 hover:bg-violet-100/80 border border-violet-200'
-          }`}
-        >
-          <Smartphone className="w-3.5 h-3.5 text-violet-500" />
-          App Mobile & Totem
-        </button>
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['relatorios']) && (
+          <button
+            onClick={() => setOperationalTab('relatorios')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'relatorios'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+            Atrasos & Descontos
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['equipes']) && (
+          <button
+            onClick={() => setOperationalTab('equipes')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'equipes'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-indigo-400" />
+            Equipes & Gestores
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['coletor']) && (
+          <button
+            onClick={() => setOperationalTab('coletor')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'coletor'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Tablet className="w-3.5 h-3.5 text-blue-400" />
+            Coletor REP-P
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['biometria']) && (
+          <button
+            onClick={() => setOperationalTab('biometria')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'biometria'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <ScanFace className="w-3.5 h-3.5 text-amber-400" />
+            Biometria Facial
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['feriados']) && (
+          <button
+            onClick={() => setOperationalTab('feriados')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'feriados'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5 text-rose-400" />
+            Feriados & DSR
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['ipa']) && (
+          <button
+            onClick={() => setOperationalTab('ipa')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'ipa'
+                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-amber-400/50'
+                : 'text-slate-700 bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200'
+            }`}
+          >
+            <Award className="w-3.5 h-3.5 text-amber-600" />
+            IPA & Premiações
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['empresa']) && (
+          <button
+            onClick={() => setOperationalTab('empresa')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'empresa'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <UserCheck className="w-3.5 h-3.5 text-teal-400" />
+            Colaboradores & RH
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['estrutura']) && (
+          <button
+            onClick={() => setOperationalTab('estrutura')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'estrutura'
+                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-emerald-400/40'
+                : 'text-slate-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+            Estrutura (Deptos/Cargos/Unidades)
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['permissoes']) && (
+          <button
+            onClick={() => setOperationalTab('permissoes')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'permissoes'
+                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-purple-400/40'
+                : 'text-slate-700 bg-purple-50/70 hover:bg-purple-100/80 border border-purple-200'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+            Matriz de Permissões (RBAC)
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['registros']) && (
+          <button
+            onClick={() => setOperationalTab('registros')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'registros'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5 text-orange-400" />
+            AFD & AEJ Fiscal
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['tenants']) && (
+          <button
+            onClick={() => setOperationalTab('tenants')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'tenants'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5 text-sky-400" />
+            Multi-tenant
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
+          <button
+            onClick={() => setOperationalTab('config')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'config'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Key className="w-3.5 h-3.5 text-amber-400" />
+            Chaves
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['escalas']) && (
+          <button
+            onClick={() => setOperationalTab('escalas')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'escalas'
+                ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
+                : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80 border border-indigo-200'
+            }`}
+          >
+            <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
+            Escalas & 12x36
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['afastamentos']) && (
+          <button
+            onClick={() => setOperationalTab('afastamentos')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'afastamentos'
+                ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
+                : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
+            }`}
+          >
+            <Stethoscope className="w-3.5 h-3.5 text-emerald-500" />
+            Afastamentos & Férias
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['exportador']) && (
+          <button
+            onClick={() => setOperationalTab('exportador')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'exportador'
+                ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-400/50'
+                : 'text-sky-700 bg-sky-50/70 hover:bg-sky-100/80 border border-sky-200'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5 text-sky-500" />
+            Exportador ERP & 671
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['riscos']) && (
+          <button
+            onClick={() => setOperationalTab('riscos')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'riscos'
+                ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-400/50'
+                : 'text-rose-700 bg-rose-50/70 hover:bg-rose-100/80 border border-rose-200'
+            }`}
+          >
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
+            Riscos & Compliance CLT
+          </button>
+        )}
+        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['mobile']) && (
+          <button
+            onClick={() => setOperationalTab('mobile')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              operationalTab === 'mobile'
+                ? 'bg-violet-600 text-white shadow-xs ring-2 ring-violet-400/50'
+                : 'text-violet-700 bg-violet-50/70 hover:bg-violet-100/80 border border-violet-200'
+            }`}
+          >
+            <Smartphone className="w-3.5 h-3.5 text-violet-500" />
+            App Mobile & Totem
+          </button>
+        )}
       </div>
 
       {/* ========================================================= */}
@@ -3065,6 +3292,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           onUpdateOcorrencias={setOcorrencias}
           departamentos={departamentos}
           colaboradores={colaboradores}
+          activeTenantId={activeTenant.id}
+          currentUserName={currentUser?.nome}
         />
       )}
 
@@ -3109,6 +3338,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           onUpdateColaboradores={setColaboradores}
           estabelecimentos={estabelecimentos}
           onUpdateEstabelecimentos={setEstabelecimentos}
+          initialThreshold={effectiveThreshold}
+          onThresholdChange={handleThresholdChange}
         />
       )}
 
@@ -3145,7 +3376,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 </div>
                 <div>
                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Bateria do Dispositivo</span>
-                   <span className="text-xs font-bold text-slate-800">{deviceHealth.batteryLevel !== null ? `${deviceHealth.batteryLevel}% ${deviceHealth.isCharging ? '(Carregando)' : ''}` : '92% (Normal)'}</span>
+                   <span className="text-xs font-bold text-slate-800">{deviceHealth.batteryLevel !== null ? `${deviceHealth.batteryLevel}% ${deviceHealth.isCharging ? '(Carregando)' : ''}` : 'Não reportada pelo navegador'}</span>
                 </div>
              </div>
 
@@ -3155,7 +3386,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 </div>
                 <div>
                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Cota Armazenamento</span>
-                   <span className="text-xs font-bold text-slate-800">{deviceHealth.storageQuotaPercent !== null ? `${deviceHealth.storageQuotaPercent}% Usado` : '14% Usado'}</span>
+                   <span className="text-xs font-bold text-slate-800">{deviceHealth.storageQuotaPercent !== null ? `${deviceHealth.storageQuotaPercent}% Usado` : 'Não reportada pelo navegador'}</span>
                 </div>
              </div>
           </div>
@@ -3531,7 +3762,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       {/* ABA: MATRIZ DE PERMISSÕES & PERFIS DE ACESSO (RBAC)      */}
       {/* ========================================================= */}
       {operationalTab === 'permissoes' && (
-        <MatrizPermissoes />
+        <MatrizPermissoes
+          activeTenantId={activeTenant.id}
+          initialPermissions={effectivePermissions}
+          onPermissionsUpdated={handlePermissionsChange}
+        />
       )}
 
       {/* ========================================================= */}
@@ -3857,8 +4092,16 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                  </div>
                  <button
                    onClick={() => {
+                     if (!currentLivenessChallenge) return;
+                     const evalRes = evaluateLivenessMotion(currentLivenessChallenge.id, livenessSamplesRef.current);
+                     if (!evalRes.passed) {
+                       setLivenessConfirmed(false);
+                       setFaceStatusMessage(evalRes.message);
+                       return;
+                     }
+                     setBiometricLivenessScore(evalRes.score);
                      setLivenessConfirmed(true);
-                     setFaceStatusMessage('Prova de vida confirmada com sucesso! Registro de ponto liberado.');
+                     setFaceStatusMessage(`Prova de vida validada (${evalRes.score}%). Registro de ponto liberado.`);
                    }}
                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-md flex items-center gap-1.5 ${
                      livenessConfirmed 
@@ -4120,7 +4363,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   {showPinFallback ? (
                     <div className="p-3 bg-slate-900 border border-slate-700 rounded-xl space-y-2 animate-in fade-in duration-200">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                        Digitar PIN do Coletor ({biometricTargetColab?.pinColetor ? 'PIN individual configurado' : 'Sem PIN configurado'})
+                        Digitar PIN Individual do Coletor (Contingência 1º Dia)
                       </span>
                       <div className="flex gap-2">
                         <input
@@ -4135,20 +4378,56 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                           className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                         />
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             setKioskPinError(null);
+                            const pinTrimmed = kioskPinInput.trim();
+                            if (!pinTrimmed) {
+                              setKioskPinError('Digite o PIN de 6 dígitos cadastrado pelo RH.');
+                              return;
+                            }
                             const colabRegistros = registrosPonto.filter(r => r.colaboradorId === biometricTargetColab?.id);
                             const eligibility = checkPinUsageEligibility(biometricTargetColab || undefined, colabRegistros);
                             if (!eligibility.isEligible) {
                               setKioskPinError(`Bloqueio de Segurança: ${eligibility.reason}`);
                               return;
                             }
+
+                            if (navigator.onLine && bearerToken && biometricTargetColab) {
+                              try {
+                                const res = await fetch('/api/verify-pin', {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${bearerToken}`
+                                  },
+                                  body: JSON.stringify({
+                                    tenantId: biometricTargetColab.tenantId,
+                                    collaboratorId: biometricTargetColab.id,
+                                    pin: pinTrimmed
+                                  })
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok && data.valid) {
+                                  setBiometricState('verified');
+                                  setLivenessConfirmed(true);
+                                  setFaceStatusMessage('Identificação confirmada via PIN de Contingência (1º Dia)');
+                                  setShowPinFallback(false);
+                                  setKioskPinError(null);
+                                  return;
+                                }
+                                setKioskPinError(data.error || 'PIN incorreto. Verifique seu PIN individual ou procure o RH.');
+                                return;
+                              } catch {
+                                // Continua para fallback offline caso não haja resposta da rede
+                              }
+                            }
+
                             const expectedPin = biometricTargetColab?.pinColetor?.trim();
                             if (!expectedPin) {
-                              setKioskPinError('Colaborador sem PIN individual cadastrado. Realize o cadastro facial.');
+                              setKioskPinError('Validação por PIN requer conexão ativa ou PIN local disponível. Realize o cadastro facial.');
                               return;
                             }
-                            if (kioskPinInput.trim() === expectedPin) {
+                            if (pinTrimmed === expectedPin) {
                               setBiometricState('verified');
                               setLivenessConfirmed(true);
                               setFaceStatusMessage('Identificação confirmada via PIN de Contingência (1º Dia)');

@@ -12,48 +12,32 @@ export function calculateWorkedTime(dayRegistros: RegistroPontoREPP[]): WorkedTi
     return { totalMinutes: 0, formatted: '-', hasPunches: false, isInProgress: false };
   }
 
-  const sorted = [...dayRegistros].sort((a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime());
+  const sorted = [...dayRegistros]
+    .filter((r) => !Number.isNaN(new Date(r.dataHora).getTime()))
+    .sort((a, b) => new Date(a.dataHora).getTime() - new Date(b.dataHora).getTime());
 
-  const entrada = sorted.find(r => r.tipoMarcacao === 'ENTRADA');
-  const intervalInicio = sorted.find(r => r.tipoMarcacao === 'INTERVALO_INICIO');
-  const intervalFim = sorted.find(r => r.tipoMarcacao === 'INTERVALO_FIM');
-  const saida = sorted.find(r => r.tipoMarcacao === 'SAIDA');
+  if (sorted.length === 0) {
+    return { totalMinutes: 0, formatted: '-', hasPunches: false, isInProgress: false };
+  }
 
   let totalMs = 0;
-  let isInProgress = false;
+  let currentWorkStartMs: number | null = null;
 
-  // Segment 1: Morning / First shift
-  if (entrada) {
-    const tEntrada = new Date(entrada.dataHora).getTime();
-    if (intervalInicio) {
-      const tIntInicio = new Date(intervalInicio.dataHora).getTime();
-      if (tIntInicio > tEntrada) {
-        totalMs += (tIntInicio - tEntrada);
+  for (const reg of sorted) {
+    const ts = new Date(reg.dataHora).getTime();
+    if (reg.tipoMarcacao === 'ENTRADA' || reg.tipoMarcacao === 'INTERVALO_FIM') {
+      if (currentWorkStartMs === null) {
+        currentWorkStartMs = ts;
       }
-    } else if (saida) {
-      // Worked continuously without interval punch
-      const tSaida = new Date(saida.dataHora).getTime();
-      if (tSaida > tEntrada) {
-        totalMs += (tSaida - tEntrada);
+    } else if (reg.tipoMarcacao === 'INTERVALO_INICIO' || reg.tipoMarcacao === 'SAIDA') {
+      if (currentWorkStartMs !== null && ts > currentWorkStartMs) {
+        totalMs += ts - currentWorkStartMs;
       }
-    } else {
-      isInProgress = true;
+      currentWorkStartMs = null;
     }
   }
 
-  // Segment 2: Afternoon / Second shift
-  if (intervalFim) {
-    const tIntFim = new Date(intervalFim.dataHora).getTime();
-    if (saida) {
-      const tSaida = new Date(saida.dataHora).getTime();
-      if (tSaida > tIntFim) {
-        totalMs += (tSaida - tIntFim);
-      }
-    } else {
-      isInProgress = true;
-    }
-  }
-
+  const isInProgress = currentWorkStartMs !== null;
   const totalMinutes = Math.floor(totalMs / (1000 * 60));
 
   if (totalMinutes === 0 && isInProgress) {

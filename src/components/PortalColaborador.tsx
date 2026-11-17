@@ -56,7 +56,9 @@ import {
   saveBiometricTemplate,
   resetLivenessState,
   getRandomLivenessChallenge,
-  LivenessChallenge
+  LivenessChallenge,
+  evaluateLivenessMotion,
+  LivenessSample
 } from '../utils/facialBiometricsEngine';
 import { calculateDistanceMeters } from './BiometricConfigurator';
 import { saveOfflinePunchToIDB } from '../utils/pwaBackgroundSync';
@@ -104,6 +106,7 @@ interface PortalColaboradorProps {
   estabelecimentos?: Estabelecimento[];
   colaboradores?: Colaborador[];
   onOpenGuia?: () => void;
+  globalThreshold?: number;
 }
 
 export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
@@ -121,7 +124,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   onUpdateColaboradorBiometria,
   estabelecimentos = [],
   colaboradores = [],
-  onOpenGuia
+  onOpenGuia,
+  globalThreshold = 82.0
 }) => {
   const { supabase, authToken, session } = useAuth();
   const bearerToken = authToken || session?.access_token || '';
@@ -131,6 +135,9 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [viewingIrpfModal, setViewingIrpfModal] = useState<any | null>(null);
   const [isSigningHolerite, setIsSigningHolerite] = useState(false);
   const [holeriteOffset, setHoleriteOffset] = useState(0);
+  const [hasMoreHolerites, setHasMoreHolerites] = useState(false);
+  const livenessSamplesRef = React.useRef<LivenessSample[]>([]);
+  const livenessScoreMeasuredRef = React.useRef<number>(92);
   const LIMIT = 10;
   const [portalNotice, setPortalNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const showPortalNotice = (type: 'success' | 'error', text: string) => {
@@ -254,227 +261,222 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       setInformesIrpfList(irpfLocal);
     }
 
-    async function fetchPaystubsFromDb(offset: number = 0) {
-      try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('paystubs')
-            .select('*')
-            .range(offset, offset + LIMIT - 1)
-            .order('created_at', { ascending: false });
+    async function fetchPortalDocuments() {
+      const targetTenantId = user.tenantId || 'tenant-01';
+      const targetColabId = user.id;
 
-          if (data && data.length > 0) {
-            const mapped = data
-              .filter((p: any) => {
-                const pCpf = (p.collaborator_cpf || '').replace(/\D/g, '');
-                return (user.id && p.collaborator_id === user.id) || (userCpfClean && pCpf === userCpfClean);
-              })
-              .map((p: any) => ({
-                id: p.paystub_id || p.id,
-                colaboradorId: p.collaborator_id,
-                colaboradorNome: p.collaborator_name,
-                colaboradorCpf: p.collaborator_cpf,
-                mesAno: p.mes_ano,
-                competencia: p.competencia,
-                salarioBruto: Number(p.salario_bruto),
-                descontos: Number(p.descontos),
-                liquido: Number(p.salario_liquido),
-                arquivoNome: p.arquivo_nome,
-                arquivoUrl: p.arquivo_url,
-                dataUpload: p.data_upload ? formatBrasiliaDate(p.data_upload) : formatBrasiliaDate(),
-                status: p.status,
-                observacao: p.observacao,
-                confirmadoEm: p.confirmado_em,
-                confirmadoIp: p.confirmado_ip,
-                confirmadoHash: p.confirmado_hash
-              }));
+      if (bearerToken) {
+        try {
+          const url = `/api/portal-documents?tenantId=${encodeURIComponent(targetTenantId)}&collaboratorId=${encodeURIComponent(targetColabId)}&cpf=${encodeURIComponent(userCpfClean)}&limit=${LIMIT}&offset=${holeriteOffset}`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${bearerToken}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.success) {
+              setHasMoreHolerites(Boolean(data.hasMorePaystubs));
 
-            setHoleritesList(prev => {
-              const merged = [...prev];
-              for (const item of mapped) {
-                const idx = merged.findIndex(m => m.id === item.id);
-                if (idx >= 0) {
-                  merged[idx] = { ...merged[idx], ...item };
-                } else {
-                  merged.push(item);
-                }
-              }
-              return merged;
-            });
-          }
-        }
-      } catch (_) {}
-    }
-
-    async function fetchTaxReportsFromDb() {
-      try {
-        if (supabase) {
-          const { data } = await supabase.from('tax_reports').select('*');
-          if (data && data.length > 0) {
-            const mapped = data
-              .filter((t: any) => {
-                const tCpf = (t.collaborator_cpf || '').replace(/\D/g, '');
-                return (user.id && t.collaborator_id === user.id) || (userCpfClean && tCpf === userCpfClean);
-              })
-              .map((t: any) => ({
-                id: t.report_id || t.id,
-                colaboradorId: t.collaborator_id,
-                colaboradorNome: t.collaborator_name,
-                colaboradorCpf: t.collaborator_cpf,
-                anoCalendario: t.ano_calendario,
-                exercicio: t.exercicio,
-                titulo: t.titulo || `Informe de Rendimentos IRPF - ${t.ano_calendario}`,
-                arquivoNome: t.arquivo_nome,
-                arquivoUrl: t.arquivo_url,
-                dataUpload: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
-                status: t.status || 'PUBLICADO_RH'
-              }));
-            if (mapped.length > 0) {
-              setInformesIrpfList(prev => {
-                const merged = [...prev];
-                for (const item of mapped) {
-                  if (!merged.some(m => m.id === item.id)) {
-                    merged.unshift(item);
+              if (Array.isArray(data.paystubs)) {
+                const mappedPay = data.paystubs.map((p: any) => ({
+                  id: p.paystub_id || p.id,
+                  tenantId: p.tenant_id,
+                  colaboradorId: p.collaborator_id,
+                  colaboradorNome: p.collaborator_name,
+                  colaboradorCpf: p.collaborator_cpf,
+                  mesAno: p.mes_ano,
+                  competencia: p.competencia,
+                  salarioBruto: Number(p.salario_bruto || 0),
+                  descontos: Number(p.descontos || 0),
+                  liquido: Number(p.salario_liquido || 0),
+                  arquivoNome: p.arquivo_nome,
+                  arquivoUrl: p.arquivo_url,
+                  dataUpload: p.data_upload ? formatBrasiliaDate(p.data_upload) : formatBrasiliaDate(),
+                  status: p.status,
+                  observacao: p.observacao,
+                  confirmadoEm: p.confirmado_em,
+                  confirmadoIp: p.confirmado_ip,
+                  confirmadoHash: p.confirmado_hash
+                }));
+                setHoleritesList(prev => {
+                  const merged = [...prev];
+                  for (const item of mappedPay) {
+                    const idx = merged.findIndex(m => m.id === item.id);
+                    if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+                    else merged.push(item);
                   }
-                }
-                return merged;
-              });
-            }
-          }
-        }
-      } catch (_) {}
-    }
-
-    async function fetchAnnouncementsFromDb() {
-      try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('company_announcements')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (data && data.length > 0) {
-            const mapped = data
-              .filter((a: any) => !user.tenantId || !a.tenant_id || a.tenant_id === user.tenantId)
-              .map((a: any) => ({
-                id: a.announcement_id || a.id,
-                tenantId: a.tenant_id,
-                titulo: a.titulo,
-                conteudo: a.conteudo,
-                categoria: a.categoria,
-                autorNome: a.autor_nome,
-                fixado: a.fixado,
-                exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
-                anexoNome: a.anexo_nome,
-                anexoUrl: a.anexo_url,
-                confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
-                criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : formatBrasiliaDate()
-              }));
-
-            setComunicadosList(prev => {
-              const merged = [...prev];
-              for (const item of mapped) {
-                const idx = merged.findIndex(m => m.id === item.id);
-                if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
-                else merged.unshift(item);
+                  return merged;
+                });
               }
-              return merged;
-            });
-          }
-        }
-      } catch (_) {}
-    }
 
-    async function fetchTicketsFromDb() {
-      try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('rh_tickets')
-            .select('*')
-            .order('updated_at', { ascending: false });
-          if (data && data.length > 0) {
-            const mapped = data
-              .filter((t: any) => {
-                const tCpf = (t.collaborator_cpf || '').replace(/\D/g, '');
-                return (user.id && t.collaborator_id === user.id) || (userCpfClean && tCpf === userCpfClean);
-              })
-              .map((t: any) => ({
-                id: t.ticket_id || t.id,
-                tenantId: t.tenant_id,
-                colaboradorId: t.collaborator_id,
-                colaboradorNome: t.collaborator_name,
-                colaboradorCpf: t.collaborator_cpf,
-                departamentoNome: t.departamento_nome,
-                assunto: t.assunto,
-                titulo: t.titulo,
-                mensagemInicial: t.mensagem_inicial,
-                anexoNome: t.anexo_nome,
-                anexoUrl: t.anexo_url,
-                status: t.status,
-                prioridade: t.prioridade,
-                respostas: Array.isArray(t.respostas) ? t.respostas : [],
-                criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
-                atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : formatBrasiliaDate()
-              }));
+              if (Array.isArray(data.irpfList)) {
+                const mappedIrpf = data.irpfList.map((t: any) => ({
+                  id: t.report_id || t.id,
+                  colaboradorId: t.collaborator_id,
+                  colaboradorNome: t.collaborator_name,
+                  colaboradorCpf: t.collaborator_cpf,
+                  anoCalendario: t.ano_calendario,
+                  exercicio: t.exercicio,
+                  titulo: t.titulo || `Informe de Rendimentos IRPF - ${t.ano_calendario}`,
+                  arquivoNome: t.arquivo_nome,
+                  arquivoUrl: t.arquivo_url,
+                  rendimentosTributaveis: t.rendimentos_tributaveis != null ? Number(t.rendimentos_tributaveis) : undefined,
+                  irrfRetido: t.irrf_retido != null ? Number(t.irrf_retido) : undefined,
+                  contribuicaoInss: t.contribuicao_inss != null ? Number(t.contribuicao_inss) : undefined,
+                  dataUpload: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
+                  status: t.status || 'PUBLICADO_RH'
+                }));
+                setInformesIrpfList(prev => {
+                  const merged = [...prev];
+                  for (const item of mappedIrpf) {
+                    const idx = merged.findIndex(m => m.id === item.id);
+                    if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+                    else merged.unshift(item);
+                  }
+                  return merged;
+                });
+              }
 
-            if (mapped.length > 0) {
-              setChamadosRhList(prev => {
-                const merged = [...prev];
-                for (const item of mapped) {
-                  const idx = merged.findIndex(m => m.id === item.id);
-                  if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
-                  else merged.unshift(item);
-                }
-                return merged;
-              });
+              if (Array.isArray(data.announcements)) {
+                const mappedAnn = data.announcements.map((a: any) => ({
+                  id: a.announcement_id || a.id,
+                  tenantId: a.tenant_id,
+                  titulo: a.titulo,
+                  conteudo: a.conteudo,
+                  categoria: a.categoria,
+                  autorNome: a.autor_nome,
+                  fixado: a.fixado,
+                  exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
+                  anexoNome: a.anexo_nome,
+                  anexoUrl: a.anexo_url,
+                  confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
+                  criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : formatBrasiliaDate()
+                }));
+                setComunicadosList(mappedAnn);
+              }
+
+              if (Array.isArray(data.tickets)) {
+                const mappedTickets = data.tickets.map((t: any) => ({
+                  id: t.ticket_id || t.id,
+                  tenantId: t.tenant_id,
+                  colaboradorId: t.collaborator_id,
+                  colaboradorNome: t.collaborator_name,
+                  colaboradorCpf: t.collaborator_cpf,
+                  departamentoNome: t.departamento_nome,
+                  assunto: t.assunto,
+                  titulo: t.titulo,
+                  mensagemInicial: t.mensagem_inicial,
+                  anexoNome: t.anexo_nome,
+                  anexoUrl: t.anexo_url,
+                  status: t.status,
+                  prioridade: t.prioridade,
+                  respostas: Array.isArray(t.respostas) ? t.respostas : [],
+                  criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : formatBrasiliaDate(),
+                  atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : formatBrasiliaDate()
+                }));
+                setChamadosRhList(mappedTickets);
+              }
+
+              if (Array.isArray(data.shiftSwaps)) {
+                const mappedSwaps: SolicitacaoTrocaTurno[] = data.shiftSwaps.map((s: any) => ({
+                  id: s.swap_id || s.id,
+                  tenantId: s.tenant_id,
+                  colaboradorOrigemId: s.solicitante_id,
+                  colaboradorOrigemNome: s.solicitante_nome || user.nome,
+                  colaboradorOrigemCpf: user.cpf,
+                  colaboradorDestinoId: s.substituto_id,
+                  colaboradorDestinoNome: s.substituto_nome || 'Colega',
+                  colaboradorDestinoCpf: '',
+                  departamentoId: user.departamentoNome || 'dep-01',
+                  departamentoNome: user.departamentoNome || 'Geral',
+                  dataPlantaoOrigem: s.data_turno_original,
+                  dataPlantaoDestino: s.data_turno_compensacao || s.data_turno_original,
+                  horarioTurno: 'Turno Escala',
+                  motivo: s.motivo || '',
+                  status: (s.status as any) || 'PENDENTE_SUPERVISOR',
+                  validacaoInterjornadaOk: s.regra_clt_ok ?? true,
+                  alertaConflito: s.alerta_conflito || undefined,
+                  supervisorDecisorNome: s.supervisor_nome || undefined,
+                  dataDecisao: s.data_aprovacao ? String(s.data_aprovacao).slice(0, 10) : undefined,
+                  criadoEm: s.data_solicitacao ? String(s.data_solicitacao).slice(0, 10) : getBrasiliaYmd()
+                }));
+                setSolicitacoesTroca(mappedSwaps);
+              }
+
+              if (Array.isArray(data.vacations) && data.vacations.length > 0) {
+                setMinhasFeriasAgendadas(data.vacations.map((v: any) => ({
+                  id: v.id || v.vacation_id,
+                  colaboradorId: v.collaborator_id,
+                  colaboradorNome: v.collaborator_name,
+                  colaboradorCpf: v.collaborator_cpf,
+                  periodoAquisitivoInicio: v.periodo_aquisitivo_inicio,
+                  periodoAquisitivoFim: v.periodo_aquisitivo_fim,
+                  periodoConcessivoInicio: v.periodo_concessivo_inicio,
+                  periodoConcessivoFim: v.periodo_concessivo_fim,
+                  dataInicioFerias: v.data_inicio_ferias,
+                  dataFimFerias: v.data_fim_ferias,
+                  diasGozo: Number(v.dias_gozo),
+                  diasAbonoPecuniario: Number(v.dias_abono_pecuniario),
+                  status: v.status,
+                  observacao: v.observacao
+                })));
+              }
+              return;
             }
           }
+        } catch {
+          // Offline fallback para Supabase client se disponível
         }
-      } catch (_) {}
-    }
+      }
 
-    async function fetchShiftSwapsFromDb() {
+      // Fallback direto Supabase caso não haja token autenticado ou rede offline
       try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('shift_swaps')
-            .select('*')
-            .order('data_solicitacao', { ascending: false });
-          if (data && data.length > 0) {
-            const mapped: SolicitacaoTrocaTurno[] = data
-              .filter((s: any) => s.solicitante_id === user.id || s.substituto_id === user.id)
-              .map((s: any) => ({
-                id: s.swap_id || s.id,
-                tenantId: s.tenant_id,
-                colaboradorOrigemId: s.solicitante_id,
-                colaboradorOrigemNome: s.solicitante_nome || user.nome,
-                colaboradorOrigemCpf: user.cpf,
-                colaboradorDestinoId: s.substituto_id,
-                colaboradorDestinoNome: s.substituto_nome || 'Colega',
-                colaboradorDestinoCpf: '',
-                departamentoId: user.departamentoNome || 'dep-01',
-                departamentoNome: user.departamentoNome || 'Geral',
-                dataPlantaoOrigem: s.data_turno_original,
-                dataPlantaoDestino: s.data_turno_compensacao || s.data_turno_original,
-                horarioTurno: 'Turno Escala',
-                motivo: s.motivo || '',
-                status: (s.status as any) || 'PENDENTE_SUPERVISOR',
-                validacaoInterjornadaOk: s.regra_clt_ok ?? true,
-                supervisorDecisorNome: s.supervisor_nome || undefined,
-                dataDecisao: s.data_aprovacao ? String(s.data_aprovacao).slice(0, 10) : undefined,
-                criadoEm: s.data_solicitacao ? String(s.data_solicitacao).slice(0, 10) : getBrasiliaYmd()
-              }));
-            setSolicitacoesTroca(mapped);
-          }
+        if (!supabase) return;
+        const { data: payData } = await supabase
+          .from('paystubs')
+          .select('*')
+          .range(holeriteOffset, holeriteOffset + LIMIT - 1)
+          .order('created_at', { ascending: false });
+        if (payData && payData.length > 0) {
+          setHasMoreHolerites(payData.length >= LIMIT);
+          const mapped = payData
+            .filter((p: any) => {
+              const pCpf = (p.collaborator_cpf || '').replace(/\D/g, '');
+              return (user.id && p.collaborator_id === user.id) || (userCpfClean && pCpf === userCpfClean);
+            })
+            .map((p: any) => ({
+              id: p.paystub_id || p.id,
+              colaboradorId: p.collaborator_id,
+              colaboradorNome: p.collaborator_name,
+              colaboradorCpf: p.collaborator_cpf,
+              mesAno: p.mes_ano,
+              competencia: p.competencia,
+              salarioBruto: Number(p.salario_bruto),
+              descontos: Number(p.descontos),
+              liquido: Number(p.salario_liquido),
+              arquivoNome: p.arquivo_nome,
+              arquivoUrl: p.arquivo_url,
+              dataUpload: p.data_upload ? formatBrasiliaDate(p.data_upload) : formatBrasiliaDate(),
+              status: p.status,
+              observacao: p.observacao,
+              confirmadoEm: p.confirmado_em,
+              confirmadoIp: p.confirmado_ip,
+              confirmadoHash: p.confirmado_hash
+            }));
+          setHoleritesList(prev => {
+            const merged = [...prev];
+            for (const item of mapped) {
+              const idx = merged.findIndex(m => m.id === item.id);
+              if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+              else merged.push(item);
+            }
+            return merged;
+          });
         }
       } catch (_) {}
     }
 
-    fetchPaystubsFromDb(holeriteOffset);
-    fetchTaxReportsFromDb();
-    fetchAnnouncementsFromDb();
-    fetchTicketsFromDb();
-    fetchShiftSwapsFromDb();
-  }, [user.id, user.cpf, user.tenantId, supabase, holeriteOffset]);
+    fetchPortalDocuments();
+  }, [user.id, user.cpf, user.tenantId, supabase, bearerToken, holeriteOffset]);
 
   const handleConfirmReadingAnnouncement = async (ann: ComunicadoEmpresa) => {
     setConfirmingReadAnnId(ann.id);
@@ -779,6 +781,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setMinhasFeriasAgendadas(feriasLocais);
 
     async function loadVacationsFromDb() {
+      if (bearerToken) return;
       try {
         if (supabase) {
           const { data } = await supabase
@@ -816,7 +819,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       } catch (_) {}
     }
     loadVacationsFromDb();
-  }, [user.cpf, user.id, userColab?.id, supabase]);
+  }, [user.cpf, user.id, userColab?.id, supabase, bearerToken]);
 
   // Registros do colaborador logado (Garantia de isolamento de dados)
   const userCpfDigits = user.cpf.replace(/\D/g, '');
@@ -931,7 +934,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   const [tokenValidated, setTokenValidated] = useState<boolean>(false);
   const [tokenErrorMsg, setTokenErrorMsg] = useState<string | null>(null);
 
-  const handleValidateTokenPin = () => {
+  const handleValidateTokenPin = async () => {
     setTokenErrorMsg(null);
     const pinClean = tokenPinInput.trim();
     if (!pinClean) {
@@ -945,9 +948,37 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
       return;
     }
 
+    if (navigator.onLine && bearerToken) {
+      try {
+        const res = await fetch('/api/verify-pin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify({
+            tenantId: userColab?.tenantId || user.tenantId || 'tenant-01',
+            collaboratorId: userColab?.id || user.id,
+            pin: pinClean
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.valid) {
+          setTokenValidated(true);
+          setBioState('verified');
+          setBioMsg('Autenticado via PIN/Token corporativo (1º dia de trabalho).');
+          return;
+        }
+        setTokenErrorMsg(data.error || 'PIN/Token incorreto. Verifique o código informado pelo RH e tente novamente.');
+        return;
+      } catch {
+        // Fallback offline se desconectado
+      }
+    }
+
     const expectedPin = userColab?.pinColetor?.trim();
     if (!expectedPin) {
-      setTokenErrorMsg('Nenhum PIN de contingência cadastrado para sua matrícula. Solicite ao RH ou cadastre sua face.');
+      setTokenErrorMsg('Nenhum PIN de contingência disponível offline. Conecte-se à internet ou cadastre sua face.');
       return;
     }
 
@@ -1312,6 +1343,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     setBioState('idle');
     setBioProgress(0);
     setLivenessConfirmed(false);
+    livenessSamplesRef.current = [];
+    livenessScoreMeasuredRef.current = 92;
     setTokenValidated(false);
     setTokenErrorMsg(null);
     setBiometricCountdown(null);
@@ -1421,6 +1454,36 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     };
   }, [isBaterPontoModalOpen]);
 
+  // Captura contínua de quadros durante o desafio de Prova de Vida Ativa no Portal
+  React.useEffect(() => {
+    if (!isBaterPontoModalOpen || !cameraActive || authMethod !== 'FACIAL' || livenessConfirmed) return;
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy || !videoRef.current || !bioCanvasRef.current) return;
+      if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) return;
+      busy = true;
+      try {
+        const res = await detectFaceAndBiometrics(videoRef.current, bioCanvasRef.current);
+        if (res.detected && res.vector) {
+          livenessSamplesRef.current.push({
+            landmarks: res.landmarks,
+            faceBox: res.faceBox,
+            vector: res.vector,
+            livenessScore: res.livenessScore
+          });
+          if (livenessSamplesRef.current.length > 24) {
+            livenessSamplesRef.current.shift();
+          }
+        }
+      } catch {
+        // ignore frame error
+      } finally {
+        busy = false;
+      }
+    }, 300);
+    return () => clearInterval(timer);
+  }, [isBaterPontoModalOpen, cameraActive, authMethod, livenessConfirmed]);
+
   // Validação Biométrica Facial Individual (Multi-Frame ~6.0s)
   const handleValidateFace = async (skipLivenessCheck = false) => {
     if (!videoRef.current || !bioCanvasRef.current) return;
@@ -1460,6 +1523,15 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         const result = await detectFaceAndBiometrics(videoRef.current, bioCanvasRef.current);
         if (result.detected && result.vector) {
           collectedVectors.push(result.vector);
+          livenessSamplesRef.current.push({
+            landmarks: result.landmarks,
+            faceBox: result.faceBox,
+            vector: result.vector,
+            livenessScore: result.livenessScore
+          });
+          if (livenessSamplesRef.current.length > 24) {
+            livenessSamplesRef.current.shift();
+          }
         } else if (result.statusMessage) {
           lastFailReason = result.statusMessage;
         }
@@ -1477,7 +1549,8 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
           stabilizedVector,
           userColab?.id || user.id,
           userColab?.biometriaHashTemplate,
-          false
+          false,
+          globalThreshold
         );
         setBioSimilarity(match.similarity);
         setBioProgress(100);
@@ -1574,7 +1647,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             biometricAudit: {
               similarity: bioSimilarity || (authMethod === 'TOKEN_PIN' ? 100 : 0),
               lightingCondition: 'BOA',
-              livenessScore: livenessConfirmed ? 92 : 0,
+              livenessScore: livenessConfirmed ? livenessScoreMeasuredRef.current : 0,
               verdict: 'APROVADO',
               algorithmUsed: authMethod === 'TOKEN_PIN' ? 'PIN_CONTINGENCIA' : 'ISO_19794_5_WEB'
             }
@@ -2084,13 +2157,16 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   const file = e.target.files?.[0];
                   if (file) {
                     const reader = new FileReader();
-                    reader.onload = (evt) => {
+                    reader.onload = async (evt) => {
                       const dataUrl = String(evt.target?.result || '');
                       const compMesAno = getBrasiliaMonthYear();
+                      const competenciaLabel = getMonthLabelPtBr(compMesAno);
+                      const newHoleriteId = `hol-pessoal-${Date.now()}`;
                       const newHolerite = {
-                        id: `hol-${Date.now()}`,
+                        id: newHoleriteId,
+                        tenantId: userColab?.tenantId || user.tenantId || 'tenant-01',
                         mesAno: compMesAno,
-                        competencia: getMonthLabelPtBr(compMesAno),
+                        competencia: competenciaLabel,
                         salarioBruto: 0,
                         descontos: 0,
                         liquido: 0,
@@ -2099,10 +2175,36 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                         dataUpload: formatBrasiliaDate(),
                         status: 'ANEXADO_PELO_COLABORADOR'
                       };
+
+                      if (navigator.onLine && bearerToken) {
+                        try {
+                          await fetch('/api/save-personal-holerite', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${bearerToken}`
+                            },
+                            body: JSON.stringify({
+                              id: newHoleriteId,
+                              tenantId: newHolerite.tenantId,
+                              colaboradorId: userColab?.id || user.id,
+                              colaboradorCpf: user.cpf,
+                              colaboradorNome: user.nome,
+                              mesAno: compMesAno,
+                              competencia: competenciaLabel,
+                              arquivoNome: file.name,
+                              arquivoUrl: dataUrl
+                            })
+                          });
+                        } catch {
+                          // fallback local
+                        }
+                      }
+
                       const updated = [newHolerite, ...holeritesList];
                       setHoleritesList(updated);
                       localStorage.setItem(`sc_holerites_${user.id}`, JSON.stringify(updated));
-                      showPortalNotice('success', `Holerite "${file.name}" anexado ao seu arquivo pessoal.`);
+                      showPortalNotice('success', `Holerite "${file.name}" anexado e sincronizado ao seu arquivo pessoal.`);
                     };
                     reader.readAsDataURL(file);
                   }
@@ -2163,17 +2265,19 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             ))}
           </div>
 
-          <div className="text-center pt-4">
-            <button
-              onClick={() => {
-                const nextOffset = holeriteOffset + LIMIT;
-                setHoleriteOffset(nextOffset);
-              }}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
-            >
-              Carregar mais Holerites
-            </button>
-          </div>
+          {hasMoreHolerites && (
+            <div className="text-center pt-4">
+              <button
+                onClick={() => {
+                  const nextOffset = holeriteOffset + LIMIT;
+                  setHoleriteOffset(nextOffset);
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                Carregar mais Holerites
+              </button>
+            </div>
+          )}
 
           {/* Seção Informe de Rendimentos IRPF */}
           <div className="pt-6 border-t border-slate-200 space-y-4">
@@ -2796,18 +2900,38 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
 
                 <div className="p-3 bg-white rounded-xl border border-slate-200 font-sans text-xs space-y-2">
                   <strong className="block text-slate-900">Resumo Anual de Rendimentos ({viewingIrpfModal.anoCalendario}):</strong>
-                  <div className="flex justify-between border-b pb-1">
-                    <span>Rendimentos Tributáveis / Salários:</span>
-                    <strong className="font-mono">R$ 62.400,00</strong>
-                  </div>
-                  <div className="flex justify-between border-b pb-1">
-                    <span>Imposto de Renda Retido na Fonte (IRRF):</span>
-                    <strong className="font-mono text-rose-600">R$ 4.280,00</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Contribuição Previdenciária Oficial (INSS):</span>
-                    <strong className="font-mono text-blue-700">R$ 5.890,00</strong>
-                  </div>
+                  {viewingIrpfModal.rendimentosTributaveis != null || viewingIrpfModal.irrfRetido != null || viewingIrpfModal.contribuicaoInss != null ? (
+                    <>
+                      <div className="flex justify-between border-b pb-1">
+                        <span>Rendimentos Tributáveis / Salários:</span>
+                        <strong className="font-mono">
+                          {viewingIrpfModal.rendimentosTributaveis != null
+                            ? `R$ ${Number(viewingIrpfModal.rendimentosTributaveis).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                            : 'Disponível no arquivo anexo'}
+                        </strong>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span>Imposto de Renda Retido na Fonte (IRRF):</span>
+                        <strong className="font-mono text-rose-600">
+                          {viewingIrpfModal.irrfRetido != null
+                            ? `R$ ${Number(viewingIrpfModal.irrfRetido).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                            : 'Disponível no arquivo anexo'}
+                        </strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Contribuição Previdenciária Oficial (INSS):</span>
+                        <strong className="font-mono text-blue-700">
+                          {viewingIrpfModal.contribuicaoInss != null
+                            ? `R$ ${Number(viewingIrpfModal.contribuicaoInss).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                            : 'Disponível no arquivo anexo'}
+                        </strong>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      Os valores detalhados de rendimentos tributáveis, IRRF e INSS constam integralmente no documento oficial publicado pelo Departamento Pessoal ({viewingIrpfModal.arquivoNome || 'PDF oficial IRPF'}).
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -3350,7 +3474,12 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
             </div>
             <button
               onClick={() => {
-                const outro = colaboradores.find(c => c.id !== user.id);
+                const targetTenant = userColab?.tenantId || user.tenantId;
+                const outro = colaboradores.find(c =>
+                  c.id !== (userColab?.id || user.id) &&
+                  c.tenantId === targetTenant &&
+                  (!c.status || c.status === 'ATIVO')
+                );
                 if (outro) setTrocaColegaId(outro.id);
                 setIsNovaTrocaModalOpen(true);
               }}
@@ -3395,9 +3524,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                     "{tr.motivo}"
                   </p>
 
-                  <div className="flex items-center gap-2 text-[11px] text-emerald-700 font-medium">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Intervalo interjornada de 11h validado e garantido em ambos os dias (CLT Art. 66).</span>
+                  <div className={`flex items-center gap-2 text-[11px] font-medium ${tr.validacaoInterjornadaOk ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    <ShieldCheck className={`w-3.5 h-3.5 ${tr.validacaoInterjornadaOk ? 'text-emerald-600' : 'text-amber-600'}`} />
+                    <span>
+                      {tr.validacaoInterjornadaOk
+                        ? 'Intervalo interjornada de 11h validado e garantido em ambos os dias (CLT Art. 66).'
+                        : 'Alerta CLT Art. 66: possível intervalo inferior a 11h — sujeito à validação do gestor.'}
+                    </span>
                   </div>
                 </div>
 
@@ -3438,6 +3571,16 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                 const colega = colaboradores.find(c => c.id === trocaColegaId);
                 if (!colega) return;
 
+                const timesMatch = trocaHorarioTurno.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
+                const startH = timesMatch?.[1] || '08:00';
+                const endH = timesMatch?.[2] || '17:00';
+                const originStartIso = `${trocaDataOrigem}T${startH}:00-03:00`;
+                const originEndIso = `${trocaDataOrigem}T${endH}:00-03:00`;
+                const destStartIso = `${trocaDataDestino}T${startH}:00-03:00`;
+                const interjornadaCheck = trocaDataDestino >= trocaDataOrigem
+                  ? verificarInterjornada11h(originEndIso, destStartIso)
+                  : verificarInterjornada11h(`${trocaDataDestino}T${endH}:00-03:00`, originStartIso);
+
                 const swapId = `troca-${Date.now()}`;
                 const hojeBrt = getBrasiliaYmd();
                 const tenantTarget = userColab?.tenantId || user.tenantId || 'tenant-01';
@@ -3457,12 +3600,28 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   horarioTurno: trocaHorarioTurno,
                   motivo: trocaMotivo.trim() || 'Troca de escala entre colaboradores.',
                   status: 'PENDENTE_SUPERVISOR',
-                  validacaoInterjornadaOk: true,
+                  validacaoInterjornadaOk: interjornadaCheck.respeitou11Horas,
                   supervisorDecisorNome: userColab?.gestorNome || 'Aguardando Supervisor',
                   criadoEm: hojeBrt
                 };
 
-                if (supabase) {
+                if (navigator.onLine && bearerToken) {
+                  try {
+                    await fetch('/api/shift-swaps', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${bearerToken}`
+                      },
+                      body: JSON.stringify({
+                        ...novaTroca,
+                        alertaConflito: interjornadaCheck.respeitou11Horas ? null : interjornadaCheck.detalheTexto
+                      })
+                    });
+                  } catch (err) {
+                    console.warn('Aviso ao gravar troca via API:', err);
+                  }
+                } else if (supabase) {
                   try {
                     await supabase.from('shift_swaps').upsert({
                       swap_id: swapId,
@@ -3475,7 +3634,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                       data_turno_compensacao: trocaDataDestino,
                       motivo: novaTroca.motivo,
                       status: 'PENDENTE_SUPERVISOR',
-                      regra_clt_ok: true
+                      regra_clt_ok: interjornadaCheck.respeitou11Horas
                     }, { onConflict: 'swap_id' });
                   } catch (err) {
                     console.warn('Aviso ao gravar troca no Supabase:', err);
@@ -3500,7 +3659,11 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   required
                 >
                   {colaboradores
-                    .filter(c => c.id !== user.id)
+                    .filter(c =>
+                      c.id !== (userColab?.id || user.id) &&
+                      c.tenantId === (userColab?.tenantId || user.tenantId) &&
+                      (!c.status || c.status === 'ATIVO')
+                    )
                     .map(c => (
                       <option key={c.id} value={c.id}>
                         {c.nome} ({c.cargoTitulo}) - {c.departamentoNome}
@@ -4094,6 +4257,14 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                         <button
                           type="button"
                           onClick={() => {
+                            if (!currentLiveness) return;
+                            const evalRes = evaluateLivenessMotion(currentLiveness.id, livenessSamplesRef.current);
+                            if (!evalRes.passed) {
+                              setLivenessConfirmed(false);
+                              setBioMsg(evalRes.message);
+                              return;
+                            }
+                            livenessScoreMeasuredRef.current = evalRes.score;
                             setLivenessConfirmed(true);
                             setBiometricCountdown(null);
                             handleValidateFace(true);

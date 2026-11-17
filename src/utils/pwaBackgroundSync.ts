@@ -1,4 +1,5 @@
 import { RegistroPontoREPP } from '../types/operational';
+import { getOfflineQueue, removeOfflineRecord } from './offlineManager';
 
 const DB_NAME = 'point_control_offline_db';
 const STORE_NAME = 'offline_punches';
@@ -38,7 +39,7 @@ export async function saveOfflinePunchToIDB(registro: RegistroPontoREPP): Promis
       const store = transaction.objectStore(STORE_NAME);
       const record = {
         ...registro,
-        id: registro.nsr ? `nsr-${registro.nsr}` : `offline-${Date.now()}`,
+        id: registro.id || (registro.nsr ? `nsr-${registro.nsr}` : `offline-${Date.now()}`),
         savedAt: new Date().toISOString(),
         synced: false
       };
@@ -73,7 +74,7 @@ export async function getOfflinePunchesFromIDB(): Promise<any[]> {
 }
 
 /**
- * Remove um registro do IndexedDB após sincronização bem-sucedida com o Supabase.
+ * Remove um registro do IndexedDB após sincronização bem-sucedida com o servidor.
  */
 export async function removeOfflinePunchFromIDB(id: string): Promise<void> {
   try {
@@ -92,60 +93,93 @@ export async function removeOfflinePunchFromIDB(id: string): Promise<void> {
 }
 
 /**
- * Sincroniza automaticamente a fila offline com o Supabase assim que a conexão retorna.
+ * Sincroniza batidas pendentes (IndexedDB + localStorage) via endpoint autenticado /api/sync-offline-punches
  */
-export async function syncOfflineQueueToSupabase(supabaseClient: any): Promise<number> {
-  if (!navigator.onLine || !supabaseClient) return 0;
+export async function syncOfflineQueueWithServer(bearerToken?: string | null): Promise<number> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 0;
 
-  const offlinePunches = await getOfflinePunchesFromIDB();
-  if (offlinePunches.length === 0) return 0;
+  const idbItems = await getOfflinePunchesFromIDB();
+  const lsItems = getOfflineQueue().map((q) => ({
+    ...q.registro,
+    _lsId: q.id,
+    id: q.id,
+  }));
 
-  let syncedCount = 0;
+  if (idbItems.length === 0 && lsItems.length === 0) return 0;
 
-  for (const item of offlinePunches) {
-    try {
-      const payload = {
-        nsr: item.nsr,
-        tenant_id: item.tenantId,
-        collaborator_id: item.colaboradorId,
-        data_hora: item.dataHora,
-        tipo_marcacao: item.tipoMarcacao,
-        latitude: item.latitude,
-        longitude: item.longitude,
-        hash_sha256: item.hashSha256,
-        modo_dispositivo: 'OFFLINE_SYNC_PWA',
-        detalhes: JSON.stringify({
-          empregadorRazaoSocial: item.empregadorRazaoSocial,
-          empregadorCnpj: item.empregadorCnpj,
-          colaboradorNome: item.colaboradorNome,
-          colaboradorCpf: item.colaboradorCpf,
-          colaboradorMatricula: item.colaboradorMatricula,
-          coletorId: item.coletorId
-        })
-      };
-
-      const { error } = await supabaseClient.from('point_registrations').insert(payload);
-      if (!error) {
-        await removeOfflinePunchFromIDB(item.id);
-        syncedCount++;
-      } else {
-        console.warn('Erro ao sincronizar registro pendente:', error.message);
-      }
-    } catch (e) {
-      console.warn('Falha na sincronização do item offline:', e);
-    }
+  const mergedMap = new Map<string, any>();
+  for (const item of idbItems) {
+    const dedupKey = item.hashSha256 || item.id;
+    mergedMap.set(dedupKey, { ...item, _idbId: item.id });
+  }
+  for (const item of lsItems) {
+    const dedupKey = item.hashSha256 || item.id;
+    const existing = mergedMap.get(dedupKey);
+    mergedMap.set(dedupKey, existing ? { ...existing, _lsId: item._lsId } : item);
   }
 
-  return syncedCount;
+  const unified = Array.from(mergedMap.values());
+  if (unified.length === 0 || !bearerToken) return 0;
+
+  try {
+    const res = await fetch('/api/sync-offline-punches', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${bearerToken}`
+      },
+      body: JSON.stringify({
+        punches: unified.map((u) => ({
+          clientId: u.id,
+          colaboradorId: u.colaboradorId,
+          tenantId: u.tenantId,
+          tipoMarcacao: u.tipoMarcacao,
+          latitude: u.latitude,
+          longitude: u.longitude,
+          coletorId: u.coletorId,
+          modoDispositivo: u.modoDispositivo || 'OFFLINE_SYNC_PWA',
+          dataHora: u.dataHora,
+          offlineClientHash: u.hashSha256,
+          similaridadeFacial: u.similaridadeFacial,
+          livenessScore: u.livenessScore
+        }))
+      })
+    });
+
+    if (!res.ok) return 0;
+    const data = await res.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+
+    let syncedCount = 0;
+    for (let i = 0; i < unified.length; i++) {
+      const item = unified[i];
+      const result = results.find((r: any) => r.clientId === item.id) || results[i];
+      if (result && (result.status === 'SYNCED' || result.status === 'ALREADY_SYNCED' || result.status === 'REJECTED_PERMANENT')) {
+        if (item._idbId) await removeOfflinePunchFromIDB(item._idbId);
+        if (item._lsId) removeOfflineRecord(item._lsId);
+        if (result.status === 'SYNCED') syncedCount++;
+      }
+    }
+
+    return syncedCount;
+  } catch (err) {
+    console.warn('Falha na sincronização da fila offline:', err);
+    return 0;
+  }
 }
 
 /**
-50: * Registra listeners de rede para disparar sincronização automática via Service Worker / Eventos Online.
-   */
-export function initBackgroundSyncListener(supabaseClient: any, onSyncComplete?: (count: number) => void): () => void {
+ * Registra listeners de rede para disparar sincronização automática via eventos Online.
+ */
+export function initBackgroundSyncListener(
+  bearerTokenOrClient: string | null | undefined | any,
+  onSyncComplete?: (count: number) => void
+): () => void {
+  const token = typeof bearerTokenOrClient === 'string' ? bearerTokenOrClient : null;
+
   const handleOnline = async () => {
-    console.log('Conexão restabelecida. Iniciando sincronização automática de batidas offline...');
-    const count = await syncOfflineQueueToSupabase(supabaseClient);
+    if (!token) return;
+    const count = await syncOfflineQueueWithServer(token);
     if (count > 0 && onSyncComplete) {
       onSyncComplete(count);
     }
@@ -153,8 +187,7 @@ export function initBackgroundSyncListener(supabaseClient: any, onSyncComplete?:
 
   window.addEventListener('online', handleOnline);
 
-  // Executa checagem inicial caso já esteja online
-  if (navigator.onLine) {
+  if (typeof navigator !== 'undefined' && navigator.onLine && token) {
     handleOnline();
   }
 

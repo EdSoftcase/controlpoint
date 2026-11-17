@@ -44,7 +44,8 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
   onUpdateEstabelecimentos,
   colaboradores
 }) => {
-  const { supabase } = useAuth();
+  const { session, authToken, supabase } = useAuth();
+  const bearerToken = session?.access_token || authToken || '';
   const [activeSubTab, setActiveSubTab] = useState<'departamentos' | 'cargos' | 'estabelecimentos'>('departamentos');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFeedback, setStatusFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -161,24 +162,40 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
       regraAntecedenciaAtiva: deptoForm.regraAntecedenciaAtiva
     };
 
-    // Persistência no Supabase (não-bloqueante se tabela não existir)
     try {
-      await supabase.from('departments').upsert({
-        department_id: novoDepto.id,
-        tenant_id: novoDepto.tenantId,
-        nome: novoDepto.nome,
-        codigo: novoDepto.codigo,
-        gestor_id: novoDepto.gestorId,
-        gestor_nome: novoDepto.gestorNome,
-        gestor_email: novoDepto.gestorEmail,
-        horario_inicio_padrao: novoDepto.horarioInicioPadrao,
-        carga_horaria_diaria: novoDepto.cargaHorariaDiariaHoras,
-        intervalo_minutos: novoDepto.intervaloMinutos,
-        max_minutos_antecedencia: novoDepto.maxMinutosAntecedenciaPermitido,
-        regra_antecedencia_ativa: novoDepto.regraAntecedenciaAtiva
-      }, { onConflict: 'department_id' });
-    } catch (err) {
-      console.warn('Aviso sincronização Supabase departamento:', err);
+      if (bearerToken) {
+        const res = await fetch('/api/departments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(novoDepto)
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          showNotification(errData?.error || 'Erro ao salvar departamento no servidor.', 'error');
+          return;
+        }
+      } else if (supabase) {
+        await supabase.from('departments').upsert({
+          department_id: novoDepto.id,
+          tenant_id: novoDepto.tenantId,
+          nome: novoDepto.nome,
+          codigo: novoDepto.codigo,
+          gestor_id: novoDepto.gestorId,
+          gestor_nome: novoDepto.gestorNome,
+          gestor_email: novoDepto.gestorEmail,
+          horario_inicio_padrao: novoDepto.horarioInicioPadrao,
+          carga_horaria_diaria: novoDepto.cargaHorariaDiariaHoras,
+          intervalo_minutos: novoDepto.intervaloMinutos,
+          max_minutos_antecedencia: novoDepto.maxMinutosAntecedenciaPermitido,
+          regra_antecedencia_ativa: novoDepto.regraAntecedenciaAtiva
+        }, { onConflict: 'department_id' });
+      }
+    } catch (err: any) {
+      showNotification(err?.message || 'Erro de conexão ao salvar departamento.', 'error');
+      return;
     }
 
     let updatedList: Departamento[];
@@ -248,16 +265,33 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     };
 
     try {
-      await supabase.from('positions').upsert({
-        position_id: novoCargo.id,
-        tenant_id: novoCargo.tenantId,
-        titulo: novoCargo.titulo,
-        cbo: novoCargo.cbo,
-        cbo_descricao: novoCargo.cboDescricao,
-        carga_horaria_semanal: novoCargo.cargaHorariaSemanal
-      }, { onConflict: 'position_id' });
-    } catch (err) {
-      console.warn('Aviso sincronização Supabase cargo:', err);
+      if (bearerToken) {
+        const res = await fetch('/api/positions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(novoCargo)
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          showNotification(errData?.error || 'Erro ao salvar cargo no servidor.', 'error');
+          return;
+        }
+      } else if (supabase) {
+        await supabase.from('positions').upsert({
+          position_id: novoCargo.id,
+          tenant_id: novoCargo.tenantId,
+          titulo: novoCargo.titulo,
+          cbo: novoCargo.cbo,
+          cbo_descricao: novoCargo.cboDescricao,
+          carga_horaria_semanal: novoCargo.cargaHorariaSemanal
+        }, { onConflict: 'position_id' });
+      }
+    } catch (err: any) {
+      showNotification(err?.message || 'Erro de conexão ao salvar cargo.', 'error');
+      return;
     }
 
     let updatedList: Cargo[];
@@ -418,24 +452,41 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
     };
 
     try {
-      await supabase.from('establishments').upsert({
-        establishment_id: novoEst.id,
-        tenant_id: novoEst.tenantId,
-        nome: novoEst.nome,
-        cnpj: novoEst.cnpj,
-        tipo: novoEst.tipo,
-        cep: novoEst.cep,
-        latitude: novoEst.latitude,
-        longitude: novoEst.longitude,
-        cerca_raio_metros: novoEst.cercaRaioMetros,
-        bloquear_fora_do_raio: novoEst.bloquearForaDoRaio,
-        endereco_completo: novoEst.enderecoCompleto,
-        municipio: novoEst.municipio,
-        uf: novoEst.uf,
-        fuso_horario: novoEst.fusoHorario
-      }, { onConflict: 'establishment_id' });
-    } catch (err) {
-      console.warn('Aviso sincronização Supabase estabelecimento:', err);
+      if (bearerToken) {
+        const res = await fetch('/api/establishments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`
+          },
+          body: JSON.stringify(novoEst)
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          showNotification(errData?.error || 'Erro ao salvar unidade no servidor.', 'error');
+          return;
+        }
+      } else if (supabase) {
+        await supabase.from('establishments').upsert({
+          establishment_id: novoEst.id,
+          tenant_id: novoEst.tenantId,
+          nome: novoEst.nome,
+          cnpj: novoEst.cnpj,
+          tipo: novoEst.tipo,
+          cep: novoEst.cep,
+          latitude: novoEst.latitude,
+          longitude: novoEst.longitude,
+          cerca_raio_metros: novoEst.cercaRaioMetros,
+          bloquear_fora_do_raio: novoEst.bloquearForaDoRaio,
+          endereco_completo: novoEst.enderecoCompleto,
+          municipio: novoEst.municipio,
+          uf: novoEst.uf,
+          fuso_horario: novoEst.fusoHorario
+        }, { onConflict: 'establishment_id' });
+      }
+    } catch (err: any) {
+      showNotification(err?.message || 'Erro de conexão ao salvar unidade.', 'error');
+      return;
     }
 
     let updatedList: Estabelecimento[];
@@ -467,25 +518,52 @@ export const GestaoEstrutura: React.FC<GestaoEstruturaProps> = ({
 
     if (kind === 'depto') {
       try {
-        await supabase.from('departments').delete().eq('department_id', id);
-      } catch (err) {
-        console.warn('Aviso delete departamento Supabase:', err);
+        if (bearerToken) {
+          const res = await fetch(`/api/departments/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${bearerToken}` }
+          });
+          if (!res.ok) throw new Error('Falha ao excluir departamento no servidor.');
+        } else if (supabase) {
+          await supabase.from('departments').delete().eq('department_id', id);
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Erro ao remover departamento no servidor.', 'error');
+        return;
       }
       onUpdateDepartamentos(departamentos.filter(d => d.id !== id));
       showNotification(`Departamento "${label}" removido.`, 'success');
     } else if (kind === 'cargo') {
       try {
-        await supabase.from('positions').delete().eq('position_id', id);
-      } catch (err) {
-        console.warn('Aviso delete cargo Supabase:', err);
+        if (bearerToken) {
+          const res = await fetch(`/api/positions/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${bearerToken}` }
+          });
+          if (!res.ok) throw new Error('Falha ao excluir cargo no servidor.');
+        } else if (supabase) {
+          await supabase.from('positions').delete().eq('position_id', id);
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Erro ao remover cargo no servidor.', 'error');
+        return;
       }
       onUpdateCargos(cargos.filter(c => c.id !== id));
       showNotification(`Cargo "${label}" removido.`, 'success');
     } else {
       try {
-        await supabase.from('establishments').delete().eq('establishment_id', id);
-      } catch (err) {
-        console.warn('Aviso delete estabelecimento Supabase:', err);
+        if (bearerToken) {
+          const res = await fetch(`/api/establishments/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${bearerToken}` }
+          });
+          if (!res.ok) throw new Error('Falha ao excluir unidade no servidor.');
+        } else if (supabase) {
+          await supabase.from('establishments').delete().eq('establishment_id', id);
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Erro ao remover unidade no servidor.', 'error');
+        return;
       }
       onUpdateEstabelecimentos(estabelecimentos.filter(e => e.id !== id));
       showNotification(`Unidade "${label}" removida.`, 'success');
