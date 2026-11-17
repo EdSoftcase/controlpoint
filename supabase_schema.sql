@@ -60,6 +60,7 @@ ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS tipo_escala TEXT DEFAU
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS turma_escala TEXT DEFAULT 'A';
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS dias_folga_semana JSONB;
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS anual_folgas JSONB;
+ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS data_base_ciclo DATE;
 
 -- 3. TABELA DE REGISTROS DE PONTO (REP-P)
 CREATE TABLE IF NOT EXISTS public.point_registrations (
@@ -210,12 +211,15 @@ CREATE TABLE IF NOT EXISTS public.overtime_requests (
     minutos_extras INTEGER DEFAULT 0,
     horas_extras_formatadas TEXT,
     tipo_hora_extra TEXT DEFAULT 'NORMAL_50',
+    destino_aprovacao TEXT DEFAULT 'BANCO_HORAS',
     justificativa TEXT,
     status TEXT NOT NULL DEFAULT 'PENDENTE',
     motivo_recusa TEXT,
     data_decisao TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE public.overtime_requests ADD COLUMN IF NOT EXISTS destino_aprovacao TEXT DEFAULT 'BANCO_HORAS';
 
 -- 10. TABELA DE FÉRIAS
 CREATE TABLE IF NOT EXISTS public.vacations (
@@ -293,9 +297,12 @@ CREATE TABLE IF NOT EXISTS public.biometric_audit_logs (
     verdict TEXT NOT NULL,
     algorithm_used TEXT,
     hash_template TEXT,
+    contingency_selfie_url TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     CONSTRAINT fk_biometric_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
 );
+
+ALTER TABLE public.biometric_audit_logs ADD COLUMN IF NOT EXISTS contingency_selfie_url TEXT;
 
 -- 14. TABELA DE ASSINATURAS DE ESPELHO (Portaria 671 / PTRP)
 CREATE TABLE IF NOT EXISTS public.point_signatures (
@@ -430,7 +437,59 @@ CREATE TABLE IF NOT EXISTS public.rh_tickets (
     CONSTRAINT fk_rh_ticket_collaborator FOREIGN KEY (collaborator_id) REFERENCES public.collaborators(collaborator_id) ON DELETE CASCADE
 );
 
+-- 20. TABELA DE MATRIZ DE PERMISSÕES (RBAC POR TENANT)
+CREATE TABLE IF NOT EXISTS public.role_permissions (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(tenant_id, role)
+);
+
+-- 21. TABELA DE CONFIGURAÇÕES GLOBAIS DO COLETOR & POLÍTICAS
+CREATE TABLE IF NOT EXISTS public.app_settings (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tenant_id TEXT UNIQUE NOT NULL,
+    biometric_threshold NUMERIC(5,2) NOT NULL DEFAULT 82.0,
+    settings JSONB DEFAULT '{}'::jsonb,
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 22. TABELA DE TRATAMENTOS DE OCORRÊNCIAS DE FREQUÊNCIA
+CREATE TABLE IF NOT EXISTS public.occurrence_treatments (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    treatment_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    collaborator_id TEXT NOT NULL,
+    occurrence_date DATE NOT NULL,
+    occurrence_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    justificativa TEXT,
+    cid10 TEXT,
+    observacao TEXT,
+    treated_by TEXT,
+    treated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 23. TABELA DE LOTES DE PREMIAÇÃO IPA (SCORING DE ASSIDUIDADE)
+CREATE TABLE IF NOT EXISTS public.ipa_reward_batches (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    batch_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    competencia TEXT NOT NULL,
+    beneficiaries JSONB NOT NULL DEFAULT '[]'::jsonb,
+    total_beneficiaries INTEGER NOT NULL DEFAULT 0,
+    total_payout NUMERIC(12,2) NOT NULL DEFAULT 0,
+    processed_by TEXT,
+    processed_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Habilitar RLS em todas as tabelas
+-- Nota de Segurança: Em produção com SUPABASE_SERVICE_ROLE_KEY configurada no servidor Express,
+-- restrinja as políticas de escrita/leitura sensível para (auth.role() = 'service_role').
 ALTER TABLE public.logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.collaborators ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.point_registrations ENABLE ROW LEVEL SECURITY;
@@ -450,66 +509,83 @@ ALTER TABLE public.paystubs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tax_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_announcements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rh_tickets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.occurrence_treatments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ipa_reward_batches ENABLE ROW LEVEL SECURITY;
 
--- Políticas de Acesso Idempotentes
+-- Políticas de Acesso Idempotentes (Restritas ao Backend Service Role)
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.logs;
-CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.collaborators;
-CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_registrations;
-CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.establishments;
-CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.tenants;
-CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.departments;
-CREATE POLICY "Acesso Total Backend" ON public.departments FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.departments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.positions;
-CREATE POLICY "Acesso Total Backend" ON public.positions FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.positions FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.holidays;
-CREATE POLICY "Acesso Total Backend" ON public.holidays FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.holidays FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.overtime_requests;
-CREATE POLICY "Acesso Total Backend" ON public.overtime_requests FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.overtime_requests FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.vacations;
-CREATE POLICY "Acesso Total Backend" ON public.vacations FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.vacations FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.absences;
-CREATE POLICY "Acesso Total Backend" ON public.absences FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.absences FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.shift_swaps;
-CREATE POLICY "Acesso Total Backend" ON public.shift_swaps FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.shift_swaps FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.biometric_audit_logs;
-CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_signatures;
-CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.adjustment_requests;
-CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.paystubs;
-CREATE POLICY "Acesso Total Backend" ON public.paystubs FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.paystubs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.tax_reports;
-CREATE POLICY "Acesso Total Backend" ON public.tax_reports FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.tax_reports FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.company_announcements;
-CREATE POLICY "Acesso Total Backend" ON public.company_announcements FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.company_announcements FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.rh_tickets;
-CREATE POLICY "Acesso Total Backend" ON public.rh_tickets FOR ALL USING (true);
+CREATE POLICY "Acesso Total Backend" ON public.rh_tickets FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
--- Índices
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.role_permissions;
+CREATE POLICY "Acesso Total Backend" ON public.role_permissions FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.app_settings;
+CREATE POLICY "Acesso Total Backend" ON public.app_settings FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.occurrence_treatments;
+CREATE POLICY "Acesso Total Backend" ON public.occurrence_treatments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
+DROP POLICY IF EXISTS "Acesso Total Backend" ON public.ipa_reward_batches;
+CREATE POLICY "Acesso Total Backend" ON public.ipa_reward_batches FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
+-- Índices e Restrições de Unicidade Fiscal
+CREATE UNIQUE INDEX IF NOT EXISTS uq_point_tenant_nsr ON public.point_registrations(tenant_id, nsr);
 CREATE INDEX IF NOT EXISTS idx_colab_tenant ON public.collaborators(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_tenant ON public.point_registrations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_point_colab ON public.point_registrations(collaborator_id);
@@ -531,6 +607,9 @@ CREATE INDEX IF NOT EXISTS idx_tax_reports_tenant ON public.tax_reports(tenant_i
 CREATE INDEX IF NOT EXISTS idx_announcements_tenant ON public.company_announcements(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_tenant ON public.rh_tickets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_colab ON public.rh_tickets(collaborator_id);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_tenant ON public.role_permissions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_occurrence_treatments_tenant ON public.occurrence_treatments(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ipa_reward_batches_tenant ON public.ipa_reward_batches(tenant_id);
 
 -- SEED INICIAL IDEMPOTENTE
 INSERT INTO public.tenants (tenant_id, cnpj, razao_social, nome_fantasia, slug, plano, licencas_contratadas, email_admin, status)

@@ -54,6 +54,39 @@ export function encryptBiometricTemplate(text: string): string {
   return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 }
 
+export function hashPin(pin: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(pin.trim(), salt, 32).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+export function verifyPin(inputPin: string, storedPin: string): { valid: boolean; needsUpgrade: boolean } {
+  const cleanInput = String(inputPin || '').trim();
+  const cleanStored = String(storedPin || '').trim();
+  if (!cleanInput || !cleanStored) {
+    return { valid: false, needsUpgrade: false };
+  }
+
+  if (cleanStored.startsWith('scrypt$')) {
+    const parts = cleanStored.split('$');
+    if (parts.length !== 3) return { valid: false, needsUpgrade: false };
+    const [, salt, expectedHex] = parts;
+    try {
+      const actualBuf = crypto.scryptSync(cleanInput, salt, 32);
+      const expectedBuf = Buffer.from(expectedHex, 'hex');
+      if (actualBuf.length !== expectedBuf.length) return { valid: false, needsUpgrade: false };
+      return { valid: crypto.timingSafeEqual(actualBuf, expectedBuf), needsUpgrade: false };
+    } catch {
+      return { valid: false, needsUpgrade: false };
+    }
+  }
+
+  const inputDigest = crypto.createHash('sha256').update(cleanInput).digest();
+  const storedDigest = crypto.createHash('sha256').update(cleanStored).digest();
+  const valid = crypto.timingSafeEqual(inputDigest, storedDigest);
+  return { valid, needsUpgrade: valid };
+}
+
 function getBrasiliaTimeParts(dateInput: Date = new Date()) {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
@@ -281,6 +314,67 @@ function parseColabPhone(colab: any): string {
   return '';
 }
 
+function resolveCollaboratorRole(cargoTitulo?: string): 'SUPER_ADMIN' | 'RH_ADMIN' | 'GESTOR' | 'COLABORADOR' {
+  const cargoLower = String(cargoTitulo || '').toLowerCase();
+  if (/\bsuper\s*admin/i.test(cargoLower)) return 'SUPER_ADMIN';
+  if (/\b(rh|dp|recursos humanos|departamento pessoal)\b/i.test(cargoLower)) return 'RH_ADMIN';
+  if (/\b(gestor|supervisor|coordenador|gerente|lider|líder)\b/i.test(cargoLower)) return 'GESTOR';
+  return 'COLABORADOR';
+}
+
+function mapCollaboratorRow(c: any) {
+  const colabEmail = parseColabEmail(c);
+  const colabPhone = parseColabPhone(c);
+  const rawBio = c.biometric_template || c.biometria_hash_template || undefined;
+  let parsedBioObj: any = null;
+  if (rawBio) {
+    try {
+      parsedBioObj = typeof rawBio === 'string' ? JSON.parse(rawBio) : rawBio;
+      if (typeof parsedBioObj === 'string') parsedBioObj = JSON.parse(parsedBioObj);
+    } catch {
+      parsedBioObj = null;
+    }
+  }
+  return {
+    id: c.collaborator_id || c.id,
+    tenantId: c.tenant_id || 'tenant-01',
+    nome: c.nome,
+    cpf: c.cpf,
+    matricula: c.matricula || 'MAT-001',
+    pis: c.pis || '',
+    email: colabEmail,
+    telefone: colabPhone,
+    dataAdmissao: c.data_admissao || '2024-01-01',
+    cargoId: c.cargo_id || 'crg-01',
+    cargoTitulo: c.cargo_titulo || parsedBioObj?.pretensaoCargo || 'Colaborador',
+    departamentoId: c.departamento_id || 'dep-01',
+    departamentoNome: c.departamento_nome || parsedBioObj?.pretensaoDepto || 'Geral',
+    gestorId: c.gestor_id || 'colab-admin',
+    gestorNome: c.gestor_nome || 'Administrador',
+    estabelecimentoId: c.estabelecimento_id || 'est-01',
+    estabelecimentoNome: c.estabelecimento_nome || 'Matriz',
+    regime: c.regime || 'REGULAR',
+    horarioInicio: c.horario_inicio || '08:00',
+    horarioFim: c.horario_fim || '17:00',
+    cargaHorariaDiariaHoras: Number(c.carga_horaria_diaria) || 8,
+    intervaloMinutos: Number(c.intervalo_minutos) || 60,
+    maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia ?? 15),
+    regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
+    pinColetor: '',
+    biometriaCadastrada: Boolean(c.biometria_cadastrada),
+    biometriaHashTemplate: rawBio,
+    limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 82.0,
+    tipoEscala: c.tipo_escala || '5x2',
+    turmaEscala: c.turma_escala || 'A',
+    diasFolgaSemana: Array.isArray(c.dias_folga_semana) ? c.dias_folga_semana : undefined,
+    anualFolgas: c.anual_folgas && typeof c.anual_folgas === 'object' ? c.anual_folgas : undefined,
+    dataBaseCiclo: c.data_base_ciclo || '2026-01-01',
+    status: c.status || 'ATIVO',
+    pretensaoDepto: parsedBioObj?.pretensaoDepto || '',
+    pretensaoCargo: parsedBioObj?.pretensaoCargo || ''
+  };
+}
+
 // Horário Oficial de Brasília (NTP-aligned Server Time)
 app.get('/api/time', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -396,19 +490,12 @@ app.post('/api/auth/login', async (req, res) => {
     const cleanDigits = cleanIdent.replace(/\D/g, '');
     const lowerIdent = cleanIdent.toLowerCase();
 
-    let allColabs: any[] = [];
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('collaborators')
-        .select('*');
-      if (!fetchErr && data) {
-        allColabs = data;
-      }
-    } catch {
-      // ignore db errors and proceed to fallback/auto-provision
-    }
+    const { data: allColabs, error: fetchErr } = await supabase
+      .from('collaborators')
+      .select('*');
+    if (fetchErr) throw fetchErr;
 
-    let colab = (allColabs || []).find((c: any) => {
+    const colab = (allColabs || []).find((c: any) => {
       const cCpfDigits = (c.cpf || '').replace(/\D/g, '');
       const cEmail = parseColabEmail(c);
       return (
@@ -418,41 +505,6 @@ app.post('/api/auth/login', async (req, res) => {
         (cEmail && cEmail === lowerIdent)
       );
     });
-
-    if (!colab) {
-      // Auto-provision fallback collaborator for deployment testing and production resilience
-      const autoId = `colab-auto-${cleanDigits || Date.now()}`;
-      const isRh = cleanIdent.toLowerCase().includes('rh') || cleanIdent.toLowerCase().includes('admin');
-      const autoColab = {
-        collaborator_id: autoId,
-        tenant_id: 'tenant-01',
-        nome: cleanIdent.includes('@') ? cleanIdent.split('@')[0] : `Colaborador ${cleanIdent}`,
-        cpf: cleanDigits.length === 11 ? `${cleanDigits.slice(0,3)}.${cleanDigits.slice(3,6)}.${cleanDigits.slice(6,9)}-${cleanDigits.slice(9)}` : (cleanIdent.length >= 11 ? cleanIdent : '354.617.778-99'),
-        matricula: `SC-${Math.floor(1000 + Math.random() * 9000)}`,
-        data_admissao: '2026-01-01',
-        cargo_id: isRh ? 'crg-02' : 'crg-01',
-        cargo_titulo: isRh ? 'Analista de Recursos Humanos' : 'Colaborador CLT',
-        departamento_id: 'dep-02',
-        departamento_nome: 'Recursos Humanos & Operações',
-        estabelecimento_id: 'est-01',
-        estabelecimento_nome: 'Matriz Principal - Sede',
-        regime: 'REGULAR',
-        horario_inicio: '08:00',
-        horario_fim: '17:00',
-        carga_horaria_diaria: 8,
-        intervalo_minutos: 60,
-        max_minutos_antecedencia: 15,
-        regra_antecedencia_ativa: true,
-        pin_coletor: cleanSenha || '123456',
-        email: cleanIdent.includes('@') ? cleanIdent : `${autoId}@pointcontrol.local`,
-        status: 'ATIVO',
-        updated_at: new Date().toISOString()
-      };
-      if (supabase) {
-        await supabase.from('collaborators').upsert(autoColab, { onConflict: 'collaborator_id' }).catch(() => {});
-      }
-      colab = autoColab;
-    }
 
     if (!colab) {
       return res.status(401).json({ error: 'Colaborador não encontrado. Verifique CPF, E-mail ou Matrícula.' });
@@ -465,9 +517,16 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(403).json({ error: 'Seu auto-cadastro ainda está pendente de aprovação pelo RH.' });
     }
 
-    const expectedPin = String(colab.pin_coletor || '123456').trim();
-    if (cleanSenha && cleanSenha !== expectedPin && cleanSenha !== '123456') {
+    const pinCheck = verifyPin(cleanSenha, colab.pin_coletor || '');
+    if (!pinCheck.valid) {
       return res.status(401).json({ error: 'Senha/PIN incorreto. Em caso de dúvida, utilize "Esqueci meu acesso" ou procure o RH.' });
+    }
+
+    if (pinCheck.needsUpgrade) {
+      await supabase
+        .from('collaborators')
+        .update({ pin_coletor: hashPin(cleanSenha), updated_at: getBrasiliaTimeParts().iso })
+        .eq('collaborator_id', colab.collaborator_id);
     }
 
     // Buscar nome do tenant
@@ -481,16 +540,7 @@ app.post('/api/auth/login', async (req, res) => {
       tenantNome = tenantRow.nome_fantasia || tenantRow.razao_social;
     }
 
-    // Determinar papel a partir do cargo
-    const cargoLower = (colab.cargo_titulo || '').toLowerCase();
-    const role = cargoLower.includes('super admin')
-      ? 'SUPER_ADMIN'
-      : cargoLower.includes('rh') || cargoLower.includes('dp')
-      ? 'RH_ADMIN'
-      : cargoLower.includes('gestor') || cargoLower.includes('supervisor') || cargoLower.includes('coordenador')
-      ? 'GESTOR'
-      : 'COLABORADOR';
-
+    const role = resolveCollaboratorRole(colab.cargo_titulo);
     const colabEmail = parseColabEmail(colab) || `${colab.collaborator_id}@pointcontrol.local`;
     const sessionUser = {
       id: `user-${colab.collaborator_id}`,
@@ -513,44 +563,52 @@ app.post('/api/auth/login', async (req, res) => {
       success: true,
       token,
       user: sessionUser,
-      colaborador: {
-        id: colab.collaborator_id,
-        tenantId: colab.tenant_id,
-        nome: colab.nome,
-        cpf: colab.cpf,
-        matricula: colab.matricula,
-        pis: colab.pis,
-        email: colabEmail,
-        telefone: parseColabPhone(colab),
-        dataAdmissao: colab.data_admissao,
-        cargoId: colab.cargo_id,
-        cargoTitulo: colab.cargo_titulo,
-        departamentoId: colab.departamento_id,
-        departamentoNome: colab.departamento_nome,
-        gestorId: colab.gestor_id,
-        gestorNome: colab.gestor_nome,
-        estabelecimentoId: colab.estabelecimento_id,
-        estabelecimentoNome: colab.estabelecimento_nome,
-        regime: colab.regime,
-        horarioInicio: colab.horario_inicio,
-        horarioFim: colab.horario_fim,
-        cargaHorariaDiariaHoras: colab.carga_horaria_diaria,
-        intervaloMinutos: colab.intervalo_minutos,
-        maxMinutosAntecedenciaPermitido: colab.max_minutos_antecedencia,
-        regraAntecedenciaAtiva: colab.regra_antecedencia_ativa,
-        biometriaCadastrada: Boolean(colab.biometria_cadastrada),
-        biometriaHashTemplate: colab.biometric_template,
-        limiarConfiancaMinimo: colab.limiar_confianca_minimo || 65,
-        tipoEscala: colab.tipo_escala || '5x2',
-        turmaEscala: colab.turma_escala || 'A',
-        diasFolgaSemana: colab.dias_folga_semana,
-        anualFolgas: colab.anual_folgas,
-        status: colab.status
-      }
+      colaborador: mapCollaboratorRow(colab)
     });
   } catch (error: any) {
     console.error('Login error:', error);
     res.status(500).json({ error: error?.message || 'Erro interno ao autenticar.' });
+  }
+});
+
+// Valida e reidrata a sessão persistida no refresh da página
+app.get('/api/auth/session', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Token ausente.' });
+
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    const user = await getAuthenticatedUser(token);
+    if (!user) {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada.' });
+    }
+
+    const collaboratorId = user.user_metadata?.collaboratorId;
+    let colaborador: any = null;
+
+    if (supabase && collaboratorId) {
+      const { data: colabRow, error: colabErr } = await supabase
+        .from('collaborators')
+        .select('*')
+        .eq('collaborator_id', collaboratorId)
+        .maybeSingle();
+
+      if (colabErr) throw colabErr;
+      if (colabRow) {
+        if (colabRow.status === 'DESLIGADO' || colabRow.status === 'PENDENTE') {
+          return res.status(403).json({ error: 'Vínculo bloqueado ou pendente de aprovação.' });
+        }
+        colaborador = mapCollaboratorRow(colabRow);
+      }
+    }
+
+    res.json({
+      success: true,
+      user,
+      colaborador
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Erro ao validar sessão.' });
   }
 });
 
@@ -787,7 +845,7 @@ app.post('/api/save-biometric', async (req, res) => {
         .eq('collaborator_id', collaboratorId);
 
       if (dbError) {
-        console.warn('Supabase update warning for biometric:', dbError.message);
+        throw dbError;
       }
     }
 
@@ -937,28 +995,41 @@ app.post('/api/save-biometric-audit', async (req, res) => {
       return res.status(403).send('Forbidden');
     }
 
-    const { data, error: dbError } = await supabase
+    const insertPayload: Record<string, any> = {
+      tenant_id: auditData.tenantId || 'tenant-01',
+      collaborator_id: auditData.collaboratorId,
+      timestamp: auditData.timestamp || getBrasiliaTimeParts().iso,
+      similarity: auditData.similarity,
+      lighting_condition: auditData.lightingCondition,
+      liveness_score: auditData.livenessScore,
+      verdict: auditData.verdict,
+      algorithm_used: auditData.algorithmUsed || 'ISO19794-5',
+      hash_template: auditData.hashTemplate || 'ISO19794-5'
+    };
+    if (auditData.contingencySelfieDataUrl) {
+      insertPayload.contingency_selfie_url = auditData.contingencySelfieDataUrl;
+    }
+
+    let { data, error: dbError } = await supabase
       .from('biometric_audit_logs')
-      .insert({
-        tenant_id: auditData.tenantId || 'tenant-01',
-        collaborator_id: auditData.collaboratorId,
-        timestamp: auditData.timestamp || getBrasiliaTimeParts().iso,
-        similarity: auditData.similarity,
-        lighting_condition: auditData.lightingCondition,
-        liveness_score: auditData.livenessScore,
-        verdict: auditData.verdict,
-        algorithm_used: auditData.algorithmUsed || 'ISO19794-5',
-        hash_template: auditData.hashTemplate || 'ISO19794-5'
-      })
+      .insert(insertPayload)
       .select();
 
-    if (dbError) {
-      console.warn('Supabase biometric_audit_logs insert warning:', dbError.message);
-      await logEvent(
-        auditData.tenantId || 'tenant-01',
-        `Biometric audit attempt for ${auditData.collaboratorId}: Verdict=${auditData.verdict}, Similarity=${auditData.similarity}%, Liveness=${auditData.livenessScore}%`
-      );
+    if (dbError && insertPayload.contingency_selfie_url && String(dbError.message || '').includes('contingency_selfie_url')) {
+      delete insertPayload.contingency_selfie_url;
+      const retry = await supabase.from('biometric_audit_logs').insert(insertPayload).select();
+      data = retry.data;
+      dbError = retry.error;
     }
+
+    if (dbError) {
+      throw dbError;
+    }
+
+    await logEvent(
+      auditData.tenantId || 'tenant-01',
+      `Biometric audit recorded for ${auditData.collaboratorId}: Verdict=${auditData.verdict}, Similarity=${auditData.similarity}%, Liveness=${auditData.livenessScore}%`
+    );
 
     res.json({ success: true, data });
   } catch (error) {
@@ -1046,25 +1117,40 @@ app.post('/api/save-collaborator', async (req, res) => {
       intervalo_minutos: collaborator.intervaloMinutos,
       max_minutos_antecedencia: collaborator.maxMinutosAntecedenciaPermitido,
       regra_antecedencia_ativa: collaborator.regraAntecedenciaAtiva,
-      pin_coletor: collaborator.pinColetor,
       tipo_escala: collaborator.tipoEscala || '5x2',
       turma_escala: collaborator.turmaEscala || 'A',
       dias_folga_semana: collaborator.diasFolgaSemana ?? null,
       anual_folgas: collaborator.anualFolgas ?? null,
-      limiar_confianca_minimo: collaborator.limiarConfiancaMinimo ?? 65,
+      limiar_confianca_minimo: collaborator.limiarConfiancaMinimo ?? 82,
       biometria_cadastrada: Boolean(nextBioCadastrada),
       status: collaborator.status,
       updated_at: getBrasiliaTimeParts().iso
     };
 
+    if (collaborator.dataBaseCiclo) {
+      payload.data_base_ciclo = collaborator.dataBaseCiclo;
+    }
+
+    if (collaborator.pinColetor && String(collaborator.pinColetor).trim().length > 0) {
+      const rawPin = String(collaborator.pinColetor).trim();
+      payload.pin_coletor = rawPin.startsWith('scrypt$') ? rawPin : hashPin(rawPin);
+    }
+
     if (nextTemplate !== undefined) {
       payload.biometric_template = nextTemplate;
     }
 
-    const { data, error: dbError } = await supabase
+    let { data, error: dbError } = await supabase
       .from('collaborators')
       .upsert(payload, { onConflict: 'collaborator_id' })
       .select();
+
+    if (dbError && payload.data_base_ciclo && String(dbError.message || '').includes('data_base_ciclo')) {
+      delete payload.data_base_ciclo;
+      const retry = await supabase.from('collaborators').upsert(payload, { onConflict: 'collaborator_id' }).select();
+      data = retry.data;
+      dbError = retry.error;
+    }
 
     if (dbError) throw dbError;
 
@@ -1103,11 +1189,12 @@ app.post('/api/self-register', async (req, res) => {
       }
     }
 
-    let colabId = `colab-auto-${cleanCpf.slice(-6)}-${Date.now().toString().slice(-4)}`;
+    const colabId = `colab-auto-${cleanCpf.slice(-6)}-${Date.now().toString().slice(-4)}`;
     const normalizedEmail = (email || '').trim().toLowerCase();
     const normalizedTelefone = (telefone || '').trim();
     const normalizedDepto = departamentoNome || 'A Definir pelo Gestor';
     const normalizedCargo = cargoTitulo || 'A Definir pelo Gestor';
+    const formattedCpf = `${cleanCpf.slice(0, 3)}.${cleanCpf.slice(3, 6)}.${cleanCpf.slice(6, 9)}-${cleanCpf.slice(9)}`;
 
     const metadataBio = JSON.stringify({
       email: normalizedEmail,
@@ -1116,54 +1203,56 @@ app.post('/api/self-register', async (req, res) => {
       pretensaoCargo: normalizedCargo
     });
 
-    let savedData: any = null;
-    if (supabase) {
-      try {
-        const { data: existing } = await supabase
-          .from('collaborators')
-          .select('collaborator_id, matricula')
-          .eq('cpf', cpf.trim())
-          .maybeSingle();
-
-        if (existing?.collaborator_id) {
-          colabId = existing.collaborator_id;
-        }
-
-        const { data, error } = await supabase
-          .from('collaborators')
-          .upsert(
-            {
-              collaborator_id: colabId,
-              tenant_id: tenantId,
-              nome: nome.trim(),
-              cpf: cpf.trim(),
-              matricula: existing?.matricula || `PEND-${cleanCpf.slice(0, 4)}`,
-              email: normalizedEmail || null,
-              telefone: normalizedTelefone || null,
-              data_admissao: getBrasiliaTimeParts().ymd,
-              cargo_titulo: normalizedCargo,
-              departamento_nome: normalizedDepto,
-              status: 'PENDENTE',
-              pin_coletor: String(senha).trim(),
-              biometria_cadastrada: false,
-              biometric_template: metadataBio,
-              updated_at: getBrasiliaTimeParts().iso
-            },
-            { onConflict: 'collaborator_id' }
-          )
-          .select();
-
-        if (error) {
-          console.warn('Aviso Supabase no self-register:', error);
-        } else {
-          savedData = data && data[0] ? data[0] : null;
-        }
-      } catch (sbErr) {
-        console.warn('Erro ao conectar Supabase no self-register:', sbErr);
-      }
+    if (!supabase) {
+      return res.status(503).json({ error: 'Banco de dados indisponível para concluir o auto-cadastro.' });
     }
 
-    await logEvent(tenantId, `Novo auto-cadastro de colaborador pendente: ${nome} (CPF: ${cpf})`);
+    const { data: allColabs, error: lookupErr } = await supabase
+      .from('collaborators')
+      .select('collaborator_id, cpf, email, biometric_template, status');
+    if (lookupErr) throw lookupErr;
+
+    const duplicate = (allColabs || []).find((c: any) => {
+      const existingCpfDigits = String(c.cpf || '').replace(/\D/g, '');
+      const existingEmail = parseColabEmail(c);
+      return existingCpfDigits === cleanCpf || (normalizedEmail && existingEmail === normalizedEmail);
+    });
+
+    if (duplicate) {
+      return res.status(409).json({
+        error:
+          duplicate.status === 'PENDENTE'
+            ? 'Já existe um auto-cadastro pendente de aprovação para este CPF ou e-mail.'
+            : 'Já existe um cadastro ativo ou registrado com este CPF ou e-mail. Utilize a aba "Entrar" ou "Esqueci meu acesso".'
+      });
+    }
+
+    const hashedPin = hashPin(String(senha).trim());
+    const { data, error: insertErr } = await supabase
+      .from('collaborators')
+      .insert({
+        collaborator_id: colabId,
+        tenant_id: tenantId,
+        nome: nome.trim(),
+        cpf: formattedCpf,
+        matricula: `PEND-${cleanCpf.slice(0, 4)}`,
+        email: normalizedEmail || null,
+        telefone: normalizedTelefone || null,
+        data_admissao: getBrasiliaTimeParts().ymd,
+        cargo_titulo: normalizedCargo,
+        departamento_nome: normalizedDepto,
+        status: 'PENDENTE',
+        pin_coletor: hashedPin,
+        biometria_cadastrada: false,
+        biometric_template: metadataBio,
+        updated_at: getBrasiliaTimeParts().iso
+      })
+      .select();
+
+    if (insertErr) throw insertErr;
+    const savedData = data && data[0] ? data[0] : null;
+
+    await logEvent(tenantId, `Novo auto-cadastro de colaborador pendente: ${nome} (CPF: ${formattedCpf})`);
 
     res.json({
       success: true,
@@ -1185,15 +1274,18 @@ app.post('/api/self-register', async (req, res) => {
   }
 });
 
-// Recuperação de Acesso / Redefinição de Senha ou PIN (Exige 2 fatores de confirmação)
+// Recuperação de Acesso / Redefinição de Senha ou PIN (Exige 3 fatores: CPF + E-mail/Matrícula + Data de Admissão)
 app.post('/api/recover-access', async (req, res) => {
   try {
-    const { identificador, segundoFator, novaSenha } = req.body;
+    const { identificador, segundoFator, dataAdmissao, novaSenha } = req.body;
     if (!identificador || !identificador.trim()) {
       return res.status(400).json({ error: 'Informe seu CPF.' });
     }
     if (!segundoFator || !segundoFator.trim()) {
       return res.status(400).json({ error: 'Informe o 2º fator de validação (E-mail corporativo ou Matrícula).' });
+    }
+    if (!dataAdmissao || !String(dataAdmissao).trim()) {
+      return res.status(400).json({ error: 'Informe o 3º fator de validação (Data de Admissão).' });
     }
 
     if (!supabase) {
@@ -1202,6 +1294,7 @@ app.post('/api/recover-access', async (req, res) => {
 
     const cleanCpfDigits = identificador.replace(/\D/g, '');
     const cleanSecond = segundoFator.trim().toLowerCase();
+    const cleanAdmissao = String(dataAdmissao).trim().slice(0, 10);
 
     const { data: allColabs, error } = await supabase.from('collaborators').select('*');
     if (error) throw error;
@@ -1215,31 +1308,47 @@ app.post('/api/recover-access', async (req, res) => {
 
       const cEmail = parseColabEmail(c);
       const cMat = (c.matricula || '').trim().toLowerCase();
-      return (cEmail && cEmail === cleanSecond) || (cMat && cMat === cleanSecond);
+      const secondOk = (cEmail && cEmail === cleanSecond) || (cMat && cMat === cleanSecond);
+      if (!secondOk) return false;
+
+      const cAdmissao = String(c.data_admissao || '').trim().slice(0, 10);
+      return cAdmissao === cleanAdmissao;
     });
 
     if (!colabEncontrado) {
       return res.status(404).json({
-        error: 'Os dois fatores informados (CPF + E-mail/Matrícula) não conferem com nenhum colaborador ativo. Procure o RH.'
+        error: 'Os três fatores informados (CPF + E-mail/Matrícula + Data de Admissão) não conferem com nenhum cadastro ativo. Procure o RH.'
       });
     }
 
     if (colabEncontrado.status === 'DESLIGADO') {
       return res.status(403).json({ error: 'Colaborador desligado não pode redefinir acesso.' });
     }
+    if (colabEncontrado.status === 'PENDENTE') {
+      return res.status(403).json({ error: 'Auto-cadastro pendente de aprovação pelo RH ainda não possui acesso liberado.' });
+    }
+
+    const targetRole = resolveCollaboratorRole(colabEncontrado.cargo_titulo);
+    if (targetRole === 'SUPER_ADMIN' || targetRole === 'RH_ADMIN') {
+      return res.status(403).json({
+        error: 'Contas administrativas (Super Admin / RH) não podem ser redefinidas por recuperação simplificada. Solicite intervenção administrativa.'
+      });
+    }
 
     if (novaSenha && String(novaSenha).trim().length > 0) {
       if (String(novaSenha).trim().length < 4) {
         return res.status(400).json({ error: 'A nova senha/PIN deve possuir pelo menos 4 caracteres.' });
       }
-      await supabase
+      const { error: updateErr } = await supabase
         .from('collaborators')
-        .update({ pin_coletor: String(novaSenha).trim(), updated_at: getBrasiliaTimeParts().iso })
+        .update({ pin_coletor: hashPin(String(novaSenha).trim()), updated_at: getBrasiliaTimeParts().iso })
         .eq('collaborator_id', colabEncontrado.collaborator_id);
+
+      if (updateErr) throw updateErr;
 
       await logEvent(
         colabEncontrado.tenant_id,
-        `Redefinição de senha via duplo fator concluída para ${colabEncontrado.nome}`
+        `Redefinição de senha via triplo fator concluída para ${colabEncontrado.nome}`
       );
 
       return res.json({
@@ -1495,7 +1604,7 @@ app.post('/api/save-holerite', async (req, res) => {
       )
       .select();
 
-    if (dbError) console.warn('Supabase paystubs upsert warning:', dbError.message);
+    if (dbError) throw dbError;
 
     await logEvent(holerite.tenantId || 'tenant-01', `Holerite ${holerite.competencia} salvo no Supabase para ${holerite.colaboradorNome}`);
     res.json({ success: true, data });
@@ -1538,7 +1647,7 @@ app.post('/api/confirm-holerite', async (req, res) => {
       .eq('paystub_id', paystubId)
       .select();
 
-    if (dbError) console.warn('Supabase confirm paystub warning:', dbError.message);
+    if (dbError) throw dbError;
 
     await logEvent(tenantId || 'tenant-01', `Recibo de holerite ${paystubId} assinado digitalmente (Art. 464 CLT) por ${colaboradorId}`);
     res.json({
@@ -1593,7 +1702,7 @@ app.post('/api/save-informe-irpf', async (req, res) => {
       )
       .select();
 
-    if (dbError) console.warn('Supabase tax_reports upsert warning:', dbError.message);
+    if (dbError) throw dbError;
 
     await logEvent(informe.tenantId || 'tenant-01', `Informe IRPF ${informe.anoCalendario} publicado para ${informe.colaboradorNome}`);
     res.json({ success: true, data });
@@ -1643,6 +1752,370 @@ app.post('/api/create-auth-user', async (req, res) => {
   }
 });
 
+async function executeValidatedPunch(params: {
+  user: any;
+  tenantId: string;
+  colaboradorId: string;
+  tipoMarcacao: string;
+  latitude?: number;
+  longitude?: number;
+  modoDispositivo?: string;
+  coletorId?: string;
+  alertaAntecedencia?: string;
+  alertaIntervalo?: string;
+  biometricAudit?: any;
+  punchDate?: Date;
+  offlineClientHash?: string;
+}) {
+  const {
+    user,
+    tenantId,
+    colaboradorId,
+    tipoMarcacao,
+    latitude,
+    longitude,
+    modoDispositivo,
+    coletorId,
+    alertaAntecedencia,
+    alertaIntervalo,
+    biometricAudit,
+    punchDate,
+    offlineClientHash
+  } = params;
+
+  if (!canAccessTenant(user, tenantId) || !canActForCollaborator(user, colaboradorId)) {
+    return { status: 403, body: { error: 'Permissão negada para registrar ponto neste colaborador/empresa.' } };
+  }
+
+  const targetDate = punchDate && !Number.isNaN(punchDate.getTime()) ? punchDate : new Date();
+  const brasilia = getBrasiliaTimeParts(targetDate);
+
+  const { data: colaborador, error: colabErr } = await supabase
+    .from('collaborators')
+    .select('*')
+    .eq('collaborator_id', colaboradorId)
+    .maybeSingle();
+
+  if (colabErr) throw colabErr;
+  if (!colaborador) {
+    return { status: 404, body: { error: 'Colaborador não localizado na base oficial.' } };
+  }
+
+  if (colaborador.status === 'DESLIGADO') {
+    return { status: 403, body: { error: 'Marcação bloqueada: colaborador desligado.' } };
+  }
+  if (colaborador.status === 'PENDENTE') {
+    return { status: 403, body: { error: 'Marcação bloqueada: cadastro ainda pendente de aprovação.' } };
+  }
+
+  const isDispensaArt62 = colaborador.regime === 'DISPENSA_ART_62';
+
+  // 1. Verificar Exceções Anuais / Férias / Folgas (exceto DISPENSA_ART_62 salvo exceção explícita em férias)
+  const anualFolgas = colaborador.anual_folgas && typeof colaborador.anual_folgas === 'object' ? colaborador.anual_folgas : null;
+  let isFolgaHoje = false;
+
+  if (anualFolgas && Object.prototype.hasOwnProperty.call(anualFolgas, brasilia.ymd)) {
+    isFolgaHoje = Boolean(anualFolgas[brasilia.ymd]);
+  } else if (!isDispensaArt62) {
+    if (colaborador.tipo_escala === '12x36') {
+      const [y, m, d] = brasilia.ymd.split('-').map(Number);
+      const todayUtc = Date.UTC(y, m - 1, d);
+      const baseStr = String(colaborador.data_base_ciclo || '2026-01-01').slice(0, 10);
+      const [by, bm, bd] = baseStr.split('-').map(Number);
+      const baseUtc = Number.isFinite(by) && Number.isFinite(bm) && Number.isFinite(bd)
+        ? Date.UTC(by, bm - 1, bd)
+        : Date.UTC(2026, 0, 1);
+      const diffDays = Math.floor((todayUtc - baseUtc) / (1000 * 60 * 60 * 24));
+      const turma = colaborador.turma_escala || 'A';
+      const isPar = Math.abs(diffDays) % 2 === 0;
+      const trabalha = turma === 'A' ? isPar : !isPar;
+      isFolgaHoje = !trabalha;
+    } else {
+      let diasFolga = colaborador.dias_folga_semana;
+      if (!diasFolga || !Array.isArray(diasFolga)) {
+        if (colaborador.tipo_escala === '6x1') diasFolga = [0];
+        else if (colaborador.tipo_escala === '5x2') diasFolga = [0, 6];
+        else diasFolga = [];
+      }
+      isFolgaHoje = diasFolga.includes(brasilia.dayOfWeek);
+    }
+  }
+
+  if (isFolgaHoje) {
+    await logEvent(tenantId, `Tentativa de ponto bloqueada (folga ${brasilia.ymd}): colaborador=${colaboradorId}`);
+    return {
+      status: 403,
+      body: { error: 'Marcação bloqueada: Hoje é seu dia de folga conforme escala atribuída.' }
+    };
+  }
+
+  // 2. Validar regra de antecedência máxima na ENTRADA com suporte a turnos noturnos (aritmética circular)
+  if (
+    !isDispensaArt62 &&
+    tipoMarcacao === 'ENTRADA' &&
+    colaborador.regra_antecedencia_ativa &&
+    colaborador.horario_inicio &&
+    typeof colaborador.horario_inicio === 'string'
+  ) {
+    const [hStr, mStr] = colaborador.horario_inicio.split(':');
+    const startMin = Number(hStr) * 60 + Number(mStr);
+    const maxAntecedencia = Number(colaborador.max_minutos_antecedencia ?? 15);
+    if (!Number.isNaN(startMin)) {
+      const minsBeforeStart = (startMin - brasilia.minutesOfDay + 1440) % 1440;
+      if (minsBeforeStart > maxAntecedencia && minsBeforeStart < 720) {
+        return {
+          status: 403,
+          body: {
+            error: `Marcação antecipada bloqueada: entrada liberada apenas ${maxAntecedencia} min antes de ${colaborador.horario_inicio} (agora: ${brasilia.hhmm} BRT).`
+          }
+        };
+      }
+    }
+  }
+
+  // 3. Validar duplicidade e sequência cronológica no mesmo dia de Brasília
+  const dayStartIso = `${brasilia.ymd}T00:00:00-03:00`;
+  const dayEndIso = `${brasilia.ymd}T23:59:59-03:00`;
+  const { data: sameDayRows, error: dayErr } = await supabase
+    .from('point_registrations')
+    .select('tipo_marcacao, data_hora')
+    .eq('tenant_id', tenantId)
+    .eq('collaborator_id', colaboradorId)
+    .gte('data_hora', dayStartIso)
+    .lte('data_hora', dayEndIso)
+    .order('data_hora', { ascending: true });
+
+  if (dayErr) throw dayErr;
+
+  const dayList = sameDayRows || [];
+  if (dayList.some((r: any) => r.tipo_marcacao === tipoMarcacao)) {
+    return {
+      status: 400,
+      body: { error: `A marcação "${tipoMarcacao}" já foi registrada hoje (${brasilia.ddmmyyyy}).` }
+    };
+  }
+
+  const hasEntrada = dayList.some((r: any) => r.tipo_marcacao === 'ENTRADA');
+  const hasIntIni = dayList.some((r: any) => r.tipo_marcacao === 'INTERVALO_INICIO');
+  const hasIntFim = dayList.some((r: any) => r.tipo_marcacao === 'INTERVALO_FIM');
+  const hasSaida = dayList.some((r: any) => r.tipo_marcacao === 'SAIDA');
+
+  if (hasSaida) {
+    return { status: 400, body: { error: 'Jornada diária já encerrada com SAÍDA registrada hoje.' } };
+  }
+  if (tipoMarcacao === 'INTERVALO_INICIO' && !hasEntrada) {
+    return { status: 400, body: { error: 'Registre primeiro a ENTRADA antes de iniciar o intervalo.' } };
+  }
+  if (tipoMarcacao === 'INTERVALO_FIM' && !hasIntIni) {
+    return { status: 400, body: { error: 'Registre primeiro a SAÍDA P/ INTERVALO antes do retorno do intervalo.' } };
+  }
+  if (tipoMarcacao === 'SAIDA') {
+    if (!hasEntrada) {
+      return { status: 400, body: { error: 'Registre primeiro a ENTRADA antes de encerrar a jornada.' } };
+    }
+    if (hasIntIni && !hasIntFim) {
+      return { status: 400, body: { error: 'Finalize o intervalo (RETORNO DO INTERVALO) antes de registrar a SAÍDA.' } };
+    }
+  }
+
+  if (dayList.length > 0) {
+    const lastTs = new Date(dayList[dayList.length - 1].data_hora).getTime();
+    if (Number.isFinite(lastTs) && brasilia.epochMs < lastTs - 1000) {
+      return {
+        status: 400,
+        body: { error: 'Horário cronologicamente anterior à última marcação registrada no dia.' }
+      };
+    }
+  }
+
+  // 4. Carregar Empresa (Tenant) e Estabelecimento alocado para validar Cerca Geográfica (Geofencing)
+  let tenant: any = null;
+  let establishment: any = null;
+
+  const { data: tenantData } = await supabase
+    .from('tenants')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .maybeSingle();
+  if (tenantData) tenant = tenantData;
+
+  if (colaborador.estabelecimento_id) {
+    const { data: estRow } = await supabase
+      .from('establishments')
+      .select('*')
+      .eq('establishment_id', colaborador.estabelecimento_id)
+      .maybeSingle();
+    if (estRow) establishment = estRow;
+  }
+  if (!establishment) {
+    const { data: fallbackEst } = await supabase
+      .from('establishments')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .limit(1);
+    if (fallbackEst && fallbackEst.length > 0) {
+      establishment = fallbackEst[0];
+    }
+  }
+
+  const refLat = establishment?.latitude ?? tenant?.latitude;
+  const refLng = establishment?.longitude ?? tenant?.longitude;
+  const raioPermitido = Number(establishment?.cerca_raio_metros ?? tenant?.cerca_raio_metros ?? 150);
+  const bloquearFora = establishment?.bloquear_fora_do_raio ?? tenant?.bloquear_fora_do_raio ?? true;
+
+  const hasValidGps =
+    typeof latitude === 'number' &&
+    typeof longitude === 'number' &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude !== 0 &&
+    longitude !== 0;
+
+  let distanciaCentroMetros = 0;
+  let foraDoRaioGeofence = false;
+
+  if (!isDispensaArt62) {
+    if (refLat != null && refLng != null && Number.isFinite(Number(refLat)) && Number.isFinite(Number(refLng))) {
+      if (!hasValidGps) {
+        foraDoRaioGeofence = true;
+        if (bloquearFora) {
+          return {
+            status: 403,
+            body: {
+              error: 'Geolocalização GPS obrigatória para este local de trabalho. Ative o GPS do dispositivo e tente novamente.'
+            }
+          };
+        }
+      } else {
+        distanciaCentroMetros = calculateDistanceMeters(latitude!, longitude!, Number(refLat), Number(refLng));
+        foraDoRaioGeofence = distanciaCentroMetros > raioPermitido;
+        if (foraDoRaioGeofence && bloquearFora) {
+          await logEvent(
+            tenantId,
+            `Ponto bloqueado por cerca geográfica: colaborador=${colaboradorId}, dist=${distanciaCentroMetros}m > ${raioPermitido}m`
+          );
+          return {
+            status: 403,
+            body: {
+              error: `Fora da área permitida (${distanciaCentroMetros}m do local, limite ${raioPermitido}m).`,
+              distanciaCentroMetros,
+              raioPermitido
+            }
+          };
+        }
+      }
+    } else if (!hasValidGps && bloquearFora) {
+      return {
+        status: 403,
+        body: {
+          error: 'Não foi possível capturar sua localização GPS. Habilite a permissão de localização.'
+        }
+      };
+    }
+  }
+
+  const empregadorRazaoSocial = tenant?.razao_social || 'Softcase Tecnologia';
+  const empregadorCnpj = tenant?.cnpj || '00.000.000/0001-91';
+  const colaboradorNome = colaborador.nome || 'Colaborador';
+  const colaboradorCpf = colaborador.cpf || '000.000.000-00';
+  const colaboradorMatricula = colaborador.matricula || 'MAT-001';
+
+  let nextNsr = 1;
+  let previousHash = '0000000000000000000000000000000000000000000000000000000000000000';
+
+  const { data: lastPoints, error: lastPointErr } = await supabase
+    .from('point_registrations')
+    .select('nsr, hash_sha256')
+    .eq('tenant_id', tenantId)
+    .order('nsr', { ascending: false })
+    .limit(1);
+
+  if (!lastPointErr && lastPoints && lastPoints.length > 0) {
+    nextNsr = Number(lastPoints[0].nsr) + 1;
+    previousHash = lastPoints[0].hash_sha256 || previousHash;
+  }
+
+  const nowIso = brasilia.iso;
+  const dataHoraFormatada = brasilia.formatted;
+  const resolvedModo = modoDispositivo || 'WEB_CAM';
+  const sanitizedColetorId =
+    coletorId && String(coletorId).trim()
+      ? String(coletorId).trim().slice(0, 64)
+      : resolvedModo === 'MOBILE_GPS'
+      ? 'COLETOR_MOBILE_GPS'
+      : resolvedModo === 'TABLET_KIOSK'
+      ? 'COLETOR_TABLET_KIOSK'
+      : 'COLETOR_WEB_CAM';
+
+  const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
+  const hashSha256 = crypto.createHash('sha256').update(rawPayload).digest('hex');
+
+  const localizacaoEndereco =
+    establishment?.endereco_completo ||
+    (establishment ? `${establishment.nome}${establishment.municipio ? ` — ${establishment.municipio}/${establishment.uf}` : ''}` : '') ||
+    tenant?.endereco_completo ||
+    'GPS validado no coletor';
+
+  const registroOficial: Record<string, any> = {
+    nsr: nextNsr,
+    tenantId,
+    empregadorRazaoSocial,
+    empregadorCnpj,
+    colaboradorId,
+    colaboradorNome,
+    colaboradorCpf,
+    colaboradorMatricula,
+    dataHora: nowIso,
+    dataHoraFormatada,
+    fusoHorario: '-03:00',
+    coletorId: sanitizedColetorId,
+    tipoMarcacao,
+    alertaAntecedencia: isDispensaArt62 ? 'Dispensa Art. 62 CLT' : (alertaAntecedencia || null),
+    alertaIntervalo: alertaIntervalo || null,
+    hashSha256,
+    latitude: hasValidGps ? latitude : null,
+    longitude: hasValidGps ? longitude : null,
+    distanciaCentroMetros,
+    foraDoRaioGeofence,
+    localizacaoEndereco,
+    modoDispositivo: resolvedModo,
+    ...(offlineClientHash ? { offlineClientHash } : {})
+  };
+
+  const { error: insertError } = await supabase.from('point_registrations').insert({
+    nsr: nextNsr,
+    tenant_id: tenantId,
+    collaborator_id: colaboradorId,
+    data_hora: nowIso,
+    tipo_marcacao: tipoMarcacao,
+    latitude: registroOficial.latitude,
+    longitude: registroOficial.longitude,
+    hash_sha256: hashSha256,
+    modo_dispositivo: registroOficial.modoDispositivo,
+    detalhes: registroOficial
+  });
+
+  if (insertError) throw insertError;
+
+  if (biometricAudit) {
+    await supabase.from('biometric_audit_logs').insert({
+      tenant_id: tenantId,
+      collaborator_id: colaboradorId,
+      timestamp: nowIso,
+      similarity: biometricAudit.similarity || 0,
+      lighting_condition: biometricAudit.lightingCondition || 'NORMAL',
+      liveness_score: biometricAudit.livenessScore || 0,
+      verdict: biometricAudit.verdict || 'MATCH',
+      algorithm_used: biometricAudit.algorithmUsed || 'ISO19794-5',
+      hash_template: hashSha256
+    });
+  }
+
+  await logEvent(tenantId, `Ponto REP-P oficial registrado server-side: NSR ${nextNsr} para ${colaboradorNome} (${tipoMarcacao})`);
+
+  return { status: 200, body: { success: true, registro: registroOficial } };
+}
+
 // REP-P Server-Side Punch Endpoint (Portaria 671 Compliance)
 app.post('/api/punch', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -1661,281 +2134,120 @@ app.post('/api/punch', async (req, res) => {
       latitude,
       longitude,
       modoDispositivo,
+      coletorId,
       alertaAntecedencia,
-      alertaIntervalo
+      alertaIntervalo,
+      biometricAudit
     } = req.body;
 
     if (!tenantId || !colaboradorId || !tipoMarcacao) {
       return res.status(400).json({ error: 'tenantId, colaboradorId e tipoMarcacao são obrigatórios.' });
     }
 
-    if (!canAccessTenant(user, tenantId) || !canActForCollaborator(user, colaboradorId)) {
-      return res.status(403).json({ error: 'Permissão negada para registrar ponto neste colaborador/empresa.' });
-    }
-
-    const brasilia = getBrasiliaTimeParts();
-    let colaborador: any = null;
-    let tenant: any = null;
-    let establishment: any = null;
-
-    const { data: colabData } = await supabase
-      .from('collaborators')
-      .select('*')
-      .eq('collaborator_id', colaboradorId)
-      .maybeSingle();
-
-    if (!colabData) {
-      return res.status(404).json({ error: 'Colaborador não localizado na base oficial.' });
-    }
-
-    colaborador = colabData;
-
-    if (colaborador.status === 'DESLIGADO') {
-      return res.status(403).json({ error: 'Marcação bloqueada: colaborador desligado.' });
-    }
-    if (colaborador.status === 'PENDENTE') {
-      return res.status(403).json({ error: 'Marcação bloqueada: cadastro ainda pendente de aprovação.' });
-    }
-
-    // 1. Verificar Exceções Anuais / Férias / Folgas primeiro (anual_folgas[YYYY-MM-DD])
-    const anualFolgas = colaborador.anual_folgas && typeof colaborador.anual_folgas === 'object' ? colaborador.anual_folgas : null;
-    let isFolgaHoje = false;
-
-    if (anualFolgas && Object.prototype.hasOwnProperty.call(anualFolgas, brasilia.ymd)) {
-      isFolgaHoje = Boolean(anualFolgas[brasilia.ymd]);
-    } else if (colaborador.tipo_escala === '12x36') {
-      // Escala 12x36 alternada usando 2026-01-01 em UTC puro para contagem de dias
-      const [y, m, d] = brasilia.ymd.split('-').map(Number);
-      const todayUtc = Date.UTC(y, m - 1, d);
-      const baseUtc = Date.UTC(2026, 0, 1);
-      const diffDays = Math.floor((todayUtc - baseUtc) / (1000 * 60 * 60 * 24));
-      const turma = colaborador.turma_escala || 'A';
-      const isPar = Math.abs(diffDays) % 2 === 0;
-      const trabalha = turma === 'A' ? isPar : !isPar;
-      isFolgaHoje = !trabalha;
-    } else {
-      let diasFolga = colaborador.dias_folga_semana;
-      if (!diasFolga || !Array.isArray(diasFolga)) {
-        if (colaborador.tipo_escala === '6x1') diasFolga = [0];
-        else if (colaborador.tipo_escala === '5x2') diasFolga = [0, 6];
-        else diasFolga = [];
-      }
-      isFolgaHoje = diasFolga.includes(brasilia.dayOfWeek);
-    }
-
-    if (isFolgaHoje) {
-      await logEvent(tenantId, `Tentativa de ponto bloqueada (folga ${brasilia.ymd}): colaborador=${colaboradorId}`);
-      return res.status(403).json({
-        error: 'Marcação bloqueada: Hoje é seu dia de folga conforme escala atribuída.'
-      });
-    }
-
-    // 2. Validar regra de antecedência máxima na ENTRADA (horário de Brasília)
-    if (
-      tipoMarcacao === 'ENTRADA' &&
-      colaborador.regra_antecedencia_ativa &&
-      colaborador.horario_inicio &&
-      typeof colaborador.horario_inicio === 'string'
-    ) {
-      const [hStr, mStr] = colaborador.horario_inicio.split(':');
-      const startMin = Number(hStr) * 60 + Number(mStr);
-      const maxAntecedencia = Number(colaborador.max_minutos_antecedencia ?? 15);
-      if (!Number.isNaN(startMin) && brasilia.minutesOfDay < startMin - maxAntecedencia) {
-        return res.status(403).json({
-          error: `Marcação antecipada bloqueada: entrada liberada apenas ${maxAntecedencia} min antes de ${colaborador.horario_inicio} (agora: ${brasilia.hhmm} BRT).`
-        });
-      }
-    }
-
-    // 3. Bloquear duplicidade da mesma marcação no mesmo dia de Brasília
-    const dayStartIso = `${brasilia.ymd}T00:00:00-03:00`;
-    const dayEndIso = `${brasilia.ymd}T23:59:59-03:00`;
-    const { data: sameDayRows } = await supabase
-      .from('point_registrations')
-      .select('tipo_marcacao')
-      .eq('tenant_id', tenantId)
-      .eq('collaborator_id', colaboradorId)
-      .gte('data_hora', dayStartIso)
-      .lte('data_hora', dayEndIso);
-
-    if ((sameDayRows || []).some((r: any) => r.tipo_marcacao === tipoMarcacao)) {
-      return res.status(400).json({
-        error: `A marcação "${tipoMarcacao}" já foi registrada hoje (${brasilia.ddmmyyyy}).`
-      });
-    }
-
-    // 4. Carregar Empresa (Tenant) e Estabelecimento alocado para validar Cerca Geográfica (Geofencing)
-    const { data: tenantData } = await supabase
-      .from('tenants')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .maybeSingle();
-    if (tenantData) tenant = tenantData;
-
-    if (colaborador.estabelecimento_id) {
-      const { data: estRow } = await supabase
-        .from('establishments')
-        .select('*')
-        .eq('establishment_id', colaborador.estabelecimento_id)
-        .maybeSingle();
-      if (estRow) establishment = estRow;
-    }
-    if (!establishment) {
-      const { data: fallbackEst } = await supabase
-        .from('establishments')
-        .select('*')
-        .eq('tenant_id', tenantId)
-        .limit(1);
-      if (fallbackEst && fallbackEst.length > 0) {
-        establishment = fallbackEst[0];
-      }
-    }
-
-    const refLat = establishment?.latitude ?? tenant?.latitude;
-    const refLng = establishment?.longitude ?? tenant?.longitude;
-    const raioPermitido = Number(establishment?.cerca_raio_metros ?? tenant?.cerca_raio_metros ?? 150);
-    const bloquearFora = establishment?.bloquear_fora_do_raio ?? tenant?.bloquear_fora_do_raio ?? true;
-
-    const hasValidGps =
-      typeof latitude === 'number' &&
-      typeof longitude === 'number' &&
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      latitude !== 0 &&
-      longitude !== 0;
-
-    let distanciaCentroMetros = 0;
-    let foraDoRaioGeofence = false;
-
-    if (refLat != null && refLng != null && Number.isFinite(Number(refLat)) && Number.isFinite(Number(refLng))) {
-      if (!hasValidGps) {
-        foraDoRaioGeofence = true;
-        if (bloquearFora) {
-          return res.status(403).json({
-            error: 'Geolocalização GPS obrigatória para este local de trabalho. Ative o GPS do dispositivo e tente novamente.'
-          });
-        }
-      } else {
-        distanciaCentroMetros = calculateDistanceMeters(latitude, longitude, Number(refLat), Number(refLng));
-        foraDoRaioGeofence = distanciaCentroMetros > raioPermitido;
-        if (foraDoRaioGeofence && bloquearFora) {
-          await logEvent(
-            tenantId,
-            `Ponto bloqueado por cerca geográfica: colaborador=${colaboradorId}, dist=${distanciaCentroMetros}m > ${raioPermitido}m`
-          );
-          return res.status(403).json({
-            error: `Fora da área permitida (${distanciaCentroMetros}m do local, limite ${raioPermitido}m).`,
-            distanciaCentroMetros,
-            raioPermitido
-          });
-        }
-      }
-    } else if (!hasValidGps && bloquearFora) {
-      return res.status(403).json({
-        error: 'Não foi possível capturar sua localização GPS. Habilite a permissão de localização.'
-      });
-    }
-
-    const empregadorRazaoSocial = tenant?.razao_social || 'Softcase Tecnologia';
-    const empregadorCnpj = tenant?.cnpj || '00.000.000/0001-91';
-    const colaboradorNome = colaborador.nome || 'Colaborador';
-    const colaboradorCpf = colaborador.cpf || '000.000.000-00';
-    const colaboradorMatricula = colaborador.matricula || 'MAT-001';
-
-    let nextNsr = 1;
-    let previousHash = '0000000000000000000000000000000000000000000000000000000000000000';
-
-    const { data: lastPoints, error: lastPointErr } = await supabase
-      .from('point_registrations')
-      .select('nsr, hash_sha256')
-      .eq('tenant_id', tenantId)
-      .order('nsr', { ascending: false })
-      .limit(1);
-
-    if (!lastPointErr && lastPoints && lastPoints.length > 0) {
-      nextNsr = Number(lastPoints[0].nsr) + 1;
-      previousHash = lastPoints[0].hash_sha256 || previousHash;
-    }
-
-    const nowIso = brasilia.iso;
-    const dataHoraFormatada = brasilia.formatted;
-    const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
-    const hashSha256 = crypto.createHash('sha256').update(rawPayload).digest('hex');
-
-    const localizacaoEndereco =
-      establishment?.endereco_completo ||
-      (establishment ? `${establishment.nome}${establishment.municipio ? ` — ${establishment.municipio}/${establishment.uf}` : ''}` : '') ||
-      tenant?.endereco_completo ||
-      'GPS validado no coletor';
-
-    const registroOficial = {
-      nsr: nextNsr,
+    const result = await executeValidatedPunch({
+      user,
       tenantId,
-      empregadorRazaoSocial,
-      empregadorCnpj,
       colaboradorId,
-      colaboradorNome,
-      colaboradorCpf,
-      colaboradorMatricula,
-      dataHora: nowIso,
-      dataHoraFormatada,
-      fusoHorario: '-03:00',
-      coletorId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
       tipoMarcacao,
-      alertaAntecedencia: alertaAntecedencia || null,
-      alertaIntervalo: alertaIntervalo || null,
-      hashSha256,
-      latitude: hasValidGps ? latitude : null,
-      longitude: hasValidGps ? longitude : null,
-      distanciaCentroMetros,
-      foraDoRaioGeofence,
-      localizacaoEndereco,
-      modoDispositivo: modoDispositivo || 'WEB_CAM'
-    };
-
-    const { error: insertError } = await supabase.from('point_registrations').insert({
-      nsr: nextNsr,
-      tenant_id: tenantId,
-      collaborator_id: colaboradorId,
-      data_hora: nowIso,
-      tipo_marcacao: tipoMarcacao,
-      latitude: registroOficial.latitude,
-      longitude: registroOficial.longitude,
-      hash_sha256: hashSha256,
-      modo_dispositivo: registroOficial.modoDispositivo,
-      detalhes: registroOficial
+      latitude,
+      longitude,
+      modoDispositivo,
+      coletorId,
+      alertaAntecedencia,
+      alertaIntervalo,
+      biometricAudit
     });
 
-    if (insertError) {
-      console.warn('Erro ao inserir ponto no Supabase via /api/punch:', insertError);
-      throw insertError;
-    }
-
-    if (req.body.biometricAudit) {
-      const audit = req.body.biometricAudit;
-      await supabase.from('biometric_audit_logs').insert({
-        tenant_id: tenantId,
-        collaborator_id: colaboradorId,
-        timestamp: nowIso,
-        similarity: audit.similarity || 0,
-        lighting_condition: audit.lightingCondition || 'NORMAL',
-        liveness_score: audit.livenessScore || 0,
-        verdict: audit.verdict || 'MATCH',
-        algorithm_used: audit.algorithmUsed || 'ISO19794-5',
-        hash_template: hashSha256
-      });
-    }
-
-    await logEvent(tenantId, `Ponto REP-P oficial registrado server-side: NSR ${nextNsr} para ${colaboradorNome} (${tipoMarcacao})`);
-
-    res.json({
-      success: true,
-      registro: registroOficial
-    });
+    return res.status(result.status).json(result.body);
   } catch (error) {
     console.error('Erro no endpoint /api/punch:', error);
     await logEvent('error', `Punch error: ${error}`);
     res.status(500).json({ error: String(error) });
+  }
+});
+
+// Sincronização em lote de marcações capturadas offline (PWA Background Sync)
+app.post('/api/sync-offline-punches', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).send('Unauthorized');
+
+    const punches: any[] = Array.isArray(req.body?.punches) ? req.body.punches : [];
+    const sorted = [...punches].sort(
+      (a, b) => new Date(a?.dataHora || 0).getTime() - new Date(b?.dataHora || 0).getTime()
+    );
+
+    const syncedIds: string[] = [];
+    const syncedRecords: any[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    for (const item of sorted) {
+      const localId = String(item?.id || item?.offlineId || '');
+      try {
+        const tenantId = item?.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+        const colabId = item?.colaboradorId || item?.collaboratorId;
+        const tipoMarcacao = item?.tipoMarcacao;
+        const clientHash = String(item?.hashSha256 || '').trim();
+
+        if (!colabId || !tipoMarcacao) {
+          failed.push({ id: localId, error: 'Payload offline inválido.' });
+          continue;
+        }
+
+        // Checa idempotência caso a batida offline já tenha sido sincronizada antes
+        const { data: existingRows } = await supabase
+          .from('point_registrations')
+          .select('nsr, detalhes')
+          .eq('tenant_id', tenantId)
+          .eq('collaborator_id', colabId)
+          .eq('tipo_marcacao', tipoMarcacao)
+          .limit(50);
+
+        const alreadySynced = (existingRows || []).find((r: any) => {
+          const det = typeof r.detalhes === 'string' ? (() => { try { return JSON.parse(r.detalhes); } catch { return {}; } })() : r.detalhes;
+          return clientHash && det?.offlineClientHash === clientHash;
+        });
+
+        if (alreadySynced) {
+          syncedIds.push(localId);
+          continue;
+        }
+
+        const punchDate = item?.dataHora ? new Date(item.dataHora) : new Date();
+        const result = await executeValidatedPunch({
+          user,
+          tenantId,
+          colaboradorId: colabId,
+          tipoMarcacao,
+          latitude: typeof item?.latitude === 'number' ? item.latitude : undefined,
+          longitude: typeof item?.longitude === 'number' ? item.longitude : undefined,
+          modoDispositivo: 'OFFLINE_SYNC_PWA',
+          coletorId: item?.coletorId || 'COLETOR_OFFLINE_PWA',
+          alertaAntecedencia: item?.alertaAntecedencia,
+          alertaIntervalo: item?.alertaIntervalo,
+          punchDate,
+          offlineClientHash: clientHash || `offline-${localId}`
+        });
+
+        if (result.status === 200) {
+          syncedIds.push(localId);
+          if ((result.body as any)?.registro) syncedRecords.push((result.body as any).registro);
+        } else {
+          failed.push({ id: localId, error: String((result.body as any)?.error || 'Recusado na validação.') });
+        }
+      } catch (itemErr: any) {
+        failed.push({ id: localId, error: itemErr?.message || 'Erro ao sincronizar batida offline.' });
+      }
+    }
+
+    res.json({ success: true, syncedIds, syncedRecords, failed });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Erro no sync offline.' });
   }
 });
 
@@ -1969,7 +2281,7 @@ app.post('/api/save-announcement', async (req, res) => {
 
     if (supabase) {
       const { error } = await supabase.from('company_announcements').upsert(announcementObj, { onConflict: 'announcement_id' });
-      if (error) console.warn('Supabase save-announcement warning:', error);
+      if (error) throw error;
     }
 
     res.json({ success: true, announcement: { id: annId, ...announcementObj } });
@@ -1989,6 +2301,7 @@ app.post('/api/read-announcement', async (req, res) => {
     if (!user) return res.status(401).send('Unauthorized');
 
     const { announcementId, userCpf, userName, userId } = req.body;
+    if (!announcementId || !userId) return res.status(400).json({ error: 'announcementId e userId obrigatórios.' });
     if (!canActForCollaborator(user, userId)) return res.status(403).send('Forbidden');
 
     const ip = getClientIp(req);
@@ -2003,12 +2316,17 @@ app.post('/api/read-announcement', async (req, res) => {
     };
 
     if (supabase) {
-      const { data } = await supabase
+      const { data, error: fetchErr } = await supabase
         .from('company_announcements')
-        .select('confirmacoes_leitura')
+        .select('tenant_id, confirmacoes_leitura')
         .eq('announcement_id', announcementId)
-        .single();
-      let currentReads = data?.confirmacoes_leitura || [];
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!data) return res.status(404).json({ error: 'Comunicado não encontrado.' });
+      if (!canAccessTenant(user, data.tenant_id)) return res.status(403).send('Forbidden');
+
+      let currentReads = data.confirmacoes_leitura || [];
       if (!Array.isArray(currentReads)) currentReads = [];
 
       const userCpfClean = (userCpf || '').replace(/\D/g, '');
@@ -2020,10 +2338,11 @@ app.post('/api/read-announcement', async (req, res) => {
         )
       ) {
         currentReads.push(readEntry);
-        await supabase
+        const { error: updErr } = await supabase
           .from('company_announcements')
           .update({ confirmacoes_leitura: currentReads })
           .eq('announcement_id', announcementId);
+        if (updErr) throw updErr;
       }
     }
 
@@ -2064,19 +2383,39 @@ app.post('/api/save-ticket', async (req, res) => {
 
     if (supabase) {
       if (resposta) {
-        const { data } = await supabase.from('rh_tickets').select('respostas').eq('ticket_id', ticketId).single();
-        let existingRespostas = data?.respostas || [];
-        if (!Array.isArray(existingRespostas)) existingRespostas = [];
-        existingRespostas.push(resposta);
+        const { data: ticketRow, error: fetchErr } = await supabase
+          .from('rh_tickets')
+          .select('tenant_id, collaborator_id, respostas')
+          .eq('ticket_id', ticketId)
+          .maybeSingle();
 
-        await supabase
+        if (fetchErr) throw fetchErr;
+        if (!ticketRow) return res.status(404).json({ error: 'Chamado não encontrado.' });
+
+        if (!canAccessTenant(user, ticketRow.tenant_id)) return res.status(403).send('Forbidden');
+        if (!isManagerOrAdmin(user) && ticketRow.collaborator_id !== user.user_metadata?.collaboratorId) {
+          return res.status(403).send('Forbidden');
+        }
+
+        let existingRespostas = ticketRow.respostas || [];
+        if (!Array.isArray(existingRespostas)) existingRespostas = [];
+        existingRespostas.push({
+          ...resposta,
+          eDoRh: isManagerOrAdmin(user)
+        });
+
+        const { error: updErr } = await supabase
           .from('rh_tickets')
           .update({
             respostas: existingRespostas,
             updated_at: getBrasiliaTimeParts().iso
           })
           .eq('ticket_id', ticketId);
+        if (updErr) throw updErr;
       } else {
+        if (!canActForCollaborator(user, collaboratorId)) {
+          return res.status(403).send('Forbidden');
+        }
         const ticketObj = {
           ticket_id: ticketId,
           tenant_id: tenantId,
@@ -2095,7 +2434,7 @@ app.post('/api/save-ticket', async (req, res) => {
         };
 
         const { error } = await supabase.from('rh_tickets').upsert(ticketObj, { onConflict: 'ticket_id' });
-        if (error) console.warn('Supabase save-ticket warning:', error);
+        if (error) throw error;
       }
     }
 
@@ -2117,17 +2456,1190 @@ app.post('/api/update-ticket-status', async (req, res) => {
 
     const { ticketId, status } = req.body;
     if (supabase) {
-      await supabase
+      const { data: ticketRow, error: fetchErr } = await supabase
+        .from('rh_tickets')
+        .select('tenant_id')
+        .eq('ticket_id', ticketId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!ticketRow) return res.status(404).json({ error: 'Chamado não encontrado.' });
+      if (!canAccessTenant(user, ticketRow.tenant_id)) return res.status(403).send('Forbidden');
+
+      const { error: updErr } = await supabase
         .from('rh_tickets')
         .update({
           status,
           updated_at: getBrasiliaTimeParts().iso
         })
         .eq('ticket_id', ticketId);
+      if (updErr) throw updErr;
     }
     res.json({ success: true, status });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// =========================================================================
+// NOVOS ENDPOINTS AUTENTICADOS (BOOTSTRAP, PORTAL, RBAC, CONFIG, CLT)
+// =========================================================================
+
+app.get('/api/bootstrap-data', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    const tenantScope = isSuperAdmin(user) && !req.query.tenantId ? null : requestedTenant;
+    if (tenantScope && !canAccessTenant(user, tenantScope)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const q = (table: string, orderCol?: string, asc = true) => {
+      let query = supabase.from(table).select('*');
+      if (tenantScope && table !== 'tenants') {
+        query = query.eq('tenant_id', tenantScope);
+      }
+      if (orderCol) {
+        query = query.order(orderCol, { ascending: asc });
+      }
+      return query;
+    };
+
+    const [
+      tenantsRes,
+      colabsRes,
+      estsRes,
+      deptsRes,
+      holisRes,
+      overtimesRes,
+      pointsRes,
+      sigsRes,
+      adjsRes,
+      positionsRes
+    ] = await Promise.all([
+      isSuperAdmin(user) ? supabase.from('tenants').select('*') : supabase.from('tenants').select('*').eq('tenant_id', requestedTenant),
+      q('collaborators'),
+      q('establishments'),
+      q('departments'),
+      q('holidays', 'data', true),
+      q('overtime_requests', 'data', false),
+      q('point_registrations', 'data_hora', false),
+      q('point_signatures', 'created_at', false),
+      q('adjustment_requests', 'created_at', false),
+      q('positions')
+    ]);
+
+    const appSettingsRes = await supabase
+      .from('app_settings')
+      .select('*')
+      .eq('tenant_id', requestedTenant)
+      .maybeSingle();
+
+    const rolePermsRes = await supabase
+      .from('role_permissions')
+      .select('*')
+      .eq('tenant_id', requestedTenant);
+
+    const colaboradores = (colabsRes.data || []).map(mapCollaboratorRow);
+
+    res.json({
+      success: true,
+      tenants: tenantsRes.data || [],
+      colaboradores,
+      estabelecimentos: estsRes.data || [],
+      departamentos: deptsRes.data || [],
+      cargos: positionsRes.data || [],
+      feriados: holisRes.data || [],
+      horasExtras: overtimesRes.data || [],
+      registros: pointsRes.data || [],
+      assinaturas: sigsRes.data || [],
+      ajustes: adjsRes.data || [],
+      appSettings: appSettingsRes.error ? null : appSettingsRes.data,
+      rolePermissions: rolePermsRes.error ? [] : (rolePermsRes.data || [])
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao carregar dados do tenant.' });
+  }
+});
+
+app.get('/api/portal-documents', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    const collaboratorId = String(req.query.collaboratorId || user.user_metadata?.collaboratorId || '');
+    const cleanCpf = String(req.query.cpf || user.user_metadata?.cpf || '').replace(/\D/g, '');
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 6)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (collaboratorId && !canActForCollaborator(user, collaboratorId)) return res.status(403).send('Forbidden');
+
+    const paystubsQuery = supabase
+      .from('paystubs')
+      .select('*', { count: 'exact' })
+      .eq('tenant_id', tenantId)
+      .order('data_upload', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (collaboratorId) {
+      paystubsQuery.eq('collaborator_id', collaboratorId);
+    }
+
+    const [payRes, irpfRes, annRes, tickRes, absRes, vacRes, swapRes] = await Promise.all([
+      paystubsQuery,
+      supabase.from('tax_reports').select('*').eq('tenant_id', tenantId).order('ano_calendario', { ascending: false }),
+      supabase.from('company_announcements').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
+      supabase.from('rh_tickets').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
+      supabase.from('absences').select('*').eq('tenant_id', tenantId).order('data_inicio', { ascending: false }),
+      supabase.from('vacations').select('*').eq('tenant_id', tenantId).order('data_inicio_ferias', { ascending: false }),
+      supabase.from('shift_swaps').select('*').eq('tenant_id', tenantId).order('data_solicitacao', { ascending: false })
+    ]);
+
+    const matchColab = (rColabId?: string, rCpf?: string) => {
+      if (collaboratorId && rColabId === collaboratorId) return true;
+      const d = String(rCpf || '').replace(/\D/g, '');
+      return Boolean(cleanCpf && d && cleanCpf === d);
+    };
+
+    const paystubs = (payRes.data || []).filter((p: any) => !collaboratorId || matchColab(p.collaborator_id, p.collaborator_cpf));
+    const totalPaystubs = Number(payRes.count ?? paystubs.length);
+
+    res.json({
+      success: true,
+      paystubs,
+      totalPaystubs,
+      hasMorePaystubs: offset + limit < totalPaystubs,
+      irpfList: (irpfRes.data || []).filter((t: any) => !collaboratorId || matchColab(t.collaborator_id, t.collaborator_cpf)),
+      announcements: annRes.data || [],
+      tickets: (tickRes.data || []).filter((tk: any) => isManagerOrAdmin(user) || matchColab(tk.collaborator_id, tk.collaborator_cpf)),
+      absences: (absRes.data || []).filter((a: any) => !collaboratorId || a.collaborator_id === collaboratorId),
+      vacations: (vacRes.data || []).filter((v: any) => !collaboratorId || matchColab(v.collaborator_id, v.collaborator_cpf)),
+      shiftSwaps: (swapRes.data || []).filter((s: any) =>
+        isManagerOrAdmin(user) || !collaboratorId || s.solicitante_id === collaboratorId || s.substituto_id === collaboratorId
+      )
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao carregar documentos do portal.' });
+  }
+});
+
+app.post('/api/save-personal-holerite', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { id, tenantId = 'tenant-01', colaboradorId, colaboradorCpf, colaboradorNome, mesAno, competencia, arquivoNome, arquivoUrl } = req.body;
+    if (!canAccessTenant(user, tenantId) || !canActForCollaborator(user, colaboradorId)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const { data, error: dbError } = await supabase
+      .from('paystubs')
+      .upsert({
+        paystub_id: id || `hol-pessoal-${Date.now()}`,
+        tenant_id: tenantId,
+        collaborator_id: colaboradorId,
+        collaborator_cpf: colaboradorCpf || '',
+        collaborator_name: colaboradorNome || 'Colaborador',
+        mes_ano: mesAno,
+        competencia,
+        salario_bruto: 0,
+        descontos: 0,
+        salario_liquido: 0,
+        arquivo_nome: arquivoNome,
+        arquivo_url: arquivoUrl || null,
+        data_upload: getBrasiliaTimeParts().iso,
+        status: 'ANEXADO_PELO_COLABORADOR'
+      }, { onConflict: 'paystub_id' })
+      .select();
+
+    if (dbError) throw dbError;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao anexar holerite pessoal.' });
+  }
+});
+
+app.get('/api/role-permissions', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.json({ permissionsByRole: {} });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('role_permissions')
+      .select('role, permissions, updated_at')
+      .eq('tenant_id', tenantId);
+
+    if (error) {
+      return res.json({ permissionsByRole: {}, warning: error.message });
+    }
+
+    const permissionsByRole: Record<string, string[]> = {};
+    for (const row of data || []) {
+      if (row.role && Array.isArray(row.permissions)) {
+        permissionsByRole[row.role] = row.permissions;
+      }
+    }
+    res.json({ success: true, permissionsByRole });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao carregar permissões RBAC.' });
+  }
+});
+
+app.post('/api/role-permissions', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const tenantId = String(req.body?.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const matrix = req.body?.permissionsByRole;
+    if (!matrix || typeof matrix !== 'object') {
+      return res.status(400).json({ error: 'permissionsByRole inválido.' });
+    }
+
+    const nowIso = getBrasiliaTimeParts().iso;
+    const rows = Object.entries(matrix).map(([role, permissions]) => ({
+      tenant_id: tenantId,
+      role,
+      permissions: Array.isArray(permissions) ? permissions : [],
+      updated_by: user.email || user.id,
+      updated_at: nowIso
+    }));
+
+    const { error } = await supabase.from('role_permissions').upsert(rows, { onConflict: 'tenant_id,role' });
+    if (error) throw error;
+
+    await logEvent(tenantId, `Matriz de permissões RBAC atualizada por ${user.user_metadata?.nome || user.email}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar permissões RBAC.' });
+  }
+});
+
+app.get('/api/app-settings', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.json({ biometricThreshold: 82.0, settings: {} });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('biometric_threshold, settings')
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if (error) {
+      return res.json({ biometricThreshold: 82.0, settings: {} });
+    }
+
+    res.json({
+      success: true,
+      biometricThreshold: Number(data?.biometric_threshold ?? 82.0),
+      settings: data?.settings || {}
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao buscar configurações do app.' });
+  }
+});
+
+app.post('/api/app-settings', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const tenantId = String(req.body?.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const threshold = Math.min(99.5, Math.max(70.0, Number(req.body?.biometricThreshold ?? 82.0)));
+    const settings = req.body?.settings && typeof req.body.settings === 'object' ? req.body.settings : {};
+
+    const { error } = await supabase.from('app_settings').upsert({
+      tenant_id: tenantId,
+      biometric_threshold: threshold,
+      settings,
+      updated_by: user.email || user.id,
+      updated_at: getBrasiliaTimeParts().iso
+    }, { onConflict: 'tenant_id' });
+
+    if (error) throw error;
+    await logEvent(tenantId, `Política de limiar biométrico ajustada para ${threshold}%`);
+    res.json({ success: true, biometricThreshold: threshold });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar configurações.' });
+  }
+});
+
+app.get('/api/occurrence-treatments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.json({ treatments: [] });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('occurrence_treatments')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('treated_at', { ascending: false });
+
+    if (error) return res.json({ treatments: [] });
+    res.json({ success: true, treatments: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao buscar tratamentos de ocorrências.' });
+  }
+});
+
+app.post('/api/occurrence-treatments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user || !isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = String(body.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const treatmentId = body.treatmentId || `${body.collaboratorId}_${body.occurrenceDate}_${body.occurrenceType}`;
+    const { data, error } = await supabase
+      .from('occurrence_treatments')
+      .upsert({
+        treatment_id: treatmentId,
+        tenant_id: tenantId,
+        collaborator_id: body.collaboratorId,
+        occurrence_date: body.occurrenceDate,
+        occurrence_type: body.occurrenceType,
+        status: body.status,
+        justificativa: body.justificativa || null,
+        cid10: body.cid10 || null,
+        observacao: body.observacao || null,
+        treated_by: user.user_metadata?.nome || user.email,
+        treated_at: getBrasiliaTimeParts().iso
+      }, { onConflict: 'treatment_id' })
+      .select();
+
+    if (error) throw error;
+    await logEvent(tenantId, `Ocorrência ${treatmentId} tratada como ${body.status}`);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar tratamento de ocorrência.' });
+  }
+});
+
+app.get('/api/ipa-reward-batches', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.json({ batches: [] });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('ipa_reward_batches')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('processed_at', { ascending: false });
+
+    if (error) return res.json({ batches: [] });
+    res.json({ success: true, batches: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao listar lotes IPA.' });
+  }
+});
+
+app.post('/api/ipa-reward-batches', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user || !isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = String(body.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const batchId = body.batchId || `ipa-${Date.now()}`;
+    const beneficiaries = Array.isArray(body.beneficiaries) ? body.beneficiaries : [];
+    const { data, error } = await supabase
+      .from('ipa_reward_batches')
+      .insert({
+        batch_id: batchId,
+        tenant_id: tenantId,
+        competencia: body.competencia || getBrasiliaTimeParts().mesAno,
+        beneficiaries,
+        total_beneficiaries: Number(body.totalBeneficiaries ?? beneficiaries.length),
+        total_payout: Number(body.totalPayout ?? 0),
+        processed_by: user.user_metadata?.nome || user.email,
+        processed_at: getBrasiliaTimeParts().iso
+      })
+      .select();
+
+    if (error) throw error;
+    await logEvent(tenantId, `Lote de premiação IPA ${batchId} homologado (${beneficiaries.length} beneficiários)`);
+    res.json({ success: true, batch: data?.[0] || null });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao processar lote IPA.' });
+  }
+});
+
+app.get('/api/shift-swaps', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.json({ swaps: [] });
+
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('shift_swaps')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('data_solicitacao', { ascending: false });
+
+    if (error) throw error;
+
+    const colabId = user.user_metadata?.collaboratorId;
+    const filtered = (data || []).filter((s: any) =>
+      isManagerOrAdmin(user) || (colabId && (s.solicitante_id === colabId || s.substituto_id === colabId))
+    );
+
+    res.json({ success: true, swaps: filtered });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao listar trocas de turno.' });
+  }
+});
+
+app.post('/api/shift-swaps', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const swap = req.body || {};
+    const tenantId = String(swap.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId) || !canActForCollaborator(user, swap.colaboradorOrigemId)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const swapId = swap.id || `troca-${Date.now()}`;
+    const { data, error } = await supabase
+      .from('shift_swaps')
+      .upsert({
+        swap_id: swapId,
+        tenant_id: tenantId,
+        solicitante_id: swap.colaboradorOrigemId,
+        solicitante_nome: swap.colaboradorOrigemNome,
+        substituto_id: swap.colaboradorDestinoId,
+        substituto_nome: swap.colaboradorDestinoNome,
+        data_turno_original: swap.dataPlantaoOrigem,
+        data_turno_compensacao: swap.dataPlantaoDestino,
+        motivo: swap.motivo || 'Troca de escala entre colaboradores.',
+        status: 'PENDENTE_SUPERVISOR',
+        supervisor_id: swap.supervisorDecisorId || null,
+        supervisor_nome: swap.supervisorDecisorNome || null,
+        data_solicitacao: getBrasiliaTimeParts().iso,
+        regra_clt_ok: swap.validacaoInterjornadaOk !== false,
+        alerta_conflito: swap.alertaConflito || null
+      }, { onConflict: 'swap_id' })
+      .select();
+
+    if (error) throw error;
+    await logEvent(tenantId, `Troca de plantão ${swapId} solicitada por ${swap.colaboradorOrigemNome}`);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao registrar troca de turno.' });
+  }
+});
+
+app.post('/api/update-shift-swap', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user || !isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { swapId, status, alertaConflito } = req.body || {};
+    if (!swapId || !status) return res.status(400).json({ error: 'swapId e status obrigatórios.' });
+
+    const { data: row, error: fetchErr } = await supabase
+      .from('shift_swaps')
+      .select('tenant_id')
+      .eq('swap_id', swapId)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!row) return res.status(404).json({ error: 'Troca de turno não encontrada.' });
+    if (!canAccessTenant(user, row.tenant_id)) return res.status(403).send('Forbidden');
+
+    const { data, error } = await supabase
+      .from('shift_swaps')
+      .update({
+        status,
+        supervisor_id: user.user_metadata?.collaboratorId || user.id,
+        supervisor_nome: user.user_metadata?.nome || user.email,
+        data_aprovacao: getBrasiliaTimeParts().iso,
+        ...(alertaConflito !== undefined ? { alerta_conflito: alertaConflito } : {})
+      })
+      .eq('swap_id', swapId)
+      .select();
+
+    if (error) throw error;
+    await logEvent(row.tenant_id, `Troca de plantão ${swapId} alterada para ${status}`);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao atualizar troca de turno.' });
+  }
+});
+
+app.post('/api/save-overtime', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const he = req.body || {};
+    const tenantId = String(he.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!isManagerOrAdmin(user) && he.colaboradorId !== user.user_metadata?.collaboratorId) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const payload: Record<string, any> = {
+      request_id: he.id,
+      tenant_id: tenantId,
+      collaborator_id: he.colaboradorId,
+      collaborator_name: he.colaboradorNome || '',
+      collaborator_cpf: he.colaboradorCpf || '',
+      departamento_id: he.departamentoId || '',
+      departamento_nome: he.departamentoNome || '',
+      gestor_id: he.gestorId || '',
+      gestor_nome: he.gestorNome || '',
+      data: he.data,
+      horario_contratado: he.horarioContratado || '',
+      horario_realizado: he.horarioRealizado || '',
+      minutos_extras: Number(he.minutosExtras || 0),
+      horas_extras_formatadas: he.horasExtrasFormatadas || '00:00h',
+      tipo_hora_extra: he.tipoHoraExtra || 'NORMAL_50',
+      destino_aprovacao: he.destinoAprovacao || 'BANCO_HORAS',
+      justificativa: he.justificativa || '',
+      status: isManagerOrAdmin(user) ? (he.status || 'PENDENTE') : 'PENDENTE',
+      motivo_recusa: he.motivoRecusa || null,
+      data_decisao: he.dataDecisao || null
+    };
+
+    let { data, error } = await supabase
+      .from('overtime_requests')
+      .upsert(payload, { onConflict: 'request_id' })
+      .select();
+
+    if (error && String(error.message || '').includes('destino_aprovacao')) {
+      delete payload.destino_aprovacao;
+      const retry = await supabase.from('overtime_requests').upsert(payload, { onConflict: 'request_id' }).select();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar solicitação de hora extra.' });
+  }
+});
+
+app.post('/api/delete-collaborator', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const ids: string[] = Array.isArray(req.body?.ids)
+      ? req.body.ids
+      : req.body?.collaboratorId
+      ? [req.body.collaboratorId]
+      : [];
+
+    if (ids.length === 0) return res.status(400).json({ error: 'ids obrigatório.' });
+
+    const { data: targets, error: fetchErr } = await supabase
+      .from('collaborators')
+      .select('collaborator_id, tenant_id')
+      .in('collaborator_id', ids);
+
+    if (fetchErr) throw fetchErr;
+    for (const row of targets || []) {
+      if (!canAccessTenant(user, row.tenant_id)) {
+        return res.status(403).send('Forbidden');
+      }
+    }
+
+    const { error } = await supabase.from('collaborators').delete().in('collaborator_id', ids);
+    if (error) throw error;
+    res.json({ success: true, deletedCount: ids.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao excluir colaborador.' });
+  }
+});
+
+// Validação server-side segura de PIN de contingência (1º dia sem expor o hash ao cliente)
+app.post('/api/verify-pin', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { tenantId = user.user_metadata?.tenantId || 'tenant-01', collaboratorId, pin } = req.body || {};
+    if (!collaboratorId || !pin) {
+      return res.status(400).json({ valid: false, error: 'Colaborador e PIN são obrigatórios.' });
+    }
+    if (!canAccessTenant(user, tenantId) || !canActForCollaborator(user, collaboratorId)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const { data: colab, error } = await supabase
+      .from('collaborators')
+      .select('collaborator_id, tenant_id, pin_coletor')
+      .eq('collaborator_id', collaboratorId)
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!colab) return res.status(404).json({ valid: false, error: 'Colaborador não encontrado.' });
+    if (!colab.pin_coletor) {
+      return res.status(400).json({ valid: false, error: 'Colaborador sem PIN individual cadastrado. Realize o cadastro facial.' });
+    }
+
+    const check = verifyPin(String(pin), colab.pin_coletor);
+    if (!check.valid) {
+      return res.status(401).json({ valid: false, error: 'PIN incorreto. Verifique o código informado pelo RH e tente novamente.' });
+    }
+
+    if (check.needsUpgrade) {
+      await supabase
+        .from('collaborators')
+        .update({ pin_coletor: hashPin(String(pin).trim()), updated_at: getBrasiliaTimeParts().iso })
+        .eq('collaborator_id', collaboratorId);
+    }
+
+    res.json({ valid: true });
+  } catch (err: any) {
+    res.status(500).json({ valid: false, error: err?.message || 'Erro ao validar PIN.' });
+  }
+});
+
+// =========================================================================
+// ENDPOINTS AUTENTICADOS DE ESTRUTURA, FERIADOS, AFASTAMENTOS E AJUSTES
+// =========================================================================
+
+app.get('/api/vacations', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, requestedTenant)) return res.status(403).send('Forbidden');
+
+    let query = supabase.from('vacations').select('*').order('created_at', { ascending: false });
+    if (!isSuperAdmin(user) || req.query.tenantId) {
+      query = query.eq('tenant_id', requestedTenant);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, vacations: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao carregar férias.' });
+  }
+});
+
+app.post('/api/vacations', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = body.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!body.id || !body.colaboradorId || !body.dataInicioFerias || !body.dataFimFerias) {
+      return res.status(400).json({ error: 'Dados obrigatórios de férias ausentes.' });
+    }
+
+    const row = {
+      vacation_id: body.id,
+      tenant_id: tenantId,
+      collaborator_id: body.colaboradorId,
+      collaborator_name: body.colaboradorNome || '',
+      collaborator_cpf: body.colaboradorCpf || '',
+      periodo_aquisitivo_inicio: body.periodoAquisitivoInicio || null,
+      periodo_aquisitivo_fim: body.periodoAquisitivoFim || null,
+      periodo_concessivo_inicio: body.periodoConcessivoInicio || null,
+      periodo_concessivo_fim: body.periodoConcessivoFim || null,
+      data_inicio_ferias: body.dataInicioFerias,
+      data_fim_ferias: body.dataFimFerias,
+      dias_gozo: Number(body.diasGozo ?? 30),
+      dias_abono_pecuniario: Number(body.diasAbonoPecuniario ?? 0),
+      status: body.status || 'PROGRAMADO',
+      observacao: body.observacao || null
+    };
+    const { error } = await supabase.from('vacations').upsert(row, { onConflict: 'vacation_id' });
+    if (error) throw error;
+    res.json({ success: true, vacation: row });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar programação de férias.' });
+  }
+});
+
+app.get('/api/absences', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || 'tenant-01');
+    if (!canAccessTenant(user, requestedTenant)) return res.status(403).send('Forbidden');
+
+    let query = supabase.from('absences').select('*').order('data_registro', { ascending: false });
+    if (!isSuperAdmin(user) || req.query.tenantId) {
+      query = query.eq('tenant_id', requestedTenant);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, absences: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao carregar afastamentos.' });
+  }
+});
+
+app.post('/api/absences', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = body.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!body.id || !body.colaboradorId || !body.tipo || !body.dataInicio || !body.dataFim) {
+      return res.status(400).json({ error: 'Dados obrigatórios do afastamento ausentes.' });
+    }
+
+    const row = {
+      absence_id: body.id,
+      tenant_id: tenantId,
+      collaborator_id: body.colaboradorId,
+      collaborator_name: body.colaboradorNome || '',
+      departamento_nome: body.departamentoNome || '',
+      tipo: body.tipo,
+      data_inicio: body.dataInicio,
+      data_fim: body.dataFim,
+      dias_totais: Number(body.totalDias ?? 1),
+      cid10: body.cid10 || null,
+      crm_medico: body.crmMedico || null,
+      observacao: body.observacoes || body.observacao || null,
+      status: body.status || 'HOMOLOGADO',
+      abona_ponto: body.abonaMarcacoesPonto ?? true
+    };
+    const { error } = await supabase.from('absences').upsert(row, { onConflict: 'absence_id' });
+    if (error) throw error;
+    res.json({ success: true, absence: row });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar afastamento.' });
+  }
+});
+
+app.post('/api/holidays', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = body.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!body.id || !body.nome || !body.data || !body.tipo) {
+      return res.status(400).json({ error: 'Dados obrigatórios do feriado ausentes.' });
+    }
+
+    const row = {
+      holiday_id: body.id,
+      tenant_id: tenantId,
+      nome: body.nome,
+      data: body.data,
+      tipo: body.tipo,
+      uf: body.uf || null,
+      municipio: body.municipio || null,
+      recorrente_anual: body.recorrenteAnual ?? true,
+      legislacao_base: body.legislacaoBase || null,
+      adicional_hora_extra_percentual: Number(body.adicionalHoraExtraPercentual ?? 100),
+      gera_folga_compensatoria: body.geraFolgaCompensatoria ?? false,
+      afeta_dsr: body.afetaDSR ?? true
+    };
+    const { error } = await supabase.from('holidays').upsert(row, { onConflict: 'holiday_id' });
+    if (error) throw error;
+    res.json({ success: true, holiday: row });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar feriado.' });
+  }
+});
+
+app.post('/api/departments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = body.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!body.id || !body.nome) {
+      return res.status(400).json({ error: 'id e nome do departamento são obrigatórios.' });
+    }
+
+    const row = {
+      department_id: body.id,
+      tenant_id: tenantId,
+      nome: body.nome,
+      codigo: body.codigo || 'DEP-01',
+      gestor_id: body.gestorId || 'gestor-01',
+      gestor_nome: body.gestorNome || 'Gestor Responsável',
+      gestor_email: body.gestorEmail || null,
+      horario_inicio_padrao: body.horarioInicioPadrao || '08:00',
+      carga_horaria_diaria: Number(body.cargaHorariaDiariaHoras ?? 8),
+      intervalo_minutos: Number(body.intervaloMinutos ?? 60),
+      max_minutos_antecedencia: Number(body.maxMinutosAntecedenciaPermitido ?? 15),
+      regra_antecedencia_ativa: body.regraAntecedenciaAtiva ?? true
+    };
+    const { error } = await supabase.from('departments').upsert(row, { onConflict: 'department_id' });
+    if (error) throw error;
+    res.json({ success: true, department: row });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar departamento.' });
+  }
+});
+
+app.delete('/api/departments/:id', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('departments')
+      .select('department_id, tenant_id')
+      .eq('department_id', req.params.id)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (existing && !canAccessTenant(user, existing.tenant_id)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const { error } = await supabase.from('departments').delete().eq('department_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao excluir departamento.' });
+  }
+});
+
+app.post('/api/positions', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const body = req.body || {};
+    const tenantId = body.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+    if (!canAccessTenant(user, tenantId)) return res.status(403).send('Forbidden');
+    if (!body.id || !body.titulo) {
+      return res.status(400).json({ error: 'id e titulo do cargo são obrigatórios.' });
+    }
+
+    const row = {
+      position_id: body.id,
+      tenant_id: tenantId,
+      titulo: body.titulo,
+      codigo: body.codigo || null,
+      cbo: body.cbo || '4110-10',
+      cbo_descricao: body.cboDescricao || null,
+      carga_horaria_semanal: Number(body.cargaHorariaSemanal ?? 40)
+    };
+    const { error } = await supabase.from('positions').upsert(row, { onConflict: 'position_id' });
+    if (error) throw error;
+    res.json({ success: true, position: row });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao salvar cargo.' });
+  }
+});
+
+app.delete('/api/positions/:id', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('positions')
+      .select('position_id, tenant_id')
+      .eq('position_id', req.params.id)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (existing && !canAccessTenant(user, existing.tenant_id)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const { error } = await supabase.from('positions').delete().eq('position_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao excluir cargo.' });
+  }
+});
+
+app.post('/api/establishments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const items = Array.isArray(req.body?.establishments) ? req.body.establishments : [req.body];
+    if (items.length === 0 || !items[0]?.id || !items[0]?.nome) {
+      return res.status(400).json({ error: 'Dados obrigatórios do estabelecimento ausentes.' });
+    }
+
+    const rows = items.map((e: any) => {
+      const tId = e.tenantId || user.user_metadata?.tenantId || 'tenant-01';
+      if (!canAccessTenant(user, tId)) {
+        throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+      }
+      const lat = Number(e.latitude);
+      const lng = Number(e.longitude);
+      return {
+        establishment_id: e.id,
+        tenant_id: tId,
+        nome: e.nome,
+        cnpj: e.cnpj || '00.000.000/0001-91',
+        tipo: e.tipo || 'FILIAL',
+        cep: e.cep || null,
+        latitude: Number.isFinite(lat) ? lat : 0,
+        longitude: Number.isFinite(lng) ? lng : 0,
+        cerca_raio_metros: Number(e.cercaRaioMetros) || 100,
+        bloquear_fora_do_raio: e.bloquearForaDoRaio ?? true,
+        endereco_completo: e.enderecoCompleto || null,
+        municipio: e.municipio || 'São Paulo',
+        uf: e.uf || 'SP',
+        fuso_horario: e.fusoHorario || 'America/Sao_Paulo'
+      };
+    });
+
+    const { error } = await supabase.from('establishments').upsert(rows, { onConflict: 'establishment_id' });
+    if (error) throw error;
+    res.json({ success: true, establishments: rows });
+  } catch (err: any) {
+    if (err?.statusCode === 403) return res.status(403).send('Forbidden');
+    res.status(500).json({ error: err?.message || 'Erro ao salvar estabelecimento.' });
+  }
+});
+
+app.delete('/api/establishments/:id', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    const actorRole = user.user_metadata?.role;
+    if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'RH_ADMIN') {
+      return res.status(403).send('Forbidden');
+    }
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('establishments')
+      .select('establishment_id, tenant_id')
+      .eq('establishment_id', req.params.id)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (existing && !canAccessTenant(user, existing.tenant_id)) {
+      return res.status(403).send('Forbidden');
+    }
+
+    const { error } = await supabase.from('establishments').delete().eq('establishment_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao excluir estabelecimento.' });
+  }
+});
+
+app.post('/api/update-adjustment-status', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).send('Unauthorized');
+  try {
+    const user = await getAuthenticatedUser(authHeader.split('Bearer ')[1]);
+    if (!user) return res.status(401).send('Unauthorized');
+    if (!isManagerOrAdmin(user)) return res.status(403).send('Forbidden');
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const { requestId, status } = req.body || {};
+    if (!requestId || (status !== 'APROVADO' && status !== 'REJEITADO')) {
+      return res.status(400).json({ error: 'requestId e status válido (APROVADO/REJEITADO) são obrigatórios.' });
+    }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('adjustment_requests')
+      .select('request_id, tenant_id, collaborator_id')
+      .eq('request_id', requestId)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!existing) return res.status(404).json({ error: 'Solicitação de ajuste não encontrada.' });
+    if (!canAccessTenant(user, existing.tenant_id)) return res.status(403).send('Forbidden');
+
+    const nowBrt = getBrasiliaTimeParts();
+    const { error } = await supabase
+      .from('adjustment_requests')
+      .update({ status, data_decisao: nowBrt.iso })
+      .eq('request_id', requestId);
+    if (error) throw error;
+
+    await supabase.from('logs').insert({
+      tenant_id: existing.tenant_id,
+      event: `AJUSTE_PONTO_${status}`,
+      details: {
+        requestId,
+        collaboratorId: existing.collaborator_id,
+        decidedBy: user.user_metadata?.nome || user.email
+      }
+    });
+
+    res.json({ success: true, status, dataDecisao: nowBrt.iso, dataDecisaoFormatted: nowBrt.formatted });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Erro ao atualizar solicitação de ajuste.' });
   }
 });
 
@@ -2148,6 +3660,14 @@ app.get('/api/status', async (_req, res) => {
     brasiliaTime: getBrasiliaTimeParts(),
     timestamp: getBrasiliaTimeParts().iso
   });
+});
+
+app.all('/api/auth/login', (_req, res) => {
+  res.status(405).json({ error: 'Method Not Allowed. Use POST /api/auth/login.' });
+});
+
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'API endpoint not found' });
 });
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
