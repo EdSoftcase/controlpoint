@@ -249,7 +249,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         }
 
         if (bearerToken) {
-          const tenantQuery = currentUser?.tenantId ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
+          const isAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN';
+          const tenantQuery = (!isAdmin && currentUser?.tenantId) ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
           const res = await fetch(`/api/bootstrap-data${tenantQuery}`, {
             headers: { Authorization: `Bearer ${bearerToken}` }
           });

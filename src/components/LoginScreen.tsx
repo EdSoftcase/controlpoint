@@ -96,12 +96,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
 
   React.useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'register') {
+        setAuthMode('register');
+      }
+      const tId = params.get('tenantId') || params.get('tenant');
+      if (tId) {
+        setRegTenantId(tId);
+      }
+    } catch {}
+
     fetch('/api/public-tenants')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.tenants && Array.isArray(data.tenants) && data.tenants.length > 0) {
           setPublicTenants(data.tenants);
-          setRegTenantId(data.tenants[0].id);
+          const urlParams = new URLSearchParams(window.location.search);
+          const tId = urlParams.get('tenantId') || urlParams.get('tenant');
+          if (tId && data.tenants.some((t: any) => t.id === tId)) {
+            setRegTenantId(tId);
+          } else if (!tId && data.tenants.length > 0) {
+            setRegTenantId(data.tenants[0].id);
+          }
         }
       })
       .catch(() => {});
