@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-control-shell-v2';
+const CACHE_NAME = 'point-control-shell-v3';
 const PRECACHE_URLS = [
   '/',
   '/manifest.json',
