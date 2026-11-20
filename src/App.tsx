@@ -1,13 +1,7 @@
-import React, { useState } from 'react';
-import { AuthUser, PRESET_USERS } from './types/auth';
+import React, { useState, lazy, Suspense } from 'react';
+import { AuthUser } from './types/auth';
 import { LoginScreen } from './components/LoginScreen';
-import { OperationalApp } from './components/OperationalApp';
-import { PortalColaborador } from './components/PortalColaborador';
-import { SpecificationReader } from './components/SpecificationReader';
-import { InteractivePrototype } from './components/InteractivePrototype';
-import { LegalMatrixViewer } from './components/LegalMatrixViewer';
-import { ProjectPlanViewer } from './components/ProjectPlanViewer';
-import { GuiaBoasVindas } from './components/GuiaBoasVindas';
+import type { PortalTabId } from './components/PortalColaborador';
 // Mock data imports removed to favor Supabase real data fetching in components
 import { 
   Departamento, 
@@ -20,7 +14,6 @@ import {
   AssinaturaEspelhoPonto,
   Estabelecimento
 } from './types/operational';
-import { generateSpecificationMarkdown } from './utils/markdownExporter';
 import { 
   Download, 
   Copy, 
@@ -34,10 +27,8 @@ import {
   ChevronDown,
   Menu,
   Calendar,
-  Settings,
   Key,
   Database,
-  RefreshCw,
   CheckCircle2,
   AlertCircle,
   BarChart3,
@@ -56,14 +47,22 @@ import {
   Globe,
   Paperclip,
   BookOpen,
-  Sparkles
+  FileSpreadsheet,
+  Megaphone
 } from 'lucide-react';
 import { useAuth } from './components/AuthContext';
 import { syncBrasiliaClock, formatBrasiliaDate, formatBrasiliaTime } from './utils/brasiliaClock';
-import { hasRealBiometricTemplate } from './utils/biometricHelpers';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAStatusAndInstall';
 import { RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS } from './types/permissions';
 import { TAB_PERMISSION_MAP, hasPermission } from './utils/permissionsHelper';
+
+const OperationalApp = lazy(() => import('./components/OperationalApp').then(m => ({ default: m.OperationalApp })));
+const PortalColaborador = lazy(() => import('./components/PortalColaborador').then(m => ({ default: m.PortalColaborador })));
+const SpecificationReader = lazy(() => import('./components/SpecificationReader').then(m => ({ default: m.SpecificationReader })));
+const InteractivePrototype = lazy(() => import('./components/InteractivePrototype').then(m => ({ default: m.InteractivePrototype })));
+const LegalMatrixViewer = lazy(() => import('./components/LegalMatrixViewer').then(m => ({ default: m.LegalMatrixViewer })));
+const ProjectPlanViewer = lazy(() => import('./components/ProjectPlanViewer').then(m => ({ default: m.ProjectPlanViewer })));
+const GuiaBoasVindas = lazy(() => import('./components/GuiaBoasVindas').then(m => ({ default: m.GuiaBoasVindas })));
 
 export default function App() {
   const { session, authToken, loading: authLoading, supabase, clearAuthToken } = useAuth();
@@ -122,6 +121,10 @@ export default function App() {
   });
 
   const [prototypeTargetScreen, setPrototypeTargetScreen] = useState<string>('adm-02');
+  const [portalTab, setPortalTab] = useState<PortalTabId>('espelho');
+  const [openPunchTrigger, setOpenPunchTrigger] = useState<number>(0);
+  const [showSuperAdminDocs, setShowSuperAdminDocs] = useState<boolean>(false);
+  const [exportMarkdownText, setExportMarkdownText] = useState<string>('');
 
   const updateCurrentUser = (user: AuthUser | null, view?: 'operational' | 'colaborador' | 'welcome' | 'spec' | 'prototype' | 'legal' | 'plan') => {
     setCurrentUser(user);
@@ -154,6 +157,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isOperatorAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN' || currentUser?.role === 'GESTOR';
 
   // Validar e reidratar sessão autenticada via /api/auth/session ao carregar / recarregar
@@ -189,7 +193,7 @@ export default function App() {
 
         const meta = data.user.user_metadata || {};
         const colab = data.colaborador || null;
-        const isSuper = data.user.email === 'admin@softcase.com.br';
+        const isSuper = meta.role === 'SUPER_ADMIN' || data.user.email === 'admin@softcase.com.br';
         const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
 
         const hydratedUser: AuthUser = {
@@ -229,14 +233,15 @@ export default function App() {
     };
   }, [authLoading, bearerToken, session]);
 
-  // Enforce colaborador view for non-admin/non-gestor users (unless viewing welcome guide)
+  // Enforce view boundaries by role
   React.useEffect(() => {
-    if (currentUser && !isOperatorAdmin) {
-      if (activeView !== 'welcome') {
-        setActiveView('colaborador');
-      }
+    if (!currentUser) return;
+    if (!isOperatorAdmin && activeView !== 'welcome') {
+      setActiveView('colaborador');
+    } else if (!isSuperAdmin && ['spec', 'prototype', 'legal', 'plan'].includes(activeView)) {
+      setActiveView(isOperatorAdmin ? 'operational' : 'colaborador');
     }
-  }, [currentUser, isOperatorAdmin]);
+  }, [currentUser, isOperatorAdmin, isSuperAdmin, activeView]);
 
   // Estado do Menu Hambúrguer Responsivo (Mobile & Tablet)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -471,7 +476,7 @@ export default function App() {
   React.useEffect(() => {
     if (session && session.user && !currentUser) {
       const meta = session.user.user_metadata || {};
-      const isSuper = session.user.email === 'admin@softcase.com.br';
+      const isSuper = meta.role === 'SUPER_ADMIN' || session.user.email === 'admin@softcase.com.br';
       const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
       const u: AuthUser = {
         id: meta.collaboratorId || session.user.id,
@@ -507,15 +512,37 @@ export default function App() {
     setActiveView('prototype');
   };
 
-  const handleCopyMarkdown = () => {
-    const md = generateSpecificationMarkdown();
+  const handleOpenExportModal = async () => {
+    setIsExportModalOpen(true);
+    if (!exportMarkdownText) {
+      try {
+        const mod = await import('./utils/markdownExporter');
+        setExportMarkdownText(mod.generateSpecificationMarkdown());
+      } catch {
+        setExportMarkdownText('');
+      }
+    }
+  };
+
+  const handleCopyMarkdown = async () => {
+    let md = exportMarkdownText;
+    if (!md) {
+      const mod = await import('./utils/markdownExporter');
+      md = mod.generateSpecificationMarkdown();
+      setExportMarkdownText(md);
+    }
     navigator.clipboard.writeText(md);
     setCopiedExport(true);
     setTimeout(() => setCopiedExport(false), 2000);
   };
 
-  const handleDownloadMarkdownFile = () => {
-    const md = generateSpecificationMarkdown();
+  const handleDownloadMarkdownFile = async () => {
+    let md = exportMarkdownText;
+    if (!md) {
+      const mod = await import('./utils/markdownExporter');
+      md = mod.generateSpecificationMarkdown();
+      setExportMarkdownText(md);
+    }
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -527,11 +554,53 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const adminSidebarGroups = [
+    {
+      title: 'Operação Diária',
+      items: [
+        { tab: 'relatorios', label: 'Atrasos & Descontos', icon: BarChart3 },
+        { tab: 'equipes', label: 'Equipes & Mural RH', icon: Users },
+        { tab: 'coletor', label: 'Coletor Tablet REP-P', icon: Tablet },
+        { tab: 'registros', label: 'Registros & AFD Fiscal', icon: FileText }
+      ]
+    },
+    {
+      title: 'Pessoas & Jornada',
+      items: [
+        { tab: 'empresa', label: 'Colaboradores & RH', icon: UserCheck },
+        { tab: 'escalas', label: 'Escalas & 12x36', icon: CalendarDays },
+        { tab: 'feriados', label: 'Feriados & DSR', icon: Calendar },
+        { tab: 'afastamentos', label: 'Afastamentos & Férias', icon: Plane }
+      ]
+    },
+    {
+      title: 'Inteligência & Folha',
+      items: [
+        { tab: 'exportador', label: 'Exportador ERP & 671', icon: Server },
+        { tab: 'riscos', label: 'Riscos & Compliance CLT', icon: ShieldAlert },
+        { tab: 'ipa', label: 'IPA & Premiações', icon: Award },
+        { tab: 'biometria', label: 'Biometria Facial', icon: ScanFace }
+      ]
+    },
+    {
+      title: 'Governança & Empresa',
+      items: [
+        { tab: 'estrutura', label: 'Estrutura & Unidades', icon: Building2 },
+        { tab: 'permissoes', label: 'Matriz de Permissões', icon: ShieldCheck },
+        { tab: 'tenants', label: 'Painel Multi-tenant', icon: Globe },
+        { tab: 'mobile', label: 'App Mobile & Totem', icon: Smartphone },
+        { tab: 'config', label: 'Chaves de Acesso', icon: Key }
+      ]
+    }
+  ] as const;
+
+  const isColaboradorNavContext = !isOperatorAdmin || activeView === 'colaborador';
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex antialiased">
-      {/* Sidebar Navigation (Desktop) */}
-      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0">
-        <div className="h-16 flex items-center px-6 border-b border-slate-200">
+      {/* Sidebar Navigation Unificada (Desktop) */}
+      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0 max-h-screen sticky top-0">
+        <div className="h-16 flex items-center px-5 border-b border-slate-200 shrink-0">
            <div className="flex items-center gap-3">
              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-blue-600 to-emerald-500 flex items-center justify-center text-white shadow-md shadow-blue-500/25">
                <ShieldCheck className="w-4 h-4" />
@@ -543,127 +612,155 @@ export default function App() {
            </div>
         </div>
         
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-3 space-y-4 overflow-y-auto">
           {isOperatorAdmin ? (
             <>
-              <div className="space-y-1">
+              {/* Alternador Rápido: Gestão vs Ponto Próprio */}
+              <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl text-[11px] font-bold">
                 <button
-                  onClick={() => {
-                    setActiveView('operational');
-                    if (operationalTab === 'config') setOperationalTab('relatorios');
-                  }}
-                  className={`w-full text-left transition-colors py-2 px-3 rounded-lg flex items-center justify-between ${
-                    activeView === 'operational' && operationalTab !== 'config'
-                      ? 'bg-slate-900 text-white font-semibold shadow-xs'
-                      : 'text-slate-700 hover:bg-slate-100'
+                  onClick={() => setActiveView('operational')}
+                  className={`py-2 px-2 rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+                    activeView === 'operational'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <span className="flex items-center gap-2.5">
-                    <Play className="w-4 h-4 text-emerald-400" />
-                    Executar Painel
-                  </span>
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${activeView === 'operational' ? 'rotate-180' : ''}`} />
+                  <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Gestão</span>
                 </button>
-
-                {activeView === 'operational' && (
-                  <div className="pl-3 py-1 space-y-0.5 border-l-2 border-slate-200 ml-3 text-[11px]">
-                    {[
-                      { tab: 'relatorios', label: '· Atrasos & Descontos', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'equipes', label: '· Equipes & Gestores', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'coletor', label: '· Coletor Tablet REP-P', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'biometria', label: '· Biometria Facial', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'ipa', label: '· IPA & Premiações (Scoring)', activeCls: 'bg-amber-100 text-amber-900 font-bold' },
-                      { tab: 'feriados', label: '· Feriados & DSR', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'empresa', label: '· Colaboradores & RH', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'estrutura', label: '· Estrutura (Deptos/Cargos)', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'permissoes', label: '· Matriz de Permissões', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'registros', label: '· Registros & AFD Fiscal', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' },
-                      { tab: 'tenants', label: '· Painel Multi-tenant', activeCls: 'bg-emerald-50 text-emerald-800 font-bold' }
-                    ]
-                      .filter(item => hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP[item.tab]))
-                      .map(item => (
-                        <button
-                          key={item.tab}
-                          onClick={() => setOperationalTab(item.tab as any)}
-                          className={`w-full text-left px-2 py-1 rounded-md transition-colors ${operationalTab === item.tab ? item.activeCls : 'text-slate-600 hover:bg-slate-100'}`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                  </div>
-                )}
+                <button
+                  onClick={() => setActiveView('colaborador')}
+                  className={`py-2 px-2 rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+                    activeView === 'colaborador'
+                      ? 'bg-emerald-700 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <User className="w-3.5 h-3.5 shrink-0" />
+                  <span>Meu Ponto</span>
+                </button>
               </div>
 
-              {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
-                <button 
-                  onClick={() => { setActiveView('operational'); setOperationalTab('config'); }} 
-                  className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
-                    activeView === 'operational' && operationalTab === 'config' 
-                      ? 'bg-slate-900 text-white font-semibold shadow-lg shadow-emerald-500/10' 
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              {/* 4 Grupos Semânticos com Todos os 17 Módulos */}
+              <div className="space-y-4">
+                {adminSidebarGroups.map((group) => {
+                  const allowedItems = group.items.filter(item =>
+                    hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP[item.tab])
+                  );
+                  if (allowedItems.length === 0) return null;
+                  return (
+                    <div key={group.title} className="space-y-1">
+                      <div className="px-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        {group.title}
+                      </div>
+                      <div className="space-y-0.5">
+                        {allowedItems.map((item) => {
+                          const Icon = item.icon;
+                          const isActive = activeView === 'operational' && operationalTab === item.tab;
+                          return (
+                            <button
+                              key={item.tab}
+                              onClick={() => {
+                                setActiveView('operational');
+                                setOperationalTab(item.tab as any);
+                              }}
+                              className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-colors flex items-center gap-2.5 cursor-pointer ${
+                                isActive
+                                  ? 'bg-slate-900 text-white font-semibold shadow-xs'
+                                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium'
+                              }`}
+                            >
+                              <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+                              <span className="truncate">{item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Ajuda & Manual (Todos os Perfis) */}
+              <div className="pt-3 border-t border-slate-200 space-y-1">
+                <button
+                  onClick={() => setActiveView('welcome')}
+                  className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-colors flex items-center gap-2.5 cursor-pointer ${
+                    activeView === 'welcome'
+                      ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium'
                   }`}
                 >
-                    <Key className="w-4 h-4 text-emerald-500"/> Chaves de Acesso
+                  <BookOpen className={`w-4 h-4 shrink-0 ${activeView === 'welcome' ? 'text-white' : 'text-indigo-500'}`} />
+                  <span className="truncate">Guia de Boas-Vindas</span>
                 </button>
+              </div>
+
+              {/* Diagnóstico & Documentação Técnica (Exclusivo SUPER_ADMIN) */}
+              {isSuperAdmin && (
+                <div className="pt-3 border-t border-slate-200 space-y-1">
+                  <button
+                    onClick={() => setShowSuperAdminDocs(prev => !prev)}
+                    className="w-full text-left px-2.5 py-2 rounded-lg text-[11px] font-bold text-slate-500 hover:bg-slate-100 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Database className="w-3.5 h-3.5 text-slate-400" />
+                      Diagnóstico & Docs
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showSuperAdminDocs ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {(showSuperAdminDocs || ['spec', 'prototype', 'legal', 'plan'].includes(activeView)) && (
+                    <div className="pl-2 space-y-0.5 text-[11px]">
+                      <button
+                        onClick={handleTestSupabase}
+                        disabled={testFeedback.loading}
+                        className="w-full text-left px-2.5 py-1.5 rounded-md text-emerald-700 hover:bg-emerald-50 font-semibold flex items-center gap-2 cursor-pointer"
+                      >
+                        <Database className="w-3.5 h-3.5 shrink-0" />
+                        <span>{testFeedback.loading ? 'Testando Supabase...' : 'Testar Supabase'}</span>
+                      </button>
+                      <button
+                        onClick={handleOpenExportModal}
+                        className="w-full text-left px-2.5 py-1.5 rounded-md text-slate-600 hover:bg-slate-100 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 shrink-0" />
+                        <span>Exportar Doc 02</span>
+                      </button>
+                      <button
+                        onClick={() => setActiveView('spec')}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors cursor-pointer ${activeView === 'spec' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+                      >
+                        Especificação Técnica
+                      </button>
+                      <button
+                        onClick={() => setActiveView('prototype')}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors cursor-pointer ${activeView === 'prototype' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+                      >
+                        Simulador / Protótipo
+                      </button>
+                      <button
+                        onClick={() => setActiveView('legal')}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors cursor-pointer ${activeView === 'legal' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+                      >
+                        Matriz Legal (Portaria 671)
+                      </button>
+                      <button
+                        onClick={() => setActiveView('plan')}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors cursor-pointer ${activeView === 'plan' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+                      >
+                        Plano Geral do Projeto
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
-
-              <div className="space-y-1 pt-2 border-t border-slate-200">
-                <button
-                  onClick={() => {
-                    if (!['welcome', 'spec', 'prototype', 'legal', 'plan'].includes(activeView)) {
-                      setActiveView('welcome');
-                    }
-                  }}
-                  className={`w-full text-left transition-colors py-2 px-3 rounded-lg flex items-center justify-between ${
-                    ['welcome', 'spec', 'prototype', 'legal', 'plan'].includes(activeView)
-                      ? 'bg-slate-900 text-white font-semibold shadow-xs'
-                      : 'text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  <span className="flex items-center gap-2.5">
-                    <FileText className="w-4 h-4 text-blue-400" />
-                    Documentação & Manuais
-                  </span>
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${['welcome', 'spec', 'prototype', 'legal', 'plan'].includes(activeView) ? 'rotate-180' : ''}`} />
-                </button>
-
-                {['welcome', 'spec', 'prototype', 'legal', 'plan'].includes(activeView) && (
-                  <div className="pl-3 py-1 space-y-0.5 border-l-2 border-slate-200 ml-3 text-[11px]">
-                    <button 
-                      onClick={() => setActiveView('welcome')} 
-                      className={`w-full text-left px-2 py-1.5 rounded-md transition-colors flex items-center justify-between ${
-                        activeView === 'welcome' 
-                          ? 'bg-emerald-50 text-emerald-800 font-bold' 
-                          : 'text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                        Guia de Boas-Vindas
-                      </span>
-                      <span className="text-[9px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded font-bold">RH & Colab</span>
-                    </button>
-                    <button onClick={() => setActiveView('spec')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${activeView === 'spec' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Especificação Técnica
-                    </button>
-                    <button onClick={() => setActiveView('prototype')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${activeView === 'prototype' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Simulador / Protótipo
-                    </button>
-                    <button onClick={() => setActiveView('legal')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${activeView === 'legal' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Matriz Legal (Portaria 671)
-                    </button>
-                    <button onClick={() => setActiveView('plan')} className={`w-full text-left px-2 py-1 rounded-md transition-colors ${activeView === 'plan' ? 'bg-blue-50 text-blue-800 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
-                      · Plano Geral do Projeto
-                    </button>
-                  </div>
-                )}
-              </div>
             </>
           ) : (
             <div className="space-y-1.5">
               <button
                 onClick={() => setActiveView('colaborador')}
-                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
+                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 text-xs cursor-pointer ${
                   activeView === 'colaborador' 
                     ? 'bg-slate-900 text-white font-semibold shadow-xs' 
                     : 'text-slate-600 hover:bg-slate-100'
@@ -675,7 +772,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveView('welcome')}
-                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 ${
+                className={`w-full text-left transition-colors py-2.5 px-3 rounded-lg flex items-center gap-3 text-xs cursor-pointer ${
                   activeView === 'welcome' 
                     ? 'bg-emerald-600 text-white font-semibold shadow-xs' 
                     : 'text-slate-600 hover:bg-slate-100'
@@ -691,72 +788,73 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Header (Global Actions) */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
-            <div className="flex items-center gap-4">
-              <span className="lg:hidden text-lg font-bold">Point Control</span>
-              <div className="hidden lg:block">
-                 <span className="text-sm font-medium text-slate-500">
-                   {isOperatorAdmin
-                     ? (activeView === 'operational' ? 'Painel Administrativo' : 'Portal Colaborador') 
-                     : 'Portal do Colaborador (Meu Espelho)'}
+        {/* Top Header (Contrato Limpo de 3 Zonas) */}
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="lg:hidden text-base font-extrabold tracking-tight text-slate-900 truncate">Point Control</span>
+              <div className="hidden lg:block truncate">
+                 <span className="text-sm font-medium text-slate-600">
+                   {activeView === 'welcome'
+                     ? 'Guia de Boas-Vindas & Manual'
+                     : isOperatorAdmin
+                       ? (activeView === 'operational' ? 'Painel Administrativo' : activeView === 'colaborador' ? 'Meu Espelho & Ponto Próprio' : 'Diagnóstico & Documentação')
+                       : 'Portal do Colaborador'}
                  </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 ml-auto shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
                 <PWAInstallButton />
                 {isOperatorAdmin && (
-                  <>
-                    <button 
-                      onClick={handleTestSupabase}
-                      disabled={testFeedback.loading}
-                      className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 px-3 py-2 rounded-lg transition-colors shrink-0 disabled:opacity-50"
-                      title="Testar Conexão em Tempo Real com Supabase"
-                    >
-                        <Database className={`w-3.5 h-3.5 ${testFeedback.loading ? 'animate-spin' : ''}`} /> 
-                        <span className="hidden sm:inline">Testar Supabase</span>
-                    </button>
-
-                    <button 
-                      onClick={() => setIsExportModalOpen(true)} 
-                      className="flex items-center gap-2 text-xs font-semibold bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors shrink-0"
-                    >
-                        <Download className="w-3.5 h-3.5" /> 
-                        <span className="hidden sm:inline">Exportar Doc 02</span>
-                    </button>
-                  </>
+                  <button
+                    onClick={() => setActiveView(activeView === 'colaborador' ? 'operational' : 'colaborador')}
+                    className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
+                      activeView === 'colaborador'
+                        ? 'bg-slate-900 text-white hover:bg-slate-800'
+                        : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    {activeView === 'colaborador' ? (
+                      <>
+                        <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden sm:inline">Voltar à Gestão</span>
+                        <span className="sm:hidden">Gestão</span>
+                      </>
+                    ) : (
+                      <>
+                        <User className="w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden sm:inline">Meu Ponto & Espelho</span>
+                        <span className="sm:hidden">Meu Ponto</span>
+                      </>
+                    )}
+                  </button>
                 )}
 
                 <button
                   onClick={() => setActiveView('welcome')}
-                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-colors shrink-0 ${
+                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
                     activeView === 'welcome'
                       ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                   title="Abrir Guia de Boas-Vindas e Manual de Treinamento"
                 >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Guia de Boas-Vindas</span>
+                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Guia</span>
                 </button>
 
-                <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block shrink-0"></div>
+                <div className="h-6 w-px bg-slate-200 mx-0.5 hidden sm:block shrink-0"></div>
 
-                <div className="hidden sm:flex flex-col items-end mr-2 shrink-0">
-                   <span className="text-[10px] font-bold text-slate-900 leading-none">{currentUser.nome}</span>
-                   <span className="text-[9px] text-slate-500 flex items-center gap-1">
+                <div className="hidden sm:flex flex-col items-end mr-1 shrink-0">
+                   <span className="text-[11px] font-bold text-slate-900 leading-none">{currentUser.nome}</span>
+                   <span className="text-[10px] text-slate-500 mt-0.5">
                       {currentUser.roleLabel}
-                      <span 
-                        className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" 
-                        title="Supabase Conectado (Persistência Ativa no Schema PostgreSQL)"
-                      ></span>
                    </span>
                 </div>
 
                 <button 
                   onClick={handleLogout} 
-                  className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
+                  className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0 cursor-pointer"
                   title="Sair"
                 >
                     <LogOut className="w-4 h-4" />
@@ -764,7 +862,7 @@ export default function App() {
                 
                 <button 
                   onClick={() => setIsMobileMenuOpen(true)} 
-                  className="lg:hidden p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                  className="lg:hidden p-2 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors shrink-0 cursor-pointer"
                   aria-label="Abrir menu"
                 >
                     <Menu className="w-6 h-6" />
@@ -796,152 +894,166 @@ export default function App() {
         )}
 
 
-        {/* Main Content Viewport */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-28 lg:pb-8">
-          {(isOperatorAdmin && activeView === 'operational') && (
-            <OperationalApp
-              currentUser={currentUser}
-              departamentos={departamentos}
-              onUpdateDepartamentos={setDepartamentos}
-              colaboradores={colaboradores}
-              onUpdateColaboradores={setColaboradores}
-              registrosPonto={registros}
-              onUpdateRegistrosPonto={setRegistros}
-              horasExtras={horasExtras}
-              onUpdateHorasExtras={setHorasExtras}
-              feriados={feriados}
-              onUpdateFeriados={setFeriados}
-              ocorrencias={ocorrencias}
-              onUpdateOcorrencias={setOcorrencias}
-              solicitacoesAjuste={solicitacoesAjuste}
-              onUpdateSolicitacoesAjuste={async (novas) => {
-                setSolicitacoesAjuste(novas);
-                const alterado = novas.find(n => {
-                  const anterior = solicitacoesAjuste.find(s => s.id === n.id);
-                  return anterior && JSON.stringify(n) !== JSON.stringify(anterior);
-                });
-                if (alterado) {
+        {/* Main Content Viewport with Lazy Suspense */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-28 lg:pb-8">
+          <Suspense
+            fallback={
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-2 shadow-xs">
+                <div className="w-7 h-7 border-2 border-slate-300 border-t-emerald-600 rounded-full animate-spin mx-auto" />
+                <p className="text-xs font-medium text-slate-500">Carregando módulo...</p>
+              </div>
+            }
+          >
+            {(isOperatorAdmin && activeView === 'operational') && (
+              <OperationalApp
+                currentUser={currentUser}
+                departamentos={departamentos}
+                onUpdateDepartamentos={setDepartamentos}
+                colaboradores={colaboradores}
+                onUpdateColaboradores={setColaboradores}
+                registrosPonto={registros}
+                onUpdateRegistrosPonto={setRegistros}
+                horasExtras={horasExtras}
+                onUpdateHorasExtras={setHorasExtras}
+                feriados={feriados}
+                onUpdateFeriados={setFeriados}
+                ocorrencias={ocorrencias}
+                onUpdateOcorrencias={setOcorrencias}
+                solicitacoesAjuste={solicitacoesAjuste}
+                onUpdateSolicitacoesAjuste={async (novas) => {
+                  setSolicitacoesAjuste(novas);
+                  const alterado = novas.find(n => {
+                    const anterior = solicitacoesAjuste.find(s => s.id === n.id);
+                    return anterior && JSON.stringify(n) !== JSON.stringify(anterior);
+                  });
+                  if (alterado) {
+                    try {
+                      await fetch('/api/save-adjustment', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearerToken}` },
+                        body: JSON.stringify(alterado)
+                      });
+                    } catch (err) {
+                      console.error('Erro ao persistir alteração de ajuste:', err);
+                    }
+                  }
+                }}
+                assinaturasEspelho={assinaturasEspelho}
+                onUpdateAssinaturasEspelho={setAssinaturasEspelho}
+                estabelecimentos={estabelecimentos}
+                onUpdateEstabelecimentos={setEstabelecimentos}
+                operationalTab={operationalTab}
+                onSelectOperationalTab={setOperationalTab}
+                rolePermissions={rolePermissions}
+                onRolePermissionsChange={setRolePermissions}
+                globalThreshold={globalThreshold}
+                onThresholdChange={setGlobalThreshold}
+              />
+            )}
+
+            {(((!isOperatorAdmin && activeView !== 'welcome') || activeView === 'colaborador')) && (
+              <PortalColaborador
+                user={currentUser}
+                registros={registros}
+                feriados={feriados}
+                horasExtras={horasExtras}
+                globalThreshold={globalThreshold}
+                activeTab={portalTab}
+                onTabChange={setPortalTab}
+                openPunchTrigger={openPunchTrigger}
+                onAddHoraExtra={async (nova) => {
+                  setHorasExtras([nova, ...horasExtras]);
+                  try {
+                    if (bearerToken) {
+                      await fetch('/api/save-overtime', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${bearerToken}`
+                        },
+                        body: JSON.stringify(nova)
+                      });
+                    }
+                  } catch (err) {
+                    console.warn('Erro ao persistir hora extra:', err);
+                  }
+                }}
+                solicitacoesAjuste={solicitacoesAjuste}
+                onAddSolicitacaoAjuste={async (nova) => {
+                  setSolicitacoesAjuste([nova, ...solicitacoesAjuste]);
                   try {
                     await fetch('/api/save-adjustment', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearerToken}` },
-                      body: JSON.stringify(alterado)
-                    });
-                  } catch (err) {
-                    console.error('Erro ao persistir alteração de ajuste:', err);
-                  }
-                }
-              }}
-              assinaturasEspelho={assinaturasEspelho}
-              onUpdateAssinaturasEspelho={setAssinaturasEspelho}
-              estabelecimentos={estabelecimentos}
-              onUpdateEstabelecimentos={setEstabelecimentos}
-              operationalTab={operationalTab}
-              onSelectOperationalTab={setOperationalTab}
-              rolePermissions={rolePermissions}
-              onRolePermissionsChange={setRolePermissions}
-              globalThreshold={globalThreshold}
-              onThresholdChange={setGlobalThreshold}
-            />
-          )}
-
-          {(((!isOperatorAdmin && activeView !== 'welcome') || activeView === 'colaborador')) && (
-            <PortalColaborador
-              user={currentUser}
-              registros={registros}
-              feriados={feriados}
-              horasExtras={horasExtras}
-              globalThreshold={globalThreshold}
-              onAddHoraExtra={async (nova) => {
-                setHorasExtras([nova, ...horasExtras]);
-                try {
-                  if (bearerToken) {
-                    await fetch('/api/save-overtime', {
-                      method: 'POST',
-                      headers: {
+                      headers: { 
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${bearerToken}`
                       },
                       body: JSON.stringify(nova)
                     });
+                  } catch (err) {
+                    console.error('Erro ao persistir solicitação:', err);
                   }
-                } catch (err) {
-                  console.warn('Erro ao persistir hora extra:', err);
+                }}
+                assinaturasEspelho={assinaturasEspelho}
+                onAddAssinaturaEspelho={async (nova) => {
+                  setAssinaturasEspelho([nova, ...assinaturasEspelho]);
+                  try {
+                    await fetch('/api/save-signature', {
+                      method: 'POST',
+                      headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${bearerToken}`
+                      },
+                      body: JSON.stringify(nova)
+                    });
+                  } catch (err) {
+                    console.error('Erro ao persistir assinatura:', err);
+                  }
+                }}
+                onRegistrarPonto={
+                  (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'RH_ADMIN')
+                    ? () => {
+                        setOperationalTab('coletor');
+                        setActiveView('operational');
+                      }
+                    : undefined
                 }
-              }}
-              solicitacoesAjuste={solicitacoesAjuste}
-              onAddSolicitacaoAjuste={async (nova) => {
-                setSolicitacoesAjuste([nova, ...solicitacoesAjuste]);
-                try {
-                  await fetch('/api/save-adjustment', {
-                    method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${bearerToken}`
-                    },
-                    body: JSON.stringify(nova)
-                  });
-                } catch (err) {
-                  console.error('Erro ao persistir solicitação:', err);
-                }
-              }}
-              assinaturasEspelho={assinaturasEspelho}
-              onAddAssinaturaEspelho={async (nova) => {
-                setAssinaturasEspelho([nova, ...assinaturasEspelho]);
-                try {
-                  await fetch('/api/save-signature', {
-                    method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${bearerToken}`
-                    },
-                    body: JSON.stringify(nova)
-                  });
-                } catch (err) {
-                  console.error('Erro ao persistir assinatura:', err);
-                }
-              }}
-              onRegistrarPonto={() => {
-                if (isOperatorAdmin) {
-                  setOperationalTab('coletor');
+                onAddRegistroPonto={(novo) => setRegistros([novo, ...registros])}
+                onUpdateColaboradorBiometria={(colabId, updatedFields) => {
+                  setColaboradores(prev => prev.map(c => c.id === colabId ? { ...c, ...updatedFields } : c));
+                }}
+                estabelecimentos={estabelecimentos}
+                colaboradores={colaboradores}
+                onOpenGuia={() => setActiveView('welcome')}
+              />
+            )}
+
+            {activeView === 'welcome' && (
+              <GuiaBoasVindas
+                initialAudience={isOperatorAdmin ? 'rh' : 'colaborador'}
+                currentUserRole={currentUser.role}
+                onNavigateToTab={(tab) => {
                   setActiveView('operational');
-                }
-              }}
-              onAddRegistroPonto={(novo) => setRegistros([novo, ...registros])}
-              onUpdateColaboradorBiometria={(colabId, updatedFields) => {
-                setColaboradores(prev => prev.map(c => c.id === colabId ? { ...c, ...updatedFields } : c));
-              }}
-              estabelecimentos={estabelecimentos}
-              colaboradores={colaboradores}
-              onOpenGuia={() => setActiveView('welcome')}
-            />
-          )}
+                  setOperationalTab(tab as any);
+                }}
+                onNavigateToView={(view) => {
+                  setActiveView(view);
+                }}
+              />
+            )}
 
-          {activeView === 'welcome' && (
-            <GuiaBoasVindas
-              initialAudience={isOperatorAdmin ? 'rh' : 'colaborador'}
-              currentUserRole={currentUser.role}
-              onNavigateToTab={(tab) => {
-                setActiveView('operational');
-                setOperationalTab(tab as any);
-              }}
-              onNavigateToView={(view) => {
-                setActiveView(view);
-              }}
-            />
-          )}
+            {(isSuperAdmin && activeView === 'spec') && (
+              <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
+            )}
 
-          {(isOperatorAdmin && activeView === 'spec') && (
-            <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
-          )}
+            {(isSuperAdmin && activeView === 'prototype') && (
+              <InteractivePrototype initialScreenId={prototypeTargetScreen} />
+            )}
 
-          {(isOperatorAdmin && activeView === 'prototype') && (
-            <InteractivePrototype initialScreenId={prototypeTargetScreen} />
-          )}
+            {(isSuperAdmin && activeView === 'legal') && <LegalMatrixViewer />}
 
-          {(isOperatorAdmin && activeView === 'legal') && <LegalMatrixViewer />}
-
-          {(isOperatorAdmin && activeView === 'plan') && <ProjectPlanViewer />}
+            {(isSuperAdmin && activeView === 'plan') && <ProjectPlanViewer />}
+          </Suspense>
         </main>
 
         <footer className="border-t border-slate-200 bg-white py-6 mt-auto pb-24 lg:pb-6">
@@ -954,7 +1066,7 @@ export default function App() {
               <span>·</span>
               <button
                 onClick={handleLogout}
-                className="text-blue-600 hover:underline font-bold"
+                className="text-blue-600 hover:underline font-bold cursor-pointer"
               >
                 Sair (Logout)
               </button>
@@ -967,7 +1079,7 @@ export default function App() {
       {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (MOBILE & TABLETS)       */}
       {/* ========================================================= */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 shadow-[0_-8px_30px_rgba(0,0,0,0.5)] px-2 py-1 flex items-center justify-around safe-area-pb">
-        {isOperatorAdmin ? (
+        {!isColaboradorNavContext ? (
           <>
             {/* 1. Ponto / Relatórios */}
             <button
@@ -1077,9 +1189,14 @@ export default function App() {
             <button
               onClick={() => {
                 setActiveView('colaborador');
+                setPortalTab('espelho');
                 setIsMobileMenuOpen(false);
               }}
-              className="flex flex-col items-center justify-center flex-1 py-1.5 px-1 text-emerald-400 font-bold"
+              className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-colors ${
+                activeView === 'colaborador' && portalTab === 'espelho'
+                  ? 'text-emerald-400 font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
               <FileText className="w-5 h-5 mb-0.5" />
               <span className="text-[10px] tracking-tight">Espelho</span>
@@ -1089,47 +1206,63 @@ export default function App() {
             <button
               onClick={() => {
                 setActiveView('colaborador');
+                setPortalTab('escala');
                 setIsMobileMenuOpen(false);
               }}
-              className="flex flex-col items-center justify-center flex-1 py-1.5 px-1 text-slate-400 hover:text-slate-200"
+              className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-colors ${
+                activeView === 'colaborador' && (portalTab === 'escala' || portalTab === 'troca_turno')
+                  ? 'text-emerald-400 font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
               <CalendarDays className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Minha Escala</span>
+              <span className="text-[10px] tracking-tight">Escala</span>
             </button>
 
             {/* Colaborador: Bater Ponto Flutuante */}
             <button
               onClick={() => {
                 setActiveView('colaborador');
+                setPortalTab('espelho');
+                setOpenPunchTrigger(prev => prev + 1);
                 setIsMobileMenuOpen(false);
               }}
-              className="flex flex-col items-center justify-center -mt-5 mx-1"
+              className="flex flex-col items-center justify-center -mt-4 mx-1 min-w-[52px]"
             >
-              <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 border-2 border-slate-900 active:scale-95 transition-transform">
-                <ScanFace className="w-6 h-6" />
+              <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 border-2 border-slate-900 active:scale-95 transition-transform">
+                <ScanFace className="w-5 h-5" />
               </div>
-              <span className="text-[10px] font-bold text-emerald-400 mt-1">Ponto</span>
+              <span className="text-[10px] font-bold text-emerald-400 mt-0.5">Ponto</span>
             </button>
 
             {/* Colaborador: Férias */}
             <button
               onClick={() => {
                 setActiveView('colaborador');
+                setPortalTab('ferias');
                 setIsMobileMenuOpen(false);
               }}
-              className="flex flex-col items-center justify-center flex-1 py-1.5 px-1 text-slate-400 hover:text-slate-200"
+              className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-colors ${
+                activeView === 'colaborador' && portalTab === 'ferias'
+                  ? 'text-emerald-400 font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
               <Plane className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Férias CLT</span>
+              <span className="text-[10px] tracking-tight">Férias</span>
             </button>
 
-            {/* Colaborador: Opções / Menu */}
+            {/* Colaborador: Mais / Menu */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="flex flex-col items-center justify-center flex-1 py-1.5 px-1 text-slate-400 hover:text-slate-200"
+              className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1.5 px-1 rounded-xl transition-colors ${
+                isMobileMenuOpen
+                  ? 'text-emerald-400 font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
             >
               <Grid className="w-5 h-5 mb-0.5" />
-              <span className="text-[10px] tracking-tight">Opções</span>
+              <span className="text-[10px] tracking-tight">Mais</span>
             </button>
           </>
         )}
@@ -1173,12 +1306,45 @@ export default function App() {
 
             {/* Área Scrollável de Módulos Agrupados */}
             <div className="overflow-y-auto p-4 space-y-5 flex-1">
-              {isOperatorAdmin ? (
+              {isOperatorAdmin && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      setActiveView('operational');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2 transition-all ${
+                      activeView === 'operational'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <BarChart3 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-semibold truncate">Painel Gestão</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveView('colaborador');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2 transition-all ${
+                      activeView === 'colaborador'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <User className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-semibold truncate">Meu Ponto</span>
+                  </button>
+                </div>
+              )}
+
+              {isOperatorAdmin && !isColaboradorNavContext ? (
                 <>
                   {/* Seção 1: Operação e Controle de Ponto */}
                   <div className="space-y-2">
                     <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
-                      Operação & Controle de Ponto
+                      Operação Diária
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['relatorios']) && (
@@ -1188,7 +1354,7 @@ export default function App() {
                             setOperationalTab('relatorios');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'relatorios'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1209,7 +1375,7 @@ export default function App() {
                             setOperationalTab('coletor');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'coletor'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1230,7 +1396,7 @@ export default function App() {
                             setOperationalTab('biometria');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'biometria'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1251,7 +1417,7 @@ export default function App() {
                             setOperationalTab('equipes');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'equipes'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1259,8 +1425,8 @@ export default function App() {
                         >
                           <Users className="w-4 h-4 text-indigo-400 shrink-0" />
                           <div className="truncate">
-                            <div className="text-xs font-semibold truncate">Equipes & Gestores</div>
-                            <div className="text-[9px] text-slate-400">Aprovação H.E.</div>
+                            <div className="text-xs font-semibold truncate">Equipes & Mural</div>
+                            <div className="text-[9px] text-slate-400">Aprovações & RH</div>
                           </div>
                         </button>
                       )}
@@ -1272,7 +1438,7 @@ export default function App() {
                             setOperationalTab('feriados');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'feriados'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1293,7 +1459,7 @@ export default function App() {
                             setOperationalTab('ipa');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'ipa'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1312,7 +1478,7 @@ export default function App() {
                   {/* Seção 2: Gestão de Pessoas & Escalas */}
                   <div className="space-y-2">
                     <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                      Gestão de Pessoas, Escalas & CLT
+                      Pessoas, Escalas & CLT
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['escalas']) && (
@@ -1322,7 +1488,7 @@ export default function App() {
                             setOperationalTab('escalas');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'escalas'
                               ? 'bg-indigo-500/20 border-indigo-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1343,7 +1509,7 @@ export default function App() {
                             setOperationalTab('afastamentos');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'afastamentos'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1364,7 +1530,7 @@ export default function App() {
                             setOperationalTab('empresa');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'empresa'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1385,7 +1551,7 @@ export default function App() {
                             setOperationalTab('estrutura');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'estrutura'
                               ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1406,7 +1572,7 @@ export default function App() {
                             setOperationalTab('permissoes');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'permissoes'
                               ? 'bg-purple-500/20 border-purple-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1427,7 +1593,7 @@ export default function App() {
                             setOperationalTab('riscos');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'riscos'
                               ? 'bg-rose-500/20 border-rose-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1456,7 +1622,7 @@ export default function App() {
                             setOperationalTab('registros');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'registros'
                               ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1477,7 +1643,7 @@ export default function App() {
                             setOperationalTab('exportador');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'exportador'
                               ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1498,7 +1664,7 @@ export default function App() {
                             setOperationalTab('mobile');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'mobile'
                               ? 'bg-violet-500/20 border-violet-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1519,7 +1685,7 @@ export default function App() {
                             setOperationalTab('tenants');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'tenants'
                               ? 'bg-sky-500/20 border-sky-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1540,7 +1706,7 @@ export default function App() {
                             setOperationalTab('config');
                             setIsMobileMenuOpen(false);
                           }}
-                          className={`col-span-2 p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                          className={`col-span-2 min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                             activeView === 'operational' && operationalTab === 'config'
                               ? 'bg-amber-500/20 border-amber-500/50 text-white font-bold'
                               : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -1556,10 +1722,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Seção 4: Documentação e Manuais Técnicos */}
+                  {/* Seção 4: Ajuda & Diagnóstico Super Admin */}
                   <div className="space-y-2">
                     <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider block">
-                      Documentação & Manuais Técnicos
+                      Treinamento {isSuperAdmin ? '& Diagnóstico Técnico' : '& Ajuda'}
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       <button
@@ -1567,7 +1733,7 @@ export default function App() {
                           setActiveView('welcome');
                           setIsMobileMenuOpen(false);
                         }}
-                        className={`col-span-2 p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                        className={`col-span-2 min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
                           activeView === 'welcome'
                             ? 'bg-emerald-500/20 border-emerald-500/50 text-white font-bold'
                             : 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300 hover:bg-slate-800'
@@ -1575,90 +1741,105 @@ export default function App() {
                       >
                         <BookOpen className="w-4 h-4 text-emerald-400 shrink-0" />
                         <div className="truncate">
-                          <div className="text-xs font-semibold truncate flex items-center gap-1.5">
-                            Guia de Boas-Vindas & Manual
-                            <span className="text-[9px] px-1 bg-emerald-500/30 text-emerald-300 rounded font-normal">RH & Colab</span>
-                          </div>
-                          <div className="text-[9px] text-slate-400">Passo a passo interativo e dúvidas</div>
+                          <div className="text-xs font-semibold truncate">Guia de Boas-Vindas & Manual</div>
+                          <div className="text-[9px] text-slate-400">Passo a passo interativo</div>
                         </div>
                       </button>
 
-                      <button
-                        onClick={() => {
-                          setActiveView('spec');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'spec'
-                            ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <FileText className="w-4 h-4 text-blue-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Especificação</div>
-                          <div className="text-[9px] text-slate-400">Doc 02 detalhado</div>
-                        </div>
-                      </button>
+                      {isSuperAdmin && (
+                        <>
+                          <button
+                            onClick={() => {
+                              handleTestSupabase();
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className="col-span-2 min-h-[44px] p-3 rounded-xl border bg-slate-800/70 border-slate-700/60 text-emerald-300 hover:bg-slate-800 text-left flex items-center gap-2.5"
+                          >
+                            <Database className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate">Testar Conexão Supabase</div>
+                              <div className="text-[9px] text-slate-400">Diagnóstico de latência</div>
+                            </div>
+                          </button>
 
-                      <button
-                        onClick={() => {
-                          setActiveView('prototype');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'prototype'
-                            ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Play className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Simulador / BDD</div>
-                          <div className="text-[9px] text-slate-400">Cenários de teste</div>
-                        </div>
-                      </button>
+                          <button
+                            onClick={() => {
+                              setActiveView('spec');
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                              activeView === 'spec'
+                                ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
+                                : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate">Especificação</div>
+                              <div className="text-[9px] text-slate-400">Doc 02 detalhado</div>
+                            </div>
+                          </button>
 
-                      <button
-                        onClick={() => {
-                          setActiveView('legal');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'legal'
-                            ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Matriz Legal 671</div>
-                          <div className="text-[9px] text-slate-400">Compliance jurídico</div>
-                        </div>
-                      </button>
+                          <button
+                            onClick={() => {
+                              setActiveView('prototype');
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                              activeView === 'prototype'
+                                ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
+                                : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <Play className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate">Simulador / BDD</div>
+                              <div className="text-[9px] text-slate-400">Cenários de teste</div>
+                            </div>
+                          </button>
 
-                      <button
-                        onClick={() => {
-                          setActiveView('plan');
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          activeView === 'plan'
-                            ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
-                            : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <Calendar className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div className="truncate">
-                          <div className="text-xs font-semibold truncate">Plano Geral</div>
-                          <div className="text-[9px] text-slate-400">Doc 01 do projeto</div>
-                        </div>
-                      </button>
+                          <button
+                            onClick={() => {
+                              setActiveView('legal');
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                              activeView === 'legal'
+                                ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
+                                : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate">Matriz Legal 671</div>
+                              <div className="text-[9px] text-slate-400">Compliance jurídico</div>
+                            </div>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setActiveView('plan');
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`min-h-[44px] p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                              activeView === 'plan'
+                                ? 'bg-blue-500/20 border-blue-500/50 text-white font-bold'
+                                : 'bg-slate-800/70 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <Calendar className="w-4 h-4 text-amber-400 shrink-0" />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate">Plano Geral</div>
+                              <div className="text-[9px] text-slate-400">Doc 01 do projeto</div>
+                            </div>
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </>
               ) : (
-                /* Opções para Colaborador */
+                /* Opções para Colaborador (ou Gestor/RH no modo Meu Ponto) */
                 <div className="space-y-3">
                   <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
                     Meu Portal de Colaborador
@@ -1667,9 +1848,10 @@ export default function App() {
                     <button
                       onClick={() => {
                         setActiveView('colaborador');
+                        setPortalTab('espelho');
                         setIsMobileMenuOpen(false);
                       }}
-                      className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
                     >
                       <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
                       <div>
@@ -1681,9 +1863,10 @@ export default function App() {
                     <button
                       onClick={() => {
                         setActiveView('colaborador');
+                        setPortalTab('ferias');
                         setIsMobileMenuOpen(false);
                       }}
-                      className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
                     >
                       <Plane className="w-4 h-4 text-emerald-400 shrink-0" />
                       <div>
@@ -1695,9 +1878,10 @@ export default function App() {
                     <button
                       onClick={() => {
                         setActiveView('colaborador');
+                        setPortalTab('escala');
                         setIsMobileMenuOpen(false);
                       }}
-                      className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
                     >
                       <CalendarDays className="w-4 h-4 text-indigo-400 shrink-0" />
                       <div>
@@ -1709,9 +1893,10 @@ export default function App() {
                     <button
                       onClick={() => {
                         setActiveView('colaborador');
+                        setPortalTab('ajustes');
                         setIsMobileMenuOpen(false);
                       }}
-                      className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
                     >
                       <Paperclip className="w-4 h-4 text-purple-400 shrink-0" />
                       <div>
@@ -1722,17 +1907,44 @@ export default function App() {
 
                     <button
                       onClick={() => {
+                        setActiveView('colaborador');
+                        setPortalTab('holerites');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-blue-400 shrink-0" />
+                      <div>
+                        <div className="text-xs font-semibold text-white">Holerites & IRPF</div>
+                        <div className="text-[9px] text-slate-400">Documentos folha</div>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setActiveView('colaborador');
+                        setPortalTab('comunicados');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="min-h-[44px] p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-left flex items-center gap-2.5"
+                    >
+                      <Megaphone className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <div>
+                        <div className="text-xs font-semibold text-white">Mural & RH</div>
+                        <div className="text-[9px] text-slate-400">Avisos e chamados</div>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => {
                         setActiveView('welcome');
                         setIsMobileMenuOpen(false);
                       }}
-                      className="col-span-2 p-3 bg-gradient-to-r from-indigo-950/60 to-slate-800/80 border border-indigo-600/50 rounded-xl text-left flex items-center gap-2.5"
+                      className="col-span-2 min-h-[44px] p-3 bg-gradient-to-r from-indigo-950/60 to-slate-800/80 border border-indigo-600/50 rounded-xl text-left flex items-center gap-2.5"
                     >
                       <BookOpen className="w-4 h-4 text-indigo-400 shrink-0" />
                       <div>
-                        <div className="text-xs font-semibold text-white flex items-center gap-1.5">
-                          Guia de Boas-Vindas do Colaborador
-                          <span className="text-[9px] px-1 bg-indigo-500/30 text-indigo-300 rounded font-normal">Ajuda</span>
-                        </div>
+                        <div className="text-xs font-semibold text-white">Guia de Boas-Vindas do Colaborador</div>
                         <div className="text-[9px] text-indigo-200">Como bater ponto, férias e atestados</div>
                       </div>
                     </button>
@@ -1763,10 +1975,10 @@ export default function App() {
                 </button>
               </div>
 
-              {isOperatorAdmin && (
+              {isSuperAdmin && (
                 <button
                   onClick={() => {
-                    setIsExportModalOpen(true);
+                    handleOpenExportModal();
                     setIsMobileMenuOpen(false);
                   }}
                   className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl text-[11px] flex items-center justify-center gap-2 transition-colors border border-slate-700"
@@ -1832,8 +2044,8 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs text-slate-800 bg-slate-950 text-slate-200 select-all whitespace-pre leading-relaxed">
-              {generateSpecificationMarkdown()}
+            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs bg-slate-950 text-slate-200 select-all whitespace-pre leading-relaxed">
+              {exportMarkdownText || 'Carregando documento...'}
             </div>
           </div>
         </div>

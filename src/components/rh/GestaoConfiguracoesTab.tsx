@@ -263,31 +263,41 @@ export const GestaoConfiguracoesTab: React.FC<GestaoConfiguracoesTabProps> = ({
         <div className="bg-slate-900 text-white rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2 text-emerald-400">
             <Globe className="w-5 h-5" />
-            <h3 className="font-bold">Como Persistir as Chaves Permanentemente</h3>
+            <h3 className="font-bold">Como Persistir as Chaves Permanentemente em Produção</h3>
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="space-y-4">
               <p className="text-xs text-slate-400 leading-relaxed">
-                Para que as chaves não precisem ser digitadas toda vez que o servidor reiniciar, adicione-as nos "Secrets" do ambiente AI Studio:
+                Para que as chaves permaneçam ativas após reinicializações ou deploys, configure as variáveis no painel da plataforma de hospedagem (ex.: Vercel Environment Variables) ou no arquivo <code>.env</code> do servidor:
               </p>
               <ol className="text-xs space-y-3 list-decimal list-inside text-slate-300">
-                <li>Vá em <strong>"Project Settings"</strong> (ícone de engrenagem no topo).</li>
-                <li>Clique na aba <strong>"Secrets"</strong>.</li>
-                <li>Adicione <code>VITE_SUPABASE_URL</code> e <code>SUPABASE_SERVICE_ROLE_KEY</code>.</li>
-                <li>Clique em <strong>"Save"</strong> e reinicie o servidor.</li>
+                <li>Acesse <strong>Settings → Environment Variables</strong> no painel do projeto (Vercel) ou servidor.</li>
+                <li>Defina <code>VITE_SUPABASE_URL</code>, <code>VITE_SUPABASE_ANON_KEY</code> e <code>SUPABASE_SERVICE_ROLE_KEY</code>.</li>
+                <li>Configure também <code>ADMIN_EMAIL</code> e <code>ADMIN_BOOTSTRAP_PASSWORD</code> para acesso mestre.</li>
+                <li>Execute um novo <strong>Redeploy</strong> ou reinicie o servidor Node.</li>
               </ol>
             </div>
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3 font-mono text-[10px]">
-              <div className="text-slate-500 border-b border-slate-800 pb-2 mb-2">Valores Atuais Detectados no .env:</div>
+              <div className="text-slate-500 border-b border-slate-800 pb-2 mb-2">Diagnóstico Real de Chaves no Servidor:</div>
               <div className="flex justify-between items-center">
-                <code className="text-emerald-400">URL</code>
-                <span className={systemStatus.env.url ? "text-emerald-500" : "text-rose-500"}>{systemStatus.env.url ? 'CONFIGURADO OK' : 'AUSENTE'}</span>
+                <code className="text-emerald-400">SUPABASE_URL</code>
+                <span className={systemStatus.env.url ? 'text-emerald-400' : 'text-rose-400'}>
+                  {systemStatus.env.url ? 'CONFIGURADO OK' : 'AUSENTE'}
+                </span>
               </div>
               <div className="flex justify-between items-center">
-                <code className="text-emerald-400">SERVICE_KEY</code>
-                <span className={systemStatus.env.key ? "text-emerald-500" : "text-rose-500"}>{systemStatus.env.key ? 'CONFIGURADO OK' : 'AUSENTE'}</span>
+                <code className="text-emerald-400">SUPABASE_SERVICE_ROLE_KEY</code>
+                <span className={systemStatus.env.key ? 'text-emerald-400' : 'text-amber-400'}>
+                  {systemStatus.env.key ? 'CONFIGURADO OK (RLS Bypass Ativo)' : 'AUSENTE (Fallback Anon)'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <code className="text-emerald-400">AES_256_ENCRYPTION</code>
+                <span className={systemStatus.env.encryption ? 'text-emerald-400' : 'text-amber-400'}>
+                  {systemStatus.env.encryption ? 'ATIVA' : 'PADRÃO'}
+                </span>
               </div>
             </div>
           </div>

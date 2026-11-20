@@ -4,6 +4,9 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 var supabase = null;
+var runtimeServiceKeyConfigured = Boolean(
+  process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.trim().length > 10
+);
 var currentConfig = {
   url: process.env.VITE_SUPABASE_URL || "https://aadrcdajajiqgpufixkt.supabase.co",
   key: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_a4i82ZX8uVCVN1rEhjV0Eg_E1QeOMnu"
@@ -261,7 +264,10 @@ function parseColabPhone(colab) {
   }
   return "";
 }
-function resolveCollaboratorRole(cargoTitulo) {
+function resolveCollaboratorRole(cargoTitulo, explicitRole) {
+  if (explicitRole === "SUPER_ADMIN" || explicitRole === "RH_ADMIN" || explicitRole === "GESTOR" || explicitRole === "COLABORADOR") {
+    return explicitRole;
+  }
   const cargoLower = String(cargoTitulo || "").toLowerCase();
   if (/\bsuper\s*admin/i.test(cargoLower)) return "SUPER_ADMIN";
   if (/\b(rh|dp|recursos humanos|departamento pessoal)\b/i.test(cargoLower)) return "RH_ADMIN";
@@ -307,6 +313,7 @@ function mapCollaboratorRow(c) {
     maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia ?? 15),
     regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
     pinColetor: "",
+    role: c.role || resolveCollaboratorRole(c.cargo_titulo),
     biometriaCadastrada: Boolean(c.biometria_cadastrada),
     biometriaHashTemplate: rawBio,
     limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 82,
@@ -360,7 +367,8 @@ app.post("/api/auth/login", async (req, res) => {
   try {
     const { mode, email, password, identificador, senha } = req.body;
     if (mode === "ADMIN") {
-      const cleanEmail = (email || "").trim().toLowerCase();
+      const rawEmail = (email || "").trim().toLowerCase();
+      const cleanEmail = rawEmail === "admin" ? DEFAULT_ADMIN.email.toLowerCase() : rawEmail;
       const cleanPass = String(password || "").trim();
       if (!cleanEmail || !cleanPass) {
         return res.status(400).json({ error: "E-mail e senha s\xE3o obrigat\xF3rios." });
@@ -438,7 +446,12 @@ app.post("/api/auth/login", async (req, res) => {
     if (tenantRow) {
       tenantNome = tenantRow.nome_fantasia || tenantRow.razao_social;
     }
-    const role = resolveCollaboratorRole(colab.cargo_titulo);
+    let positionRole = null;
+    if (colab.cargo_id) {
+      const { data: posData } = await supabase.from("positions").select("role").eq("position_id", colab.cargo_id).maybeSingle();
+      positionRole = posData?.role;
+    }
+    const role = resolveCollaboratorRole(colab.cargo_titulo, colab.role || positionRole);
     const colabEmail = parseColabEmail(colab) || `${colab.collaborator_id}@pointcontrol.local`;
     const sessionUser = {
       id: `user-${colab.collaborator_id}`,
@@ -508,6 +521,7 @@ app.post("/api/update-config", async (req, res) => {
   if (!url || !key) return res.status(400).json({ error: "URL and Key are required" });
   const success = initSupabase(url, key);
   if (success) {
+    runtimeServiceKeyConfigured = true;
     res.json({ success: true, message: "Configura\xE7\xE3o atualizada para esta sess\xE3o do servidor." });
   } else {
     res.status(500).json({ error: "Falha ao inicializar Supabase com as novas chaves." });
@@ -755,21 +769,28 @@ app.get("/api/biometric-audit-summary", async (req, res) => {
     const accum = {};
     for (const row of data || []) {
       const id = row.collaborator_id;
+      const isOk = row.verdict === "APROVADO" || row.verdict === "MATCH" || row.verdict === "SELFIE_CONTINGENCIA_AUDITADA";
       if (!accum[id]) {
         accum[id] = {
           sumSim: Number(row.similarity || 0),
           count: 1,
+          successCount: isOk ? 1 : 0,
+          failedCount: isOk ? 0 : 1,
           lastVerdict: row.verdict || "",
           lastTimestamp: row.timestamp || ""
         };
       } else {
         accum[id].sumSim += Number(row.similarity || 0);
         accum[id].count += 1;
+        if (isOk) accum[id].successCount += 1;
+        else accum[id].failedCount += 1;
       }
     }
     for (const [id, st] of Object.entries(accum)) {
       summary[id] = {
         count: st.count,
+        successCount: st.successCount,
+        failedCount: st.failedCount,
         avgSimilarity: Math.round(st.sumSim / st.count * 10) / 10,
         lastVerdict: st.lastVerdict,
         lastTimestamp: st.lastTimestamp
@@ -895,6 +916,7 @@ app.post("/api/save-collaborator", async (req, res) => {
       limiar_confianca_minimo: collaborator.limiarConfiancaMinimo ?? 82,
       biometria_cadastrada: Boolean(nextBioCadastrada),
       status: collaborator.status,
+      role: collaborator.role || null,
       updated_at: getBrasiliaTimeParts().iso
     };
     if (collaborator.dataBaseCiclo) {
@@ -908,8 +930,21 @@ app.post("/api/save-collaborator", async (req, res) => {
       payload.biometric_template = nextTemplate;
     }
     let { data, error: dbError } = await supabase.from("collaborators").upsert(payload, { onConflict: "collaborator_id" }).select();
-    if (dbError && payload.data_base_ciclo && String(dbError.message || "").includes("data_base_ciclo")) {
-      delete payload.data_base_ciclo;
+    if (dbError && (String(dbError.message || "").includes("data_base_ciclo") || String(dbError.message || "").includes("role"))) {
+      if (String(dbError.message || "").includes("data_base_ciclo")) {
+        delete payload.data_base_ciclo;
+      }
+      if (String(dbError.message || "").includes("role")) {
+        const savedRole = payload.role;
+        delete payload.role;
+        if (savedRole) {
+          try {
+            const baseMeta = payload.biometric_template ? JSON.parse(payload.biometric_template) : {};
+            payload.biometric_template = JSON.stringify({ ...typeof baseMeta === "object" && baseMeta ? baseMeta : {}, role: savedRole });
+          } catch {
+          }
+        }
+      }
       const retry = await supabase.from("collaborators").upsert(payload, { onConflict: "collaborator_id" }).select();
       data = retry.data;
       dbError = retry.error;
@@ -1049,7 +1084,12 @@ app.post("/api/recover-access", async (req, res) => {
     if (colabEncontrado.status === "PENDENTE") {
       return res.status(403).json({ error: "Auto-cadastro pendente de aprova\xE7\xE3o pelo RH ainda n\xE3o possui acesso liberado." });
     }
-    const targetRole = resolveCollaboratorRole(colabEncontrado.cargo_titulo);
+    let posRoleForRec = null;
+    if (colabEncontrado.cargo_id) {
+      const { data: posRec } = await supabase.from("positions").select("role").eq("position_id", colabEncontrado.cargo_id).maybeSingle();
+      posRoleForRec = posRec?.role;
+    }
+    const targetRole = resolveCollaboratorRole(colabEncontrado.cargo_titulo, colabEncontrado.role || posRoleForRec);
     if (targetRole === "SUPER_ADMIN" || targetRole === "RH_ADMIN") {
       return res.status(403).json({
         error: "Contas administrativas (Super Admin / RH) n\xE3o podem ser redefinidas por recupera\xE7\xE3o simplificada. Solicite interven\xE7\xE3o administrativa."
@@ -1138,7 +1178,7 @@ app.post("/api/save-point", async (req, res) => {
     const user = await getAuthenticatedUser(token);
     if (!user) return res.status(401).send("Unauthorized");
     const registration = req.body;
-    if (!canAccessTenant(user, registration.tenantId)) {
+    if (!canAccessTenant(user, registration.tenantId) || !canActForCollaborator(user, registration.colaboradorId)) {
       return res.status(403).send("Forbidden");
     }
     const { data, error: dbError } = await supabase.from("point_registrations").insert({
@@ -1574,58 +1614,73 @@ async function executeValidatedPunch(params) {
   const colaboradorNome = colaborador.nome || "Colaborador";
   const colaboradorCpf = colaborador.cpf || "000.000.000-00";
   const colaboradorMatricula = colaborador.matricula || "MAT-001";
-  let nextNsr = 1;
-  let previousHash = "0000000000000000000000000000000000000000000000000000000000000000";
-  const { data: lastPoints, error: lastPointErr } = await supabase.from("point_registrations").select("nsr, hash_sha256").eq("tenant_id", tenantId).order("nsr", { ascending: false }).limit(1);
-  if (!lastPointErr && lastPoints && lastPoints.length > 0) {
-    nextNsr = Number(lastPoints[0].nsr) + 1;
-    previousHash = lastPoints[0].hash_sha256 || previousHash;
-  }
   const nowIso = brasilia.iso;
   const dataHoraFormatada = brasilia.formatted;
   const resolvedModo = modoDispositivo || "WEB_CAM";
   const sanitizedColetorId = coletorId && String(coletorId).trim() ? String(coletorId).trim().slice(0, 64) : resolvedModo === "MOBILE_GPS" ? "COLETOR_MOBILE_GPS" : resolvedModo === "TABLET_KIOSK" ? "COLETOR_TABLET_KIOSK" : "COLETOR_WEB_CAM";
-  const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
-  const hashSha256 = crypto.createHash("sha256").update(rawPayload).digest("hex");
   const localizacaoEndereco = establishment?.endereco_completo || (establishment ? `${establishment.nome}${establishment.municipio ? ` \u2014 ${establishment.municipio}/${establishment.uf}` : ""}` : "") || tenant?.endereco_completo || "GPS validado no coletor";
-  const registroOficial = {
-    nsr: nextNsr,
-    tenantId,
-    empregadorRazaoSocial,
-    empregadorCnpj,
-    colaboradorId,
-    colaboradorNome,
-    colaboradorCpf,
-    colaboradorMatricula,
-    dataHora: nowIso,
-    dataHoraFormatada,
-    fusoHorario: "-03:00",
-    coletorId: sanitizedColetorId,
-    tipoMarcacao,
-    alertaAntecedencia: isDispensaArt62 ? "Dispensa Art. 62 CLT" : alertaAntecedencia || null,
-    alertaIntervalo: alertaIntervalo || null,
-    hashSha256,
-    latitude: hasValidGps ? latitude : null,
-    longitude: hasValidGps ? longitude : null,
-    distanciaCentroMetros,
-    foraDoRaioGeofence,
-    localizacaoEndereco,
-    modoDispositivo: resolvedModo,
-    ...offlineClientHash ? { offlineClientHash } : {}
-  };
-  const { error: insertError } = await supabase.from("point_registrations").insert({
-    nsr: nextNsr,
-    tenant_id: tenantId,
-    collaborator_id: colaboradorId,
-    data_hora: nowIso,
-    tipo_marcacao: tipoMarcacao,
-    latitude: registroOficial.latitude,
-    longitude: registroOficial.longitude,
-    hash_sha256: hashSha256,
-    modo_dispositivo: registroOficial.modoDispositivo,
-    detalhes: registroOficial
-  });
-  if (insertError) throw insertError;
+  let nextNsr = 1;
+  let hashSha256 = "";
+  let registroOficial = {};
+  let inserted = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    nextNsr = 1;
+    let previousHash = "0000000000000000000000000000000000000000000000000000000000000000";
+    const { data: lastPoints, error: lastPointErr } = await supabase.from("point_registrations").select("nsr, hash_sha256").eq("tenant_id", tenantId).order("nsr", { ascending: false }).limit(1);
+    if (!lastPointErr && lastPoints && lastPoints.length > 0) {
+      nextNsr = Number(lastPoints[0].nsr) + 1;
+      previousHash = lastPoints[0].hash_sha256 || previousHash;
+    }
+    const rawPayload = `${nextNsr}|${empregadorCnpj}|${colaboradorCpf}|${nowIso}|-03:00|${tipoMarcacao}|${previousHash}|BIOMETRIA_FACIAL_OK`;
+    hashSha256 = crypto.createHash("sha256").update(rawPayload).digest("hex");
+    registroOficial = {
+      nsr: nextNsr,
+      tenantId,
+      empregadorRazaoSocial,
+      empregadorCnpj,
+      colaboradorId,
+      colaboradorNome,
+      colaboradorCpf,
+      colaboradorMatricula,
+      dataHora: nowIso,
+      dataHoraFormatada,
+      fusoHorario: "-03:00",
+      coletorId: sanitizedColetorId,
+      tipoMarcacao,
+      alertaAntecedencia: isDispensaArt62 ? "Dispensa Art. 62 CLT" : alertaAntecedencia || null,
+      alertaIntervalo: alertaIntervalo || null,
+      hashSha256,
+      latitude: hasValidGps ? latitude : null,
+      longitude: hasValidGps ? longitude : null,
+      distanciaCentroMetros,
+      foraDoRaioGeofence,
+      localizacaoEndereco,
+      modoDispositivo: resolvedModo,
+      ...offlineClientHash ? { offlineClientHash } : {}
+    };
+    const { error: insertError } = await supabase.from("point_registrations").insert({
+      nsr: nextNsr,
+      tenant_id: tenantId,
+      collaborator_id: colaboradorId,
+      data_hora: nowIso,
+      tipo_marcacao: tipoMarcacao,
+      latitude: registroOficial.latitude,
+      longitude: registroOficial.longitude,
+      hash_sha256: hashSha256,
+      modo_dispositivo: registroOficial.modoDispositivo,
+      detalhes: registroOficial
+    });
+    if (!insertError) {
+      inserted = true;
+      break;
+    }
+    if (insertError.code !== "23505") {
+      throw insertError;
+    }
+  }
+  if (!inserted) {
+    throw new Error("Falha ao alocar NSR sequencial \xFAnico ap\xF3s m\xFAltiplas tentativas.");
+  }
   if (biometricAudit) {
     await supabase.from("biometric_audit_logs").insert({
       tenant_id: tenantId,
@@ -1925,6 +1980,36 @@ app.post("/api/update-ticket-status", async (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+app.get("/api/rh-mural-data", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const user = await getAuthenticatedUser(authHeader.split("Bearer ")[1]);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
+    const tenantId = String(req.query.tenantId || user.user_metadata?.tenantId || "tenant-01");
+    if (!canAccessTenant(user, tenantId)) return res.status(403).json({ error: "Forbidden" });
+    const [annRes, tickRes] = await Promise.all([
+      supabase.from("company_announcements").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }),
+      supabase.from("rh_tickets").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false })
+    ]);
+    if (annRes.error) throw annRes.error;
+    if (tickRes.error) throw tickRes.error;
+    const colabId = user.user_metadata?.collaboratorId;
+    const cleanCpf = String(user.user_metadata?.cpf || "").replace(/\D/g, "");
+    const tickets = isManagerOrAdmin(user) ? tickRes.data || [] : (tickRes.data || []).filter((t) => {
+      const tCpf = String(t.collaborator_cpf || "").replace(/\D/g, "");
+      return colabId && t.collaborator_id === colabId || cleanCpf && tCpf === cleanCpf;
+    });
+    res.json({
+      success: true,
+      announcements: annRes.data || [],
+      tickets
+    });
+  } catch (err) {
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+});
 app.get("/api/bootstrap-data", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return res.status(401).send("Unauthorized");
@@ -1933,7 +2018,7 @@ app.get("/api/bootstrap-data", async (req, res) => {
     if (!user) return res.status(401).send("Unauthorized");
     if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
     const requestedTenant = String(req.query.tenantId || "");
-    const tenantScope = requestedTenant && requestedTenant !== "all" ? requestedTenant : isManagerOrAdmin(user) ? null : user.user_metadata?.tenantId || "tenant-01";
+    const tenantScope = requestedTenant && requestedTenant !== "all" ? requestedTenant : isSuperAdmin(user) ? null : user.user_metadata?.tenantId || "tenant-01";
     if (tenantScope && !canAccessTenant(user, tenantScope)) {
       return res.status(403).send("Forbidden");
     }
@@ -1947,6 +2032,7 @@ app.get("/api/bootstrap-data", async (req, res) => {
       }
       return query;
     };
+    const settingsTenantId = tenantScope || user.user_metadata?.tenantId || "tenant-01";
     const [
       tenantsRes,
       colabsRes,
@@ -1959,7 +2045,7 @@ app.get("/api/bootstrap-data", async (req, res) => {
       adjsRes,
       positionsRes
     ] = await Promise.all([
-      isManagerOrAdmin(user) ? supabase.from("tenants").select("*") : tenantScope ? supabase.from("tenants").select("*").eq("tenant_id", tenantScope) : supabase.from("tenants").select("*"),
+      isSuperAdmin(user) && !tenantScope ? supabase.from("tenants").select("*") : supabase.from("tenants").select("*").eq("tenant_id", settingsTenantId),
       q("collaborators"),
       q("establishments"),
       q("departments"),
@@ -1970,8 +2056,8 @@ app.get("/api/bootstrap-data", async (req, res) => {
       q("adjustment_requests", "created_at", false),
       q("positions")
     ]);
-    const appSettingsRes = await supabase.from("app_settings").select("*").eq("tenant_id", requestedTenant).maybeSingle();
-    const rolePermsRes = await supabase.from("role_permissions").select("*").eq("tenant_id", requestedTenant);
+    const appSettingsRes = await supabase.from("app_settings").select("*").eq("tenant_id", settingsTenantId).maybeSingle();
+    const rolePermsRes = await supabase.from("role_permissions").select("*").eq("tenant_id", settingsTenantId);
     const colaboradores = (colabsRes.data || []).map(mapCollaboratorRow);
     res.json({
       success: true,
@@ -2705,7 +2791,8 @@ app.post("/api/positions", async (req, res) => {
       codigo: body.codigo || null,
       cbo: body.cbo || "4110-10",
       cbo_descricao: body.cboDescricao || null,
-      carga_horaria_semanal: Number(body.cargaHorariaSemanal ?? 40)
+      carga_horaria_semanal: Number(body.cargaHorariaSemanal ?? 40),
+      role: body.role || "COLABORADOR"
     };
     const { error } = await supabase.from("positions").upsert(row, { onConflict: "position_id" });
     if (error) throw error;
@@ -2852,6 +2939,12 @@ app.get("/api/status", async (_req, res) => {
   }
   res.json({
     supabaseConnected: connected,
+    serviceRoleConfigured: runtimeServiceKeyConfigured,
+    env: {
+      url: Boolean(currentConfig.url),
+      key: runtimeServiceKeyConfigured,
+      encryption: Boolean(ENCRYPTION_KEY)
+    },
     brasiliaTime: getBrasiliaTimeParts(),
     timestamp: getBrasiliaTimeParts().iso
   });

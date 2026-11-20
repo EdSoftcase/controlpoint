@@ -24,54 +24,33 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
   onDownloadAFD,
   onDownloadAEJ
 }) => {
-  const { supabase } = useAuth();
+  const { authToken, session } = useAuth();
+  const bearerToken = authToken || session?.access_token || '';
   const [auditStats, setAuditStats] = useState<Record<string, BiometricAuditStat>>({});
 
   useEffect(() => {
     let active = true;
     async function loadAuditStats() {
       const tenantId = activeColaboradores[0]?.tenantId || activeRegistros[0]?.tenantId;
-      if (!tenantId) return;
+      if (!tenantId || !bearerToken) return;
       try {
-        const { data, error } = await supabase
-          .from('biometric_audit_logs')
-          .select('collaborator_id, similarity, liveness_score, verdict, timestamp')
-          .eq('tenant_id', tenantId)
-          .order('timestamp', { ascending: false })
-          .limit(1000);
-
-        if (error || !data || !active) return;
-
-        const map: Record<string, { total: number; success: number; failed: number; sumSim: number; lastVerdict: string }> = {};
-        for (const row of data) {
-          const cid = row.collaborator_id;
-          if (!map[cid]) {
-            map[cid] = {
-              total: 0,
-              success: 0,
-              failed: 0,
-              sumSim: 0,
-              lastVerdict: row.verdict || ''
-            };
-          }
-          map[cid].total += 1;
-          map[cid].sumSim += Number(row.similarity || 0);
-          const isOk =
-            row.verdict === 'APROVADO' ||
-            row.verdict === 'MATCH' ||
-            row.verdict === 'SELFIE_CONTINGENCIA_AUDITADA';
-          if (isOk) map[cid].success += 1;
-          else map[cid].failed += 1;
-        }
-
+        const res = await fetch(`/api/biometric-audit-summary?tenantId=${encodeURIComponent(tenantId)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        if (!res.ok || !active) return;
+        const json = await res.json();
+        const summary = json?.summary || {};
         const formatted: Record<string, BiometricAuditStat> = {};
-        for (const [cid, st] of Object.entries(map)) {
+        for (const [cid, st] of Object.entries<any>(summary)) {
+          const total = Number(st?.count || 0);
+          const success = Number(st?.successCount ?? total);
+          const failed = Number(st?.failedCount ?? Math.max(0, total - success));
           formatted[cid] = {
-            total: st.total,
-            success: st.success,
-            failed: st.failed,
-            avgSimilarity: st.total > 0 ? Math.round((st.sumSim / st.total) * 10) / 10 : 0,
-            lastVerdict: st.lastVerdict
+            total,
+            success,
+            failed,
+            avgSimilarity: Number(st?.avgSimilarity || 0),
+            lastVerdict: st?.lastVerdict || ''
           };
         }
         if (active) setAuditStats(formatted);
@@ -83,7 +62,7 @@ export const GestaoRegistrosPontoTab: React.FC<GestaoRegistrosPontoTabProps> = (
     return () => {
       active = false;
     };
-  }, [supabase, activeColaboradores, activeRegistros.length]);
+  }, [bearerToken, activeColaboradores, activeRegistros.length]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">

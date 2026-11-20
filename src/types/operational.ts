@@ -92,6 +92,7 @@ export interface Cargo {
   cbo: string;
   cboDescricao: string;
   cargaHorariaSemanal: number;
+  role?: 'SUPER_ADMIN' | 'RH_ADMIN' | 'GESTOR' | 'COLABORADOR';
 }
 
 export interface Departamento {
@@ -133,6 +134,7 @@ export interface Colaborador {
   maxMinutosAntecedenciaPermitido: number; // Padrão: 15 minutos
   regraAntecedenciaAtiva: boolean; // Se true, valida no coletor
   pinColetor: string;
+  role?: 'SUPER_ADMIN' | 'RH_ADMIN' | 'GESTOR' | 'COLABORADOR';
   fotoUrl?: string;
   biometriaCadastrada?: boolean;
   biometriaHashTemplate?: string;

@@ -73,13 +73,15 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
     departamentoId: '',
     cargoId: '',
     regime: 'REGULAR' as 'REGULAR' | 'EXCECAO' | 'DISPENSA_ART_62',
-    status: 'ATIVO' as 'ATIVO' | 'DESLIGADO' | 'PENDENTE'
+    status: 'ATIVO' as 'ATIVO' | 'DESLIGADO' | 'PENDENTE',
+    role: 'COLABORADOR' as 'SUPER_ADMIN' | 'RH_ADMIN' | 'GESTOR' | 'COLABORADOR'
   });
 
   const openEditModal = (colab: Colaborador) => {
     const initialTenantId = colab.tenantId || tenants[0]?.id || selectedTenantId || '';
     const tenantEsts = estabelecimentos.filter(e => e.tenantId === initialTenantId);
     const matchedEst = estabelecimentos.find(e => e.id === colab.estabelecimentoId) || tenantEsts[0] || estabelecimentos[0];
+    const matchedCargo = cargos.find(c => c.id === colab.cargoId);
     setEditModalColab(colab);
     setEditForm({
       tenantId: initialTenantId,
@@ -87,7 +89,8 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
       departamentoId: colab.departamentoId || departamentos[0]?.id || '',
       cargoId: colab.cargoId || cargos[0]?.id || '',
       regime: colab.regime || 'REGULAR',
-      status: colab.status || 'ATIVO'
+      status: colab.status || 'ATIVO',
+      role: colab.role || matchedCargo?.role || 'COLABORADOR'
     });
   };
 
@@ -109,7 +112,8 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
         cargoId: cargoObj?.id || editForm.cargoId || editModalColab.cargoId,
         cargoTitulo: cargoObj?.titulo || editModalColab.cargoTitulo,
         regime: editForm.regime,
-        status: editForm.status
+        status: editForm.status,
+        role: editForm.role
       };
 
       await onUpdateColaborador(updated);
@@ -1319,7 +1323,15 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                   <label className="block font-bold text-slate-700 mb-1">Cargo:</label>
                   <select
                     value={editForm.cargoId}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, cargoId: e.target.value }))}
+                    onChange={(e) => {
+                      const nextCargoId = e.target.value;
+                      const chosenCargo = cargos.find(c => c.id === nextCargoId);
+                      setEditForm(prev => ({
+                        ...prev,
+                        cargoId: nextCargoId,
+                        role: chosenCargo?.role || prev.role
+                      }));
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 font-medium text-slate-800 text-xs"
                   >
                     {cargos.map(c => (
@@ -1327,6 +1339,20 @@ export const GestaoColaboradoresTab: React.FC<GestaoColaboradoresTabProps> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Nível de Acesso no Sistema (Perfil):</label>
+                <select
+                  value={editForm.role}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, role: e.target.value as any }))}
+                  className="w-full bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5 font-bold text-indigo-950 text-xs focus:ring-2 focus:ring-indigo-600 focus:outline-none"
+                >
+                  <option value="COLABORADOR">COLABORADOR — Portal do Colaborador (Ponto, Holerite, Solicitações)</option>
+                  <option value="GESTOR">GESTOR — Liderança de Equipe (Aprovações, Ocorrências, Relatórios)</option>
+                  <option value="RH_ADMIN">RH_ADMIN — Gestão de RH Plena (Colaboradores, Escalas, AFD/AEJ)</option>
+                  <option value="SUPER_ADMIN">SUPER_ADMIN — Administrador Geral Multi-Empresa</option>
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

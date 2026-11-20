@@ -61,6 +61,7 @@ ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS turma_escala TEXT DEFA
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS dias_folga_semana JSONB;
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS anual_folgas JSONB;
 ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS data_base_ciclo DATE;
+ALTER TABLE public.collaborators ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'COLABORADOR';
 
 -- 3. TABELA DE REGISTROS DE PONTO (REP-P)
 CREATE TABLE IF NOT EXISTS public.point_registrations (
@@ -173,6 +174,8 @@ CREATE TABLE IF NOT EXISTS public.positions (
     carga_horaria_semanal INTEGER DEFAULT 44,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE public.positions ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'COLABORADOR';
 
 -- 8. TABELA DE FERIADOS
 CREATE TABLE IF NOT EXISTS public.holidays (
@@ -514,75 +517,75 @@ ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.occurrence_treatments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ipa_reward_batches ENABLE ROW LEVEL SECURITY;
 
--- Políticas de Acesso Idempotentes (Permitem Service Role, Anon e Authenticated para resiliência operacional)
+-- Políticas de Acesso Restritas ao Backend (Somente service_role — bloqueia acesso direto anon/authenticated no banco)
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.logs;
-CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.logs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.collaborators;
-CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.collaborators FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_registrations;
-CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.point_registrations FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.establishments;
-CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.establishments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.tenants;
-CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.tenants FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.departments;
-CREATE POLICY "Acesso Total Backend" ON public.departments FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.departments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.positions;
-CREATE POLICY "Acesso Total Backend" ON public.positions FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.positions FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.holidays;
-CREATE POLICY "Acesso Total Backend" ON public.holidays FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.holidays FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.overtime_requests;
-CREATE POLICY "Acesso Total Backend" ON public.overtime_requests FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.overtime_requests FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.vacations;
-CREATE POLICY "Acesso Total Backend" ON public.vacations FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.vacations FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.absences;
-CREATE POLICY "Acesso Total Backend" ON public.absences FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.absences FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.shift_swaps;
-CREATE POLICY "Acesso Total Backend" ON public.shift_swaps FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.shift_swaps FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.biometric_audit_logs;
-CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.biometric_audit_logs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.point_signatures;
-CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.point_signatures FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.adjustment_requests;
-CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.adjustment_requests FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.paystubs;
-CREATE POLICY "Acesso Total Backend" ON public.paystubs FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.paystubs FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.tax_reports;
-CREATE POLICY "Acesso Total Backend" ON public.tax_reports FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.tax_reports FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.company_announcements;
-CREATE POLICY "Acesso Total Backend" ON public.company_announcements FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.company_announcements FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.rh_tickets;
-CREATE POLICY "Acesso Total Backend" ON public.rh_tickets FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.rh_tickets FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.role_permissions;
-CREATE POLICY "Acesso Total Backend" ON public.role_permissions FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.role_permissions FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.app_settings;
-CREATE POLICY "Acesso Total Backend" ON public.app_settings FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.app_settings FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.occurrence_treatments;
-CREATE POLICY "Acesso Total Backend" ON public.occurrence_treatments FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.occurrence_treatments FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 DROP POLICY IF EXISTS "Acesso Total Backend" ON public.ipa_reward_batches;
-CREATE POLICY "Acesso Total Backend" ON public.ipa_reward_batches FOR ALL USING (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated') WITH CHECK (auth.role() = 'service_role' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
+CREATE POLICY "Acesso Total Backend" ON public.ipa_reward_batches FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 -- Índices e Restrições de Unicidade Fiscal
 CREATE UNIQUE INDEX IF NOT EXISTS uq_point_tenant_nsr ON public.point_registrations(tenant_id, nsr);

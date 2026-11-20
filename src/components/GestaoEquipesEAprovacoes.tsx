@@ -34,6 +34,7 @@ interface GestaoEquipesEAprovacoesProps {
   solicitacoesAjuste?: SolicitacaoAjustePonto[];
   onUpdateSolicitacoesAjuste?: (novas: SolicitacaoAjustePonto[]) => void;
   currentUser: AuthUser;
+  activeTenantId?: string;
 }
 
 export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> = ({
@@ -45,11 +46,12 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
   onUpdateHorasExtras,
   solicitacoesAjuste = [],
   onUpdateSolicitacoesAjuste,
-  currentUser
+  currentUser,
+  activeTenantId
 }) => {
   const { supabase, session, authToken } = useAuth();
   const bearerToken = session?.access_token || authToken || '';
-  const targetTenantId = currentUser?.tenantId || colaboradores[0]?.tenantId || departamentos[0]?.tenantId || 'tenant-01';
+  const targetTenantId = activeTenantId || currentUser?.tenantId || colaboradores[0]?.tenantId || departamentos[0]?.tenantId || 'tenant-01';
   const [activeSubTab, setActiveSubTab] = useState<'aprovacoes' | 'ajustes' | 'trocas' | 'equipes' | 'mural_atendimento'>('aprovacoes');
   
   // Trocas de Turno
@@ -511,7 +513,7 @@ export const GestaoEquipesEAprovacoes: React.FC<GestaoEquipesEAprovacoesProps> =
       </div>
 
       {activeSubTab === 'mural_atendimento' && (
-        <GestaoMuralEAtendimento currentUser={currentUser} />
+        <GestaoMuralEAtendimento currentUser={currentUser} tenantId={targetTenantId} />
       )}
 
       {activeSubTab === 'trocas' && (

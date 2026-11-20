@@ -13,18 +13,23 @@ import {
   Eye,
   ShieldCheck,
   Search,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 
 interface GestaoMuralEAtendimentoProps {
   currentUser: AuthUser;
+  tenantId?: string;
 }
 
-export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = ({ currentUser }) => {
+export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = ({ currentUser, tenantId }) => {
   const { supabase, authToken, session } = useAuth();
   const bearerToken = authToken || session?.access_token || '';
+  const targetTenantId = tenantId || currentUser.tenantId || 'tenant-01';
   const [activeSubTab, setActiveSubTab] = useState<'mural' | 'atendimento'>('mural');
   const [feedbackBanner, setFeedbackBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [comunicados, setComunicados] = useState<ComunicadoEmpresa[]>([]);
   const [isNovoComunicadoModalOpen, setIsNovoComunicadoModalOpen] = useState(false);
@@ -43,71 +48,80 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
   const [ticketStatusFilter, setTicketStatusFilter] = useState<'TODOS' | 'ABERTO' | 'EM_ATENDIMENTO' | 'CONCLUIDO'>('TODOS');
   const [ticketSearchFilter, setTicketSearchFilter] = useState('');
 
-  // Sincronização inicial com Banco de Dados Supabase
+  const mapAnnouncements = (rows: any[]): ComunicadoEmpresa[] =>
+    rows.map((a: any) => ({
+      id: a.announcement_id || a.id,
+      tenantId: a.tenant_id,
+      titulo: a.titulo,
+      conteudo: a.conteudo,
+      categoria: a.categoria,
+      autorNome: a.autor_nome,
+      fixado: a.fixado,
+      exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
+      anexoNome: a.anexo_nome,
+      anexoUrl: a.anexo_url,
+      confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
+      criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : getBrasiliaParts().ddmmyyyy
+    }));
+
+  const mapTickets = (rows: any[]): ChamadoAtendimentoRh[] =>
+    rows.map((t: any) => ({
+      id: t.ticket_id || t.id,
+      tenantId: t.tenant_id,
+      colaboradorId: t.collaborator_id,
+      colaboradorNome: t.collaborator_name,
+      colaboradorCpf: t.collaborator_cpf,
+      departamentoNome: t.departamento_nome,
+      assunto: t.assunto,
+      titulo: t.titulo,
+      mensagemInicial: t.mensagem_inicial,
+      anexoNome: t.anexo_nome,
+      anexoUrl: t.anexo_url,
+      status: t.status,
+      prioridade: t.prioridade,
+      respostas: Array.isArray(t.respostas) ? t.respostas : [],
+      criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : getBrasiliaParts().ddmmyyyy,
+      atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : getBrasiliaParts().ddmmyyyy
+    }));
+
+  const fetchMuralAndTickets = async () => {
+    setIsLoadingData(true);
+    setLoadError(null);
+    try {
+      if (bearerToken) {
+        const res = await fetch(`/api/rh-mural-data?tenantId=${encodeURIComponent(targetTenantId)}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || 'Falha ao carregar mural e chamados.');
+        }
+        setComunicados(mapAnnouncements(Array.isArray(data.announcements) ? data.announcements : []));
+        setChamados(mapTickets(Array.isArray(data.tickets) ? data.tickets : []));
+        return;
+      }
+
+      if (supabase) {
+        const [{ data: annData, error: annErr }, { data: tickData, error: tickErr }] = await Promise.all([
+          supabase.from('company_announcements').select('*').eq('tenant_id', targetTenantId).order('created_at', { ascending: false }),
+          supabase.from('rh_tickets').select('*').eq('tenant_id', targetTenantId).order('created_at', { ascending: false })
+        ]);
+        if (annErr) throw annErr;
+        if (tickErr) throw tickErr;
+        if (annData) setComunicados(mapAnnouncements(annData));
+        if (tickData) setChamados(mapTickets(tickData));
+      }
+    } catch (err: any) {
+      setLoadError(err?.message || 'Não foi possível carregar o mural e chamados.');
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  // Sincronização autenticada com Banco de Dados via servidor
   useEffect(() => {
-    async function fetchAnnouncements() {
-      try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('company_announcements')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (data) {
-            const mapped: ComunicadoEmpresa[] = data.map((a: any) => ({
-              id: a.announcement_id || a.id,
-              tenantId: a.tenant_id,
-              titulo: a.titulo,
-              conteudo: a.conteudo,
-              categoria: a.categoria,
-              autorNome: a.autor_nome,
-              fixado: a.fixado,
-              exigeConfirmacaoLeitura: a.exige_confirmacao_leitura,
-              anexoNome: a.anexo_nome,
-              anexoUrl: a.anexo_url,
-              confirmacoesLeitura: Array.isArray(a.confirmacoes_leitura) ? a.confirmacoes_leitura : [],
-              criadoEm: a.created_at ? formatBrasiliaDate(a.created_at) : getBrasiliaParts().ddmmyyyy
-            }));
-            setComunicados(mapped);
-          }
-        }
-      } catch (_) {}
-    }
-
-    async function fetchTickets() {
-      try {
-        if (supabase) {
-          const { data } = await supabase
-            .from('rh_tickets')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (data) {
-            const mapped: ChamadoAtendimentoRh[] = data.map((t: any) => ({
-              id: t.ticket_id || t.id,
-              tenantId: t.tenant_id,
-              colaboradorId: t.collaborator_id,
-              colaboradorNome: t.collaborator_name,
-              colaboradorCpf: t.collaborator_cpf,
-              departamentoNome: t.departamento_nome,
-              assunto: t.assunto,
-              titulo: t.titulo,
-              mensagemInicial: t.mensagem_inicial,
-              anexoNome: t.anexo_nome,
-              anexoUrl: t.anexo_url,
-              status: t.status,
-              prioridade: t.prioridade,
-              respostas: Array.isArray(t.respostas) ? t.respostas : [],
-              criadoEm: t.created_at ? formatBrasiliaDate(t.created_at) : getBrasiliaParts().ddmmyyyy,
-              atualizadoEm: t.updated_at ? formatBrasiliaDate(t.updated_at) : getBrasiliaParts().ddmmyyyy
-            }));
-            setChamados(mapped);
-          }
-        }
-      } catch (_) {}
-    }
-
-    fetchAnnouncements();
-    fetchTickets();
-  }, [supabase]);
+    fetchMuralAndTickets();
+  }, [targetTenantId, bearerToken, supabase]);
 
   // Ação RH: Publicar Comunicado
   const handlePublicarComunicado = async () => {
@@ -119,7 +133,7 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     const annId = `ann-${Date.now()}`;
     const novo: ComunicadoEmpresa = {
       id: annId,
-      tenantId: currentUser.tenantId || 'tenant-01',
+      tenantId: targetTenantId,
       titulo: novoTitulo.trim(),
       conteudo: novoConteudo.trim(),
       categoria: novaCategoria,
@@ -132,11 +146,8 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
       criadoEm: getBrasiliaParts().ddmmyyyy
     };
 
-    const updated = [novo, ...comunicados];
-    setComunicados(updated);
-
     try {
-      await fetch('/api/save-announcement', {
+      const res = await fetch('/api/save-announcement', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,8 +155,17 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
         },
         body: JSON.stringify(novo)
       });
-    } catch (_) {}
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedbackBanner({ type: 'error', text: err?.error || 'Não foi possível salvar o comunicado no servidor.' });
+        return;
+      }
+    } catch {
+      setFeedbackBanner({ type: 'error', text: 'Erro de conexão ao salvar comunicado.' });
+      return;
+    }
 
+    setComunicados([novo, ...comunicados]);
     setIsNovoComunicadoModalOpen(false);
     setNovoTitulo('');
     setNovoConteudo('');
@@ -182,7 +202,7 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     setRespostaRhInput('');
 
     try {
-      await fetch('/api/save-ticket', {
+      const res = await fetch('/api/save-ticket', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -190,10 +210,17 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
         },
         body: JSON.stringify({
           id: ticket.id,
+          tenantId: ticket.tenantId || targetTenantId,
           resposta: novaResposta
         })
       });
-    } catch (_) {}
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedbackBanner({ type: 'error', text: err?.error || 'Erro ao enviar resposta do chamado.' });
+      }
+    } catch {
+      setFeedbackBanner({ type: 'error', text: 'Falha de rede ao enviar resposta.' });
+    }
   };
 
   // Ação RH: Alterar Status do Chamado
@@ -211,7 +238,7 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
     setChamados(updatedList);
 
     try {
-      await fetch('/api/update-ticket-status', {
+      const res = await fetch('/api/update-ticket-status', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -219,7 +246,13 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
         },
         body: JSON.stringify({ ticketId, status: novoStatus })
       });
-    } catch (_) {}
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedbackBanner({ type: 'error', text: err?.error || 'Erro ao atualizar status do chamado.' });
+      }
+    } catch {
+      setFeedbackBanner({ type: 'error', text: 'Falha de rede ao atualizar status do chamado.' });
+    }
   };
 
   const filteredTickets = chamados.filter(t => {
@@ -254,6 +287,21 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
           <button onClick={() => setFeedbackBanner(null)} className="ml-4 font-bold opacity-60 hover:opacity-100">✕</button>
         </div>
       )}
+      {loadError && (
+        <div className="p-3.5 rounded-xl border bg-rose-50 border-rose-200 text-rose-800 flex items-center justify-between text-xs font-semibold">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <button
+            onClick={fetchMuralAndTickets}
+            className="px-3 py-1 bg-white border border-rose-300 rounded-lg text-rose-700 hover:bg-rose-100 flex items-center gap-1 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Tentar Novamente
+          </button>
+        </div>
+      )}
       {/* Cabeçalho da Seção de Comunicação & DP */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -270,23 +318,23 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
         <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl text-xs font-bold shrink-0">
           <button
             onClick={() => setActiveSubTab('mural')}
-            className={`px-4 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+            className={`px-4 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'mural' ? 'bg-white text-indigo-950 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Megaphone className="w-4 h-4 text-indigo-600" />
+            <Megaphone className="w-4 h-4 text-indigo-600 shrink-0" />
             <span>Mural de Comunicados</span>
           </button>
           <button
             onClick={() => setActiveSubTab('atendimento')}
-            className={`px-4 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer relative ${
+            className={`px-4 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap relative ${
               activeSubTab === 'atendimento' ? 'bg-white text-indigo-950 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <MessageSquare className="w-4 h-4 text-emerald-600" />
+            <MessageSquare className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Atendimento DP/RH</span>
             {chamadosAbertosCount > 0 && (
-              <span className="px-2 py-0.5 bg-rose-500 text-white rounded-full text-[10px] font-mono animate-pulse">
+              <span className="px-2 py-0.5 bg-rose-600 text-white rounded-md text-[10px] font-mono tabular-nums">
                 {chamadosAbertosCount}
               </span>
             )}
@@ -317,7 +365,15 @@ export const GestaoMuralEAtendimento: React.FC<GestaoMuralEAtendimentoProps> = (
           </div>
 
           <div className="space-y-4">
-            {comunicados.map((item) => (
+            {isLoadingData && comunicados.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-200">
+                Carregando comunicados do servidor...
+              </div>
+            ) : comunicados.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-200">
+                Nenhum comunicado publicado ainda para esta empresa. Clique em "Novo Comunicado Oficial" para iniciar.
+              </div>
+            ) : comunicados.map((item) => (
               <div
                 key={item.id}
                 className={`p-5 rounded-2xl border transition-all ${

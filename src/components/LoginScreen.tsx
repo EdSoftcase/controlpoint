@@ -46,7 +46,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onLoginSuccess,
   onCollaboratorRegistered 
 }) => {
-  const { supabase, setAuthToken } = useAuth();
+  const { setAuthToken } = useAuth();
   
   // Modos da tela: login tradicional, auto-cadastro, recuperação de senha ou confirmação de envio
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'recover' | 'register_success'>('login');
@@ -368,18 +368,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const emailTrimmed = rawIdent.toLowerCase();
 
     try {
-      // 1. Tentar login de Administrador se identificador tiver formato de e-mail administrativo
-      if (
-        emailTrimmed === 'admin@softcase.com.br' ||
-        emailTrimmed === 'admin'
-      ) {
-        const targetEmail = emailTrimmed === 'admin' ? 'admin@softcase.com.br' : emailTrimmed;
+      // 1. Tentar login administrativo (Supabase Auth ou ADMIN_EMAIL configurado no servidor)
+      if (emailTrimmed.includes('@') || emailTrimmed === 'admin') {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mode: 'ADMIN',
-            email: targetEmail,
+            email: emailTrimmed,
             password: senha
           })
         });
@@ -387,51 +383,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         if (res.ok && data?.token && data?.user) {
           setAuthToken(data.token);
           const u = data.user;
+          const role = (u.user_metadata?.role as any) || 'SUPER_ADMIN';
           const authUser: AuthUser = {
             id: u.id,
             nome: u.user_metadata?.nome || 'Super Administrador',
-            email: u.email || targetEmail,
+            email: u.email || emailTrimmed,
             cpf: u.user_metadata?.cpf || '000.000.000-00',
-            role: (u.user_metadata?.role as any) || 'SUPER_ADMIN',
+            role,
             roleLabel: u.user_metadata?.roleLabel || 'Super Administrador',
             tenantId: u.user_metadata?.tenantId || 'tenant-01',
             tenantNome: u.user_metadata?.tenantNome || 'Softcase Tecnologia',
-            mfaHabilitado: false
+            mfaHabilitado: Boolean(u.user_metadata?.mfaHabilitado)
           };
           concluirLogin(authUser);
           return;
         }
-        setErrorMessage(data?.error || 'E-mail ou senha administrativa inválidos.');
-        setIsLoading(false);
-        return;
-      }
-
-      // 2. Login via Supabase Auth se for e-mail corporativo padrão
-      if (emailTrimmed.includes('@')) {
-        const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
-          email: emailTrimmed,
-          password: senha
-        });
-        if (sbData?.user && sbData?.session?.access_token && !sbErr) {
-          setAuthToken(sbData.session.access_token);
-          const role = (sbData.user.user_metadata?.role as any) || 'COLABORADOR';
-          const authUser: AuthUser = {
-            id: sbData.user.id,
-            nome: sbData.user.user_metadata?.nome || sbData.user.email?.split('@')[0] || 'Usuário',
-            email: sbData.user.email || emailTrimmed,
-            cpf: sbData.user.user_metadata?.cpf || '000.000.000-00',
-            role,
-            roleLabel: sbData.user.user_metadata?.roleLabel || 'Colaborador CLT',
-            tenantId: sbData.user.user_metadata?.tenantId || 'tenant-01',
-            tenantNome: sbData.user.user_metadata?.tenantNome || 'Softcase Tecnologia',
-            mfaHabilitado: !!sbData.user.user_metadata?.mfaHabilitado
-          };
-          concluirLogin(authUser);
+        // Se digitou apenas 'admin', não prossegue como CPF/Matrícula de colaborador
+        if (emailTrimmed === 'admin') {
+          setErrorMessage(data?.error || 'E-mail ou senha administrativa inválidos.');
+          setIsLoading(false);
           return;
         }
       }
 
-      // 3. Autenticação de Colaborador / Gestor / RH via servidor oficial (CPF, E-mail ou Matrícula + PIN/Senha)
+      // 2. Autenticação de Colaborador / Gestor / RH via servidor oficial (CPF, E-mail ou Matrícula + PIN/Senha)
       const colabRes = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

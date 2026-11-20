@@ -90,6 +90,20 @@ import {
 } from '../utils/brasiliaClock';
 import { hasRealBiometricTemplate } from '../utils/biometricHelpers';
 
+export type PortalTabId =
+  | 'espelho'
+  | 'horas_extras'
+  | 'comprovantes'
+  | 'feriados'
+  | 'assinatura'
+  | 'ajustes'
+  | 'troca_turno'
+  | 'escala'
+  | 'ferias'
+  | 'holerites'
+  | 'comunicados'
+  | 'fale_dp';
+
 interface PortalColaboradorProps {
   user: AuthUser;
   registros: RegistroPontoREPP[];
@@ -107,6 +121,9 @@ interface PortalColaboradorProps {
   colaboradores?: Colaborador[];
   onOpenGuia?: () => void;
   globalThreshold?: number;
+  activeTab?: PortalTabId;
+  onTabChange?: (tab: PortalTabId) => void;
+  openPunchTrigger?: number;
 }
 
 export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
@@ -125,11 +142,19 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
   estabelecimentos = [],
   colaboradores = [],
   onOpenGuia,
-  globalThreshold = 82.0
+  globalThreshold = 82.0,
+  activeTab,
+  onTabChange,
+  openPunchTrigger = 0
 }) => {
   const { supabase, authToken, session } = useAuth();
   const bearerToken = authToken || session?.access_token || '';
-  const [selectedTab, setSelectedTab] = useState<'espelho' | 'horas_extras' | 'comprovantes' | 'feriados' | 'assinatura' | 'ajustes' | 'troca_turno' | 'escala' | 'ferias' | 'holerites' | 'comunicados' | 'fale_dp'>('espelho');
+  const [internalTab, setInternalTab] = useState<PortalTabId>('espelho');
+  const selectedTab = activeTab ?? internalTab;
+  const setSelectedTab = (tab: PortalTabId) => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
   const [comprovanteModal, setComprovanteModal] = useState<RegistroPontoREPP | null>(null);
   const [viewingHoleriteModal, setViewingHoleriteModal] = useState<any | null>(null);
   const [viewingIrpfModal, setViewingIrpfModal] = useState<any | null>(null);
@@ -1390,6 +1415,20 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
     }
   };
 
+  const lastPunchTriggerRef = React.useRef<number>(openPunchTrigger);
+  React.useEffect(() => {
+    if (openPunchTrigger > 0 && openPunchTrigger !== lastPunchTriggerRef.current) {
+      lastPunchTriggerRef.current = openPunchTrigger;
+      if (batidasHoje.length >= 4) {
+        showPortalNotice('error', 'Sua carga horária diária já foi encerrada (4 marcações registradas).');
+      } else if (!isPunchAllowed) {
+        showPortalNotice('error', `Bloqueio de Horário: ${punchBlockReason}`);
+      } else {
+        handleOpenPersonalPunch();
+      }
+    }
+  }, [openPunchTrigger]);
+
   // Efeito de Contador Regressivo Biométrico (3 segundos)
   React.useEffect(() => {
     let timer: any;
@@ -1760,13 +1799,13 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]' 
                   : 'bg-amber-950/80 border-amber-500/50 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.3)]'
               }`}>
-                <Clock className="w-5 h-5 mb-0.5 animate-pulse" />
+                <Clock className="w-5 h-5 mb-0.5" />
                 <span className="text-[10px] uppercase font-sans">Ao Vivo</span>
               </div>
 
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-2xl font-extrabold font-mono tracking-wider text-white">
+                  <span className="text-2xl font-extrabold font-mono tabular-nums tracking-wider text-white">
                     {formattedLiveClock}
                   </span>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${
@@ -1774,7 +1813,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
                       : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                   }`}>
-                    {isPunchAllowed ? '🟢 LIBERADO PARA PONTO' : '⏳ ENTRADA BLOQUEADA'}
+                    {isPunchAllowed ? 'LIBERADO PARA PONTO' : 'ENTRADA BLOQUEADA'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 mt-1">
@@ -1790,7 +1829,7 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
                   <span className="text-[9px] font-mono uppercase text-amber-300 tracking-wider block">
                     Tempo Restante para Liberar Entrada
                   </span>
-                  <div className="text-xl font-bold font-mono text-amber-400 tracking-widest animate-pulse">
+                  <div className="text-xl font-bold font-mono tabular-nums text-amber-400 tracking-widest">
                     {formatCountdown(secondsRemaining)}
                   </div>
                 </div>
@@ -1997,141 +2036,126 @@ export const PortalColaborador: React.FC<PortalColaboradorProps> = ({
         </div>
       </div>
 
-      {/* Navegação Interna do Portal do Colaborador */}
-      <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl text-xs font-semibold w-full overflow-x-auto">
-        <button
-          onClick={() => setSelectedTab('espelho')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'espelho'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <FileText className="w-3.5 h-3.5" />
-          Espelho de Ponto
-        </button>
-        <button
-          onClick={() => setSelectedTab('escala')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'escala'
-              ? 'bg-indigo-600 text-white shadow-xs font-bold'
-              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-200'
-          }`}
-        >
-          <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
-          Minha Escala & Plantões
-        </button>
-        <button
-          onClick={() => setSelectedTab('troca_turno')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'troca_turno'
-              ? 'bg-emerald-600 text-white shadow-xs font-bold'
-              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200'
-          }`}
-        >
-          <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-500" />
-          Troca de Turno ({solicitacoesTroca.length})
-        </button>
-        <button
-          onClick={() => setSelectedTab('assinatura')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'assinatura'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <PenTool className="w-3.5 h-3.5 text-blue-600" />
-          Assinatura Digital {minhaAssinaturaMesAtual ? '✅' : '🔴'}
-        </button>
-        <button
-          onClick={() => setSelectedTab('ajustes')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'ajustes'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Paperclip className="w-3.5 h-3.5 text-purple-600" />
-          Ajustes & Atestados ({minhasSolicitacoesAjuste.length})
-        </button>
-        <button
-          onClick={() => setSelectedTab('horas_extras')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'horas_extras'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Clock className="w-3.5 h-3.5 text-emerald-600" />
-          Horas Extras ({minhasHorasExtras.length})
-        </button>
-        <button
-          onClick={() => setSelectedTab('comprovantes')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'comprovantes'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Award className="w-3.5 h-3.5" />
-          Comprovantes ({meusRegistros.length})
-        </button>
-        <button
-          onClick={() => setSelectedTab('feriados')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'feriados'
-              ? 'bg-white text-slate-900 shadow-xs font-bold'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Calendar className="w-3.5 h-3.5" />
-          Feriados
-        </button>
-        <button
-          onClick={() => setSelectedTab('ferias')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'ferias'
-              ? 'bg-emerald-600 text-white shadow-xs font-bold'
-              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200'
-          }`}
-        >
-          <Plane className="w-3.5 h-3.5 text-emerald-500" />
-          Minha Férias (CLT)
-        </button>
-        <button
-          onClick={() => setSelectedTab('holerites')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'holerites'
-              ? 'bg-blue-600 text-white shadow-xs font-bold'
-              : 'text-blue-700 bg-blue-50/70 hover:bg-blue-100 border border-blue-200'
-          }`}
-        >
-          <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />
-          Holerites & Contracheques
-        </button>
-        <button
-          onClick={() => setSelectedTab('comunicados')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'comunicados'
-              ? 'bg-indigo-600 text-white shadow-xs font-bold'
-              : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-200'
-          }`}
-        >
-          <Megaphone className="w-3.5 h-3.5 text-indigo-500" />
-          Mural Digital ({comunicadosList.length})
-        </button>
-        <button
-          onClick={() => setSelectedTab('fale_dp')}
-          className={`flex-1 py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap ${
-            selectedTab === 'fale_dp'
-              ? 'bg-emerald-600 text-white shadow-xs font-bold'
-              : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200'
-          }`}
-        >
-          <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
-          Fale com o DP / RH ({chamadosRhList.length})
-        </button>
-      </div>
+      {/* Navegação Interna do Portal em 4 Pilares Ergonômicos */}
+      {(() => {
+        const PILLARS: {
+          id: 'ponto' | 'escala_ferias' | 'documentos' | 'comunicacao';
+          label: string;
+          icon: React.ReactNode;
+          defaultTab: PortalTabId;
+          tabs: { id: PortalTabId; label: string; count?: number; statusTag?: string }[];
+        }[] = [
+          {
+            id: 'ponto',
+            label: 'Ponto & Espelho',
+            icon: <Clock className="w-4 h-4 shrink-0" />,
+            defaultTab: 'espelho',
+            tabs: [
+              { id: 'espelho', label: 'Espelho Mensal' },
+              { id: 'comprovantes', label: 'Comprovantes', count: meusRegistros.length },
+              { id: 'ajustes', label: 'Ajustes & Atestados', count: minhasSolicitacoesAjuste.length },
+              { id: 'horas_extras', label: 'Horas Extras', count: minhasHorasExtras.length }
+            ]
+          },
+          {
+            id: 'escala_ferias',
+            label: 'Escala & Férias',
+            icon: <CalendarDays className="w-4 h-4 shrink-0" />,
+            defaultTab: 'escala',
+            tabs: [
+              { id: 'escala', label: 'Minha Escala' },
+              { id: 'troca_turno', label: 'Troca de Turno', count: solicitacoesTroca.length },
+              { id: 'ferias', label: 'Férias CLT' },
+              { id: 'feriados', label: 'Feriados' }
+            ]
+          },
+          {
+            id: 'documentos',
+            label: 'Documentos & Assinatura',
+            icon: <FileSpreadsheet className="w-4 h-4 shrink-0" />,
+            defaultTab: 'holerites',
+            tabs: [
+              { id: 'holerites', label: 'Holerites & IRPF', count: holeritesList.length + informesIrpfList.length },
+              { id: 'assinatura', label: 'Assinatura Digital', statusTag: minhaAssinaturaMesAtual ? 'Assinado' : 'Pendente' }
+            ]
+          },
+          {
+            id: 'comunicacao',
+            label: 'Mural & RH',
+            icon: <Megaphone className="w-4 h-4 shrink-0" />,
+            defaultTab: 'comunicados',
+            tabs: [
+              { id: 'comunicados', label: 'Mural Digital', count: comunicadosList.length },
+              { id: 'fale_dp', label: 'Atendimento DP/RH', count: chamadosRhList.length }
+            ]
+          }
+        ];
+
+        const activePillar = PILLARS.find(p => p.tabs.some(t => t.id === selectedTab)) || PILLARS[0];
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs space-y-2">
+            {/* 4 Pilares Principais */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+              {PILLARS.map((pillar) => {
+                const isActive = pillar.id === activePillar.id;
+                return (
+                  <button
+                    key={pillar.id}
+                    onClick={() => {
+                      if (!isActive) setSelectedTab(pillar.defaultTab);
+                    }}
+                    className={`min-h-[44px] px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer ${
+                      isActive
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/70'
+                    }`}
+                  >
+                    {pillar.icon}
+                    <span className="truncate">{pillar.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Sub-navegação contextual do pilar ativo */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100">
+              {activePillar.tabs.map((sub) => {
+                const isSubActive = selectedTab === sub.id;
+                return (
+                  <button
+                    key={sub.id}
+                    onClick={() => setSelectedTab(sub.id)}
+                    className={`min-h-[40px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                      isSubActive
+                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    <span>{sub.label}</span>
+                    {typeof sub.count === 'number' && (
+                      <span className={`font-mono tabular-nums text-[10px] px-1.5 py-0.5 rounded ${
+                        isSubActive ? 'bg-emerald-600 text-white' : 'bg-slate-200/80 text-slate-700'
+                      }`}>
+                        {sub.count}
+                      </span>
+                    )}
+                    {sub.statusTag && (
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                        sub.statusTag === 'Assinado'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {sub.statusTag}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Conteúdo: Holerites & Contracheques */}
       {selectedTab === 'holerites' && (

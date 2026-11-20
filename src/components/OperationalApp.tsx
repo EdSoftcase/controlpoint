@@ -348,7 +348,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   codigo: c.codigo || (c.position_id || '').toUpperCase().slice(0, 8),
                   cbo: c.cbo || '',
                   cboDescricao: c.cbo_descricao || '',
-                  cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40
+                  cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40,
+                  role: c.role || 'COLABORADOR'
                 })));
               }
               if (Array.isArray(data.registros) && (!propRegistros || propRegistros.length === 0)) {
@@ -492,7 +493,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             biometriaCadastrada: hasBio,
             biometriaHashTemplate: rawTemplate,
             limiarConfiancaMinimo: c.limiar_confianca_minimo || 82.0,
-            email: c.email || ''
+            email: c.email || '',
+            role: (c.role as any) || undefined
           };
         });
         setLocalColaboradores(fallbackColabs);
@@ -542,7 +544,8 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           codigo: c.codigo || (c.position_id || '').toUpperCase().slice(0, 8),
           cbo: c.cbo || '',
           cboDescricao: c.cbo_descricao || '',
-          cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40
+          cargaHorariaSemanal: Number(c.carga_horaria_semanal) || 40,
+          role: c.role || 'COLABORADOR'
         })));
 
         if (pointsData) {
@@ -741,6 +744,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   const [kioskInput, setKioskInput] = useState<string>('');
   const [lastComprovante, setLastComprovante] = useState<RegistroPontoREPP | null>(null);
   const [kioskFeedback, setKioskFeedback] = useState<{ type: 'SUCCESS' | 'WARNING' | 'ERROR'; msg: string; details?: string } | null>(null);
+  const [showKioskDemoList, setShowKioskDemoList] = useState<boolean>(false);
   
   // Estado de Status do Sistema (Supabase)
   const [systemStatus, setSystemStatus] = useState<{
@@ -952,6 +956,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       departamentoNome: deptoObj?.nome || colab.departamentoNome || 'Não definido',
       cargoId: cargoObj?.id || chosenCargoId,
       cargoTitulo: cargoObj?.titulo || colab.cargoTitulo || 'Não definido',
+      role: cargoObj?.role || colab.role || 'COLABORADOR',
       horarioInicio: deptoObj?.horarioInicioPadrao || colab.horarioInicio || '08:00',
       horarioFim: '17:00',
       email: contact.hasEmail ? contact.email : colab.email,
@@ -2386,6 +2391,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       maxMinutosAntecedenciaPermitido: dep?.maxMinutosAntecedenciaPermitido || 15,
       regraAntecedenciaAtiva: dep?.regraAntecedenciaAtiva ?? true,
       pinColetor: pinFinal,
+      role: crg?.role || 'COLABORADOR',
       status: 'ATIVO',
       email: targetEmail,
       senhaTemporaria: generatedPass
@@ -3059,229 +3065,35 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         </div>
       </div>
 
-      {/* Barra de Navegação de Módulos Operacionais */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-xs flex items-center gap-1.5 overflow-x-auto">
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['relatorios']) && (
-          <button
-            onClick={() => setOperationalTab('relatorios')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'relatorios'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
-            Atrasos & Descontos
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['equipes']) && (
-          <button
-            onClick={() => setOperationalTab('equipes')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'equipes'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5 text-indigo-400" />
-            Equipes & Gestores
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['coletor']) && (
-          <button
-            onClick={() => setOperationalTab('coletor')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'coletor'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Tablet className="w-3.5 h-3.5 text-blue-400" />
-            Coletor REP-P
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['biometria']) && (
-          <button
-            onClick={() => setOperationalTab('biometria')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'biometria'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <ScanFace className="w-3.5 h-3.5 text-amber-400" />
-            Biometria Facial
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['feriados']) && (
-          <button
-            onClick={() => setOperationalTab('feriados')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'feriados'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5 text-rose-400" />
-            Feriados & DSR
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['ipa']) && (
-          <button
-            onClick={() => setOperationalTab('ipa')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'ipa'
-                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-amber-400/50'
-                : 'text-slate-700 bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200'
-            }`}
-          >
-            <Award className="w-3.5 h-3.5 text-amber-600" />
-            IPA & Premiações
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['empresa']) && (
-          <button
-            onClick={() => setOperationalTab('empresa')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'empresa'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <UserCheck className="w-3.5 h-3.5 text-teal-400" />
-            Colaboradores & RH
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['estrutura']) && (
-          <button
-            onClick={() => setOperationalTab('estrutura')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'estrutura'
-                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-emerald-400/40'
-                : 'text-slate-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
-            }`}
-          >
-            <Building2 className="w-3.5 h-3.5 text-emerald-600" />
-            Estrutura (Deptos/Cargos/Unidades)
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['permissoes']) && (
-          <button
-            onClick={() => setOperationalTab('permissoes')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'permissoes'
-                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-purple-400/40'
-                : 'text-slate-700 bg-purple-50/70 hover:bg-purple-100/80 border border-purple-200'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-            Matriz de Permissões (RBAC)
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['registros']) && (
-          <button
-            onClick={() => setOperationalTab('registros')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'registros'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5 text-orange-400" />
-            AFD & AEJ Fiscal
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['tenants']) && (
-          <button
-            onClick={() => setOperationalTab('tenants')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'tenants'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5 text-sky-400" />
-            Multi-tenant
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
-          <button
-            onClick={() => setOperationalTab('config')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'config'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Key className="w-3.5 h-3.5 text-amber-400" />
-            Chaves
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['escalas']) && (
-          <button
-            onClick={() => setOperationalTab('escalas')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'escalas'
-                ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
-                : 'text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80 border border-indigo-200'
-            }`}
-          >
-            <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
-            Escalas & 12x36
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['afastamentos']) && (
-          <button
-            onClick={() => setOperationalTab('afastamentos')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'afastamentos'
-                ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
-                : 'text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200'
-            }`}
-          >
-            <Stethoscope className="w-3.5 h-3.5 text-emerald-500" />
-            Afastamentos & Férias
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['exportador']) && (
-          <button
-            onClick={() => setOperationalTab('exportador')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'exportador'
-                ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-400/50'
-                : 'text-sky-700 bg-sky-50/70 hover:bg-sky-100/80 border border-sky-200'
-            }`}
-          >
-            <Server className="w-3.5 h-3.5 text-sky-500" />
-            Exportador ERP & 671
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['riscos']) && (
-          <button
-            onClick={() => setOperationalTab('riscos')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'riscos'
-                ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-400/50'
-                : 'text-rose-700 bg-rose-50/70 hover:bg-rose-100/80 border border-rose-200'
-            }`}
-          >
-            <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
-            Riscos & Compliance CLT
-          </button>
-        )}
-        {hasPermission(effectivePermissions, currentUser.role, TAB_PERMISSION_MAP['mobile']) && (
-          <button
-            onClick={() => setOperationalTab('mobile')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              operationalTab === 'mobile'
-                ? 'bg-violet-600 text-white shadow-xs ring-2 ring-violet-400/50'
-                : 'text-violet-700 bg-violet-50/70 hover:bg-violet-100/80 border border-violet-200'
-            }`}
-          >
-            <Smartphone className="w-3.5 h-3.5 text-violet-500" />
-            App Mobile & Totem
-          </button>
-        )}
+      {/* Barra Compacta de Contexto do Módulo Ativo (Navegação unificada na Barra Lateral / Menu Mobile) */}
+      <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 text-xs">
+          <span className="font-semibold text-slate-400">Módulo Ativo:</span>
+          <span className="font-bold text-slate-900">
+            {{
+              relatorios: 'Atrasos & Descontos',
+              equipes: 'Equipes, Gestores & Mural RH',
+              coletor: 'Coletor Tablet REP-P',
+              biometria: 'Biometria Facial',
+              ipa: 'IPA & Premiações',
+              feriados: 'Feriados & DSR',
+              empresa: 'Colaboradores & RH',
+              estrutura: 'Estrutura (Deptos/Cargos/Unidades)',
+              permissoes: 'Matriz de Permissões (RBAC)',
+              registros: 'Registros & AFD Fiscal',
+              tenants: 'Painel Multi-tenant',
+              config: 'Chaves de Conexão',
+              escalas: 'Escalas & 12x36',
+              afastamentos: 'Afastamentos & Férias',
+              exportador: 'Exportador ERP & 671',
+              riscos: 'Riscos & Compliance CLT',
+              mobile: 'App Mobile & Totem'
+            }[operationalTab]}
+          </span>
+        </div>
+        <div className="text-[11px] font-mono text-slate-500">
+          {activeTenant.nomeFantasia} · Perfil {currentUser.roleLabel}
+        </div>
       </div>
 
       {/* ========================================================= */}
@@ -3312,6 +3124,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           solicitacoesAjuste={solicitacoesAjuste}
           onUpdateSolicitacoesAjuste={setSolicitacoesAjuste}
           currentUser={currentUser}
+          activeTenantId={activeTenant.id}
         />
       )}
 
@@ -3565,51 +3378,62 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               )}
             </div>
 
-            {/* Acesso Rápido de Demonstração (Colaboradores Cadastrados) */}
-            <div className="pt-2 border-t border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 block mb-2">
-                Simulação Rápida — Clique em um colaborador para bater o ponto com as regras ativas:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {activeColaboradores.map((colab) => {
-                  const hasBio =
-                    hasRealBiometricTemplate(colab) ||
-                    (typeof window !== 'undefined' &&
-                      hasRealBiometricTemplate(localStorage.getItem(`sc_bio_vec_${colab.id}`)));
-                  return (
-                    <button
-                      key={colab.id}
-                      onClick={() => handleBaterPonto(colab)}
-                      className="p-2.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-lg text-left transition-colors flex items-center justify-between group"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-white group-hover:text-emerald-400">
-                            {colab.nome}
-                          </span>
-                          {hasBio ? (
-                            <span className="text-[9px] font-mono font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" /> Face Ativa
-                            </span>
-                          ) : (
-                            <span className="text-[9px] font-mono font-semibold text-amber-300 bg-amber-950/80 border border-amber-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <ShieldAlert className="w-2.5 h-2.5 text-amber-400" /> Sem Biometria (Bloqueado)
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] font-mono text-slate-400">
-                          Início: {colab.horarioInicio} · Int: {colab.intervaloMinutos}m · Máx Antecedência: {colab.maxMinutosAntecedenciaPermitido}m
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Gestor: {colab.gestorNome || 'Roberto Albuquerque'}
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-transform group-hover:translate-x-0.5 shrink-0 ml-2" />
-                    </button>
-                  );
-                })}
+            {/* Acesso Rápido de Demonstração (Recolhido por padrão em produção para privacidade na recepção) */}
+            {(currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN') && (
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-medium text-slate-400">
+                    Simulação Rápida (Acesso restrito RH/Super Admin)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowKioskDemoList(prev => !prev)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-semibold text-slate-200 cursor-pointer whitespace-nowrap"
+                  >
+                    {showKioskDemoList ? 'Ocultar Lista de Equipe' : 'Ativar Modo Demonstração (RH)'}
+                  </button>
+                </div>
+
+                {showKioskDemoList && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    {activeColaboradores.map((colab) => {
+                      const hasBio =
+                        hasRealBiometricTemplate(colab) ||
+                        (typeof window !== 'undefined' &&
+                          hasRealBiometricTemplate(localStorage.getItem(`sc_bio_vec_${colab.id}`)));
+                      return (
+                        <button
+                          key={colab.id}
+                          onClick={() => handleBaterPonto(colab)}
+                          className="p-2.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-lg text-left transition-colors flex items-center justify-between group"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-white group-hover:text-emerald-400">
+                                {colab.nome}
+                              </span>
+                              {hasBio ? (
+                                <span className="text-[9px] font-mono font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                  <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" /> Face Ativa
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-mono font-semibold text-amber-300 bg-amber-950/80 border border-amber-800/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                  <ShieldAlert className="w-2.5 h-2.5 text-amber-400" /> Sem Biometria
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400">
+                              Início: {colab.horarioInicio} · Int: {colab.intervaloMinutos}m · Antecedência: {colab.maxMinutosAntecedenciaPermitido}m
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-transform group-hover:translate-x-0.5 shrink-0 ml-2" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
 
           {/* O Comprovante Oficial Emitido (Portaria 671 Art. 83) */}
