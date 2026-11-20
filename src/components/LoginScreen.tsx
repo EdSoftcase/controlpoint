@@ -398,8 +398,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           concluirLogin(authUser);
           return;
         }
-        // Se digitou apenas 'admin', não prossegue como CPF/Matrícula de colaborador
-        if (emailTrimmed === 'admin') {
+        // Se digitou 'admin' ou o e-mail padrão admin@softcase.com.br, exibe o erro administrativo diretamente
+        if (emailTrimmed === 'admin' || emailTrimmed === 'admin@softcase.com.br') {
           setErrorMessage(data?.error || 'E-mail ou senha administrativa inválidos.');
           setIsLoading(false);
           return;

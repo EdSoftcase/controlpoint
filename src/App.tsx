@@ -193,7 +193,8 @@ export default function App() {
 
         const meta = data.user.user_metadata || {};
         const colab = data.colaborador || null;
-        const isSuper = meta.role === 'SUPER_ADMIN' || data.user.email === 'admin@softcase.com.br';
+        const userEmailLower = String(data.user.email || '').trim().toLowerCase();
+        const isSuper = meta.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
         const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
 
         const hydratedUser: AuthUser = {
@@ -211,6 +212,12 @@ export default function App() {
         };
 
         setCurrentUser(hydratedUser);
+        if (
+          (role === 'SUPER_ADMIN' || role === 'RH_ADMIN' || role === 'GESTOR') &&
+          (!currentUser || currentUser.role === 'COLABORADOR')
+        ) {
+          setActiveView('operational');
+        }
         try {
           localStorage.setItem('sc_current_user', JSON.stringify(hydratedUser));
         } catch {
@@ -232,6 +239,16 @@ export default function App() {
       active = false;
     };
   }, [authLoading, bearerToken, session]);
+
+  // Persistir activeView no localStorage quando autenticado
+  React.useEffect(() => {
+    if (!currentUser) return;
+    try {
+      localStorage.setItem('sc_active_view', activeView);
+    } catch {
+      // ignore
+    }
+  }, [currentUser, activeView]);
 
   // Enforce view boundaries by role
   React.useEffect(() => {
@@ -472,11 +489,15 @@ export default function App() {
     };
   }, [bearerToken, currentUser?.tenantId]);
 
-  // Sync currentUser with Supabase Auth session metadata if available
+  // Sync currentUser with Supabase Auth session metadata only when role is already known or no bearer validation is pending
   React.useEffect(() => {
+    if (authLoading) return;
     if (session && session.user && !currentUser) {
       const meta = session.user.user_metadata || {};
-      const isSuper = meta.role === 'SUPER_ADMIN' || session.user.email === 'admin@softcase.com.br';
+      const userEmailLower = String(session.user.email || '').trim().toLowerCase();
+      const isSuper = meta.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
+      // Se não há role explícita ainda e existe token para validar no servidor, aguarda /api/auth/session
+      if (!meta.role && !isSuper && bearerToken) return;
       const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
       const u: AuthUser = {
         id: meta.collaboratorId || session.user.id,
@@ -491,7 +512,7 @@ export default function App() {
       };
       updateCurrentUser(u, (role === 'SUPER_ADMIN' || role === 'RH_ADMIN' || role === 'GESTOR') ? 'operational' : 'colaborador');
     }
-  }, [session, currentUser]);
+  }, [authLoading, session, currentUser, bearerToken]);
 
   // Se o usuário não está autenticado, renderiza a tela de login robusta
   if (!currentUser) {
