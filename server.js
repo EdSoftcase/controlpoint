@@ -14,7 +14,13 @@ var currentConfig = {
 function initSupabase(url, key) {
   if (url && key) {
     try {
-      supabase = createClient(url, key);
+      supabase = createClient(url, key, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false
+        }
+      });
       currentConfig = { url, key };
       console.log("Supabase client (re)initialized successfully.");
       return true;
@@ -24,6 +30,17 @@ function initSupabase(url, key) {
     }
   }
   return false;
+}
+function createAuthHelperClient() {
+  if (!currentConfig.url || !currentConfig.key) return null;
+  const authKey = process.env.VITE_SUPABASE_ANON_KEY || currentConfig.key;
+  return createClient(currentConfig.url, authKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
 }
 initSupabase(currentConfig.url, currentConfig.key);
 var app = express();
@@ -169,27 +186,49 @@ function verifySignedSessionToken(token) {
     return null;
   }
 }
+function isConfiguredAdminEmail(email) {
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean) return false;
+  const configured = (process.env.ADMIN_EMAIL || "admin@softcase.com.br").trim().toLowerCase();
+  return clean === configured || clean === "admin@softcase.com.br";
+}
+function normalizeAuthenticatedUser(user) {
+  if (!user) return null;
+  const meta = { ...user.user_metadata || {} };
+  if (isConfiguredAdminEmail(user.email) && meta.role !== "SUPER_ADMIN") {
+    meta.role = "SUPER_ADMIN";
+    meta.nome = meta.nome || "Super Administrador Softcase";
+    meta.roleLabel = meta.roleLabel || "Super Administrador Softcase";
+    meta.tenantId = meta.tenantId || "tenant-01";
+    meta.tenantNome = meta.tenantNome || "Softcase Tecnologia";
+  }
+  return {
+    ...user,
+    user_metadata: meta
+  };
+}
 async function getAuthenticatedUser(token) {
   if (!token) return null;
   const hmacUser = verifySignedSessionToken(token);
-  if (hmacUser) return hmacUser;
+  if (hmacUser) return normalizeAuthenticatedUser(hmacUser);
   if (!supabase) return null;
   try {
     const {
       data: { user },
       error
     } = await supabase.auth.getUser(token);
-    if (!error && user) return user;
+    if (!error && user) return normalizeAuthenticatedUser(user);
   } catch {
   }
   return null;
 }
 function isSuperAdmin(user) {
-  return user?.user_metadata?.role === "SUPER_ADMIN";
+  return user?.user_metadata?.role === "SUPER_ADMIN" || isConfiguredAdminEmail(user?.email);
 }
 function isManagerOrAdmin(user) {
+  if (isSuperAdmin(user)) return true;
   const role = user?.user_metadata?.role;
-  return role === "SUPER_ADMIN" || role === "RH_ADMIN" || role === "GESTOR";
+  return role === "RH_ADMIN" || role === "GESTOR";
 }
 function canAccessTenant(user, tenantId) {
   if (!user) return false;
@@ -265,11 +304,11 @@ function parseColabPhone(colab) {
   return "";
 }
 function resolveCollaboratorRole(cargoTitulo, explicitRole) {
-  if (explicitRole === "SUPER_ADMIN" || explicitRole === "RH_ADMIN" || explicitRole === "GESTOR" || explicitRole === "COLABORADOR") {
+  if (explicitRole === "SUPER_ADMIN" || explicitRole === "RH_ADMIN" || explicitRole === "GESTOR") {
     return explicitRole;
   }
   const cargoLower = String(cargoTitulo || "").toLowerCase();
-  if (/\bsuper\s*admin/i.test(cargoLower)) return "SUPER_ADMIN";
+  if (/\b(super\s*admin|super\s*administrador|administrador)\b/i.test(cargoLower)) return "SUPER_ADMIN";
   if (/\b(rh|dp|recursos humanos|departamento pessoal)\b/i.test(cargoLower)) return "RH_ADMIN";
   if (/\b(gestor|supervisor|coordenador|gerente|lider|líder)\b/i.test(cargoLower)) return "GESTOR";
   return "COLABORADOR";
@@ -313,7 +352,7 @@ function mapCollaboratorRow(c) {
     maxMinutosAntecedenciaPermitido: Number(c.max_minutos_antecedencia ?? 15),
     regraAntecedenciaAtiva: c.regra_antecedencia_ativa ?? true,
     pinColetor: "",
-    role: c.role || resolveCollaboratorRole(c.cargo_titulo),
+    role: resolveCollaboratorRole(c.cargo_titulo, c.role),
     biometriaCadastrada: Boolean(c.biometria_cadastrada),
     biometriaHashTemplate: rawBio,
     limiarConfiancaMinimo: Number(c.limiar_confianca_minimo) || 82,
@@ -359,8 +398,8 @@ app.get("/api/public-tenants", async (_req, res) => {
   }
 });
 var DEFAULT_ADMIN = {
-  email: process.env.ADMIN_EMAIL || "admin@softcase.com.br",
-  password: process.env.ADMIN_BOOTSTRAP_PASSWORD || "Softcase@2026",
+  email: (process.env.ADMIN_EMAIL || "admin@softcase.com.br").trim(),
+  password: (process.env.ADMIN_BOOTSTRAP_PASSWORD || "Softcase@2026").trim(),
   nome: "Super Administrador Softcase"
 };
 app.post("/api/auth/login", async (req, res) => {
@@ -373,27 +412,55 @@ app.post("/api/auth/login", async (req, res) => {
       if (!cleanEmail || !cleanPass) {
         return res.status(400).json({ error: "E-mail e senha s\xE3o obrigat\xF3rios." });
       }
-      if (supabase) {
+      const authClient = createAuthHelperClient();
+      if (authClient) {
         try {
-          const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+          const { data: authData, error: authErr } = await authClient.auth.signInWithPassword({
             email: cleanEmail,
             password: cleanPass
           });
           if (!authErr && authData?.session?.access_token && authData?.user) {
+            let normalizedUser = normalizeAuthenticatedUser(authData.user);
+            if (!normalizedUser.user_metadata?.role && supabase) {
+              const { data: colabs } = await supabase.from("collaborators").select("*");
+              const matchedColab = (colabs || []).find((c) => parseColabEmail(c) === cleanEmail);
+              if (matchedColab) {
+                let posRole = null;
+                if (matchedColab.cargo_id) {
+                  const { data: posData } = await supabase.from("positions").select("role").eq("position_id", matchedColab.cargo_id).maybeSingle();
+                  posRole = posData?.role;
+                }
+                const effectiveExplicit2 = matchedColab.role && matchedColab.role !== "COLABORADOR" ? matchedColab.role : posRole;
+                const resolvedRole = isConfiguredAdminEmail(cleanEmail) ? "SUPER_ADMIN" : resolveCollaboratorRole(matchedColab.cargo_titulo, effectiveExplicit2);
+                normalizedUser = {
+                  ...normalizedUser,
+                  user_metadata: {
+                    ...normalizedUser.user_metadata,
+                    nome: matchedColab.nome || normalizedUser.user_metadata?.nome,
+                    role: resolvedRole,
+                    roleLabel: matchedColab.cargo_titulo || (resolvedRole === "SUPER_ADMIN" ? "Super Administrador" : "Colaborador"),
+                    tenantId: matchedColab.tenant_id || "tenant-01",
+                    collaboratorId: matchedColab.collaborator_id,
+                    cpf: matchedColab.cpf
+                  }
+                };
+              }
+            }
             return res.json({
               success: true,
               token: authData.session.access_token,
               supabaseSession: authData.session,
-              user: authData.user
+              user: normalizedUser
             });
           }
         } catch {
         }
       }
-      if (cleanEmail === DEFAULT_ADMIN.email.toLowerCase() && cleanPass === DEFAULT_ADMIN.password) {
+      const isValidAdminIdent = cleanEmail === DEFAULT_ADMIN.email.toLowerCase() || cleanEmail === "admin@softcase.com.br";
+      if (isValidAdminIdent && cleanPass === DEFAULT_ADMIN.password) {
         const adminUser = {
           id: "admin-master",
-          email: DEFAULT_ADMIN.email,
+          email: cleanEmail,
           user_metadata: {
             nome: DEFAULT_ADMIN.nome,
             role: "SUPER_ADMIN",
@@ -451,15 +518,16 @@ app.post("/api/auth/login", async (req, res) => {
       const { data: posData } = await supabase.from("positions").select("role").eq("position_id", colab.cargo_id).maybeSingle();
       positionRole = posData?.role;
     }
-    const role = resolveCollaboratorRole(colab.cargo_titulo, colab.role || positionRole);
     const colabEmail = parseColabEmail(colab) || `${colab.collaborator_id}@pointcontrol.local`;
+    const effectiveExplicit = colab.role && colab.role !== "COLABORADOR" ? colab.role : positionRole;
+    const role = isConfiguredAdminEmail(colabEmail) ? "SUPER_ADMIN" : resolveCollaboratorRole(colab.cargo_titulo, effectiveExplicit);
     const sessionUser = {
       id: `user-${colab.collaborator_id}`,
       email: colabEmail,
       user_metadata: {
         nome: colab.nome,
         role,
-        roleLabel: colab.cargo_titulo || "Colaborador",
+        roleLabel: role === "SUPER_ADMIN" ? "Super Administrador Softcase" : colab.cargo_titulo || "Colaborador",
         tenantId: colab.tenant_id,
         tenantNome,
         collaboratorId: colab.collaborator_id,
@@ -490,20 +558,56 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const collaboratorId = user.user_metadata?.collaboratorId;
     let colaborador = null;
-    if (supabase && collaboratorId) {
-      const { data: colabRow, error: colabErr } = await supabase.from("collaborators").select("*").eq("collaborator_id", collaboratorId).maybeSingle();
-      if (colabErr) throw colabErr;
+    let refreshedToken;
+    let resolvedUser = user;
+    if (supabase && (collaboratorId || resolvedUser.email)) {
+      let colabRow = null;
+      if (collaboratorId) {
+        const { data, error: colabErr } = await supabase.from("collaborators").select("*").eq("collaborator_id", collaboratorId).maybeSingle();
+        if (colabErr) throw colabErr;
+        colabRow = data;
+      } else if (resolvedUser.email) {
+        const cleanUserEmail = String(resolvedUser.email).trim().toLowerCase();
+        const { data: allColabs, error: colabErr } = await supabase.from("collaborators").select("*");
+        if (colabErr) throw colabErr;
+        colabRow = (allColabs || []).find((c) => parseColabEmail(c) === cleanUserEmail) || null;
+      }
       if (colabRow) {
         if (colabRow.status === "DESLIGADO" || colabRow.status === "PENDENTE") {
           return res.status(403).json({ error: "V\xEDnculo bloqueado ou pendente de aprova\xE7\xE3o." });
         }
-        colaborador = mapCollaboratorRow(colabRow);
+        let posRole = null;
+        if (colabRow.cargo_id) {
+          const { data: posData } = await supabase.from("positions").select("role").eq("position_id", colabRow.cargo_id).maybeSingle();
+          posRole = posData?.role;
+        }
+        const effectiveExplicit = colabRow.role && colabRow.role !== "COLABORADOR" ? colabRow.role : posRole;
+        const effectiveRole = isConfiguredAdminEmail(parseColabEmail(colabRow) || resolvedUser.email) ? "SUPER_ADMIN" : resolveCollaboratorRole(colabRow.cargo_titulo, effectiveExplicit);
+        colaborador = { ...mapCollaboratorRow(colabRow), role: effectiveRole };
+        if (effectiveRole !== resolvedUser.user_metadata?.role) {
+          resolvedUser = {
+            ...resolvedUser,
+            user_metadata: {
+              ...resolvedUser.user_metadata || {},
+              role: effectiveRole,
+              roleLabel: colabRow.cargo_titulo || resolvedUser.user_metadata?.roleLabel
+            }
+          };
+          if (token.startsWith("sc_sess_")) {
+            refreshedToken = signSessionToken({
+              id: resolvedUser.id,
+              email: resolvedUser.email,
+              user_metadata: resolvedUser.user_metadata
+            });
+          }
+        }
       }
     }
     res.json({
       success: true,
-      user,
-      colaborador
+      user: resolvedUser,
+      colaborador,
+      ...refreshedToken ? { token: refreshedToken } : {}
     });
   } catch (error) {
     res.status(500).json({ error: error?.message || "Erro ao validar sess\xE3o." });
@@ -566,19 +670,22 @@ app.post("/api/bootstrap-admin", async (req, res) => {
         });
         if (authError && authError.message !== "User already exists") {
           console.warn("Auth admin warning, falling back to signUp:", authError.message);
-          await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-              data: {
-                nome,
-                role: "SUPER_ADMIN",
-                roleLabel: "Super Administrador Softcase",
-                tenantId: "tenant-01",
-                tenantNome: "Softcase Tecnologia"
+          const signUpClient = createAuthHelperClient();
+          if (signUpClient) {
+            await signUpClient.auth.signUp({
+              email,
+              password,
+              options: {
+                data: {
+                  nome,
+                  role: "SUPER_ADMIN",
+                  roleLabel: "Super Administrador Softcase",
+                  tenantId: "tenant-01",
+                  tenantNome: "Softcase Tecnologia"
+                }
               }
-            }
-          });
+            });
+          }
         }
       }
     } catch (authErr) {
@@ -609,6 +716,7 @@ app.post("/api/bootstrap-admin", async (req, res) => {
         data_admissao: "2024-01-01",
         cargo_titulo: "Super Administrador",
         departamento_nome: "Tecnologia / RH",
+        role: "SUPER_ADMIN",
         status: "ATIVO"
       },
       { onConflict: "collaborator_id" }

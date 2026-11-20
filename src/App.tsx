@@ -65,7 +65,7 @@ const ProjectPlanViewer = lazy(() => import('./components/ProjectPlanViewer').th
 const GuiaBoasVindas = lazy(() => import('./components/GuiaBoasVindas').then(m => ({ default: m.GuiaBoasVindas })));
 
 export default function App() {
-  const { session, authToken, loading: authLoading, supabase, clearAuthToken } = useAuth();
+  const { session, authToken, loading: authLoading, supabase, setAuthToken, clearAuthToken } = useAuth();
   const bearerToken = session?.access_token || authToken || '';
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap>(DEFAULT_ROLE_PERMISSIONS);
   const [globalThreshold, setGlobalThreshold] = useState<number>(82.0);
@@ -191,11 +191,19 @@ export default function App() {
         const data = await res.json();
         if (!active || !data?.user) return;
 
+        if (data.token && data.token !== bearerToken) {
+          setAuthToken(data.token);
+        }
+
         const meta = data.user.user_metadata || {};
         const colab = data.colaborador || null;
         const userEmailLower = String(data.user.email || '').trim().toLowerCase();
-        const isSuper = meta.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
-        const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
+        const isSuper = meta.role === 'SUPER_ADMIN' || colab?.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
+        const role = (
+          isSuper
+            ? 'SUPER_ADMIN'
+            : (meta.role && meta.role !== 'COLABORADOR' ? meta.role : colab?.role) || meta.role || 'COLABORADOR'
+        ) as any;
 
         const hydratedUser: AuthUser = {
           id: colab?.id || meta.collaboratorId || data.user.id,
