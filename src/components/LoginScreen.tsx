@@ -384,16 +384,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           setAuthToken(data.token);
           const u = data.user;
           const role = (u.user_metadata?.role as any) || 'SUPER_ADMIN';
+          const isDev = Boolean(
+            u.user_metadata?.isPlatformDeveloper ||
+            u.id === 'admin-master' ||
+            emailTrimmed === 'admin' ||
+            emailTrimmed === 'admin@softcase.com.br'
+          );
           const authUser: AuthUser = {
             id: u.id,
             nome: u.user_metadata?.nome || 'Super Administrador',
             email: u.email || emailTrimmed,
             cpf: u.user_metadata?.cpf || '000.000.000-00',
             role,
-            roleLabel: u.user_metadata?.roleLabel || 'Super Administrador',
+            roleLabel: u.user_metadata?.roleLabel || (isDev ? 'Desenvolvedor / Super Admin Softcase' : 'Administrador da Empresa'),
             tenantId: u.user_metadata?.tenantId || 'tenant-01',
             tenantNome: u.user_metadata?.tenantNome || 'Softcase Tecnologia',
-            mfaHabilitado: Boolean(u.user_metadata?.mfaHabilitado)
+            mfaHabilitado: Boolean(u.user_metadata?.mfaHabilitado),
+            isPlatformDeveloper: isDev
           };
           concluirLogin(authUser);
           return;
@@ -421,6 +428,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       if (colabRes.ok && colabData?.token && colabData?.user) {
         setAuthToken(colabData.token);
         const meta = colabData.user.user_metadata || {};
+        const colabEmailLower = String(colabData.user.email || '').trim().toLowerCase();
+        const isDev = Boolean(
+          meta.isPlatformDeveloper ||
+          colabData.colaborador?.id === 'colab-admin-01' ||
+          colabEmailLower === 'admin@softcase.com.br'
+        );
         const authUser: AuthUser = {
           id: colabData.colaborador?.id || colabData.user.id,
           nome: meta.nome || colabData.colaborador?.nome || 'Colaborador',
@@ -432,7 +445,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           tenantNome: meta.tenantNome || 'Empresa',
           departamentoNome: colabData.colaborador?.departamentoNome,
           cargoTitulo: colabData.colaborador?.cargoTitulo,
-          mfaHabilitado: false
+          mfaHabilitado: false,
+          isPlatformDeveloper: isDev
         };
         concluirLogin(authUser);
         return;

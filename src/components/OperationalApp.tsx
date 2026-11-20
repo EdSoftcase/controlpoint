@@ -210,6 +210,11 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
 }) => {
   const { session, authToken, updateSupabaseConfig, supabase } = useAuth();
   const bearerToken = authToken || session?.access_token || '';
+  const isDeveloper = Boolean(
+    currentUser?.isPlatformDeveloper ||
+    currentUser?.id === 'admin-master' ||
+    String(currentUser?.email || '').trim().toLowerCase() === 'admin@softcase.com.br'
+  );
   const [localRolePermissions, setLocalRolePermissions] = useState<RolePermissionsMap>(DEFAULT_ROLE_PERMISSIONS);
   const [localThreshold, setLocalThreshold] = useState<number>(82.0);
   const effectivePermissions = propRolePermissions || localRolePermissions;
@@ -249,8 +254,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         }
 
         if (bearerToken) {
-          const isAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN';
-          const tenantQuery = (!isAdmin && currentUser?.tenantId) ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
+          const tenantQuery = (!isDeveloper && currentUser?.tenantId) ? `?tenantId=${encodeURIComponent(currentUser.tenantId)}` : '';
           const res = await fetch(`/api/bootstrap-data${tenantQuery}`, {
             headers: { Authorization: `Bearer ${bearerToken}` }
           });
@@ -701,11 +705,15 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
   };
 
   useEffect(() => {
+    if (!isDeveloper && (operationalTab === 'tenants' || operationalTab === 'config')) {
+      setOperationalTab('relatorios');
+      return;
+    }
     const permKey = TAB_PERMISSION_MAP[operationalTab];
     if (!hasPermission(effectivePermissions, currentUser.role, permKey)) {
       setOperationalTab('relatorios');
     }
-  }, [operationalTab, effectivePermissions, currentUser.role]);
+  }, [operationalTab, effectivePermissions, currentUser.role, isDeveloper]);
 
   // Relógio em tempo real do Coletor Tablet (Horário Oficial de Brasília)
   const [currentDateTime, setCurrentDateTime] = useState<Date>(() => getBrasiliaNow());
@@ -786,8 +794,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     }
   }, [operationalTab]);
 
-  // Modal Novo Cliente
+  // Modal Novo Cliente (Exclusivo Desenvolvedor)
   const [isNewTenantModalOpen, setIsNewTenantModalOpen] = useState(false);
+  const [isProvisioningTenant, setIsProvisioningTenant] = useState(false);
+  const [togglingTenantId, setTogglingTenantId] = useState<string | null>(null);
   const [expandedTenantRosterId, setExpandedTenantRosterId] = useState<string | null>(null);
   const [newTenantForm, setNewTenantForm] = useState({
     cnpj: '',
@@ -797,6 +807,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     plano: 'Pro' as 'Starter' | 'Pro' | 'REP-P Corporativo',
     licencas: 100,
     emailAdmin: '',
+    adminNome: '',
+    adminCpf: '',
+    adminEmail: '',
+    adminSenha: '',
     cep: '',
     logradouro: '',
     numero: '',
@@ -830,7 +844,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     gerarAcessoSistema: true
   });
 
-  const [generatedCredentials, setGeneratedCredentials] = useState<{ email: string; senha: string; nome: string; cpf?: string; pin?: string; colabId?: string } | null>(null);
+  const [generatedCredentials, setGeneratedCredentials] = useState<{ email: string; senha: string; nome: string; cpf?: string; pin?: string; colabId?: string; empresa?: string; roleLabel?: string; isTenantAdmin?: boolean } | null>(null);
 
   const emptyTenantPlaceholder: Tenant = {
     id: selectedTenantId || currentUser?.tenantId || '',
@@ -2152,8 +2166,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Ação: Criar Novo Cliente (com endereço via CEP e criação automática da Matriz Geofence)
+  // Ação Exclusiva do Desenvolvedor: Provisionar Novo Cliente (Tenant + Matriz Geofence + Depto + Cargo + 1º Admin)
   const handleCreateTenant = async () => {
+    if (!isDeveloper) {
+      setNewTenantError('Acesso exclusivo do Desenvolvedor da plataforma.');
+      return;
+    }
+
     const cnpjVal = validateCNPJ(newTenantForm.cnpj);
     if (!cnpjVal.isValid) {
       setNewTenantError(cnpjVal.error || 'CNPJ inválido');
@@ -2165,171 +2184,264 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       return;
     }
 
+    if (!newTenantForm.adminNome.trim()) {
+      setNewTenantError('Informe o Nome Completo do 1º Administrador do Cliente.');
+      return;
+    }
+
+    const adminCpfVal = validateCPF(newTenantForm.adminCpf);
+    if (!adminCpfVal.isValid) {
+      setNewTenantError(adminCpfVal.error || 'CPF do 1º Administrador inválido.');
+      return;
+    }
+
+    const finalAdminEmail = (newTenantForm.adminEmail || newTenantForm.emailAdmin || '').trim().toLowerCase();
+    if (!finalAdminEmail || !finalAdminEmail.includes('@')) {
+      setNewTenantError('Informe um E-mail corporativo válido para o 1º Administrador.');
+      return;
+    }
+
+    const finalAdminSenha = newTenantForm.adminSenha.trim();
+    if (finalAdminSenha.length < 4) {
+      setNewTenantError('Defina uma senha provisória (mínimo 4 caracteres) para o 1º Administrador.');
+      return;
+    }
+
+    if (!bearerToken) {
+      setNewTenantError('Sessão autenticada de Desenvolvedor necessária.');
+      return;
+    }
+
     const slug = newTenantForm.slug || newTenantForm.razaoSocial.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
     const streetPart = [newTenantForm.logradouro, newTenantForm.numero].filter(Boolean).join(', ');
     const compPart = [streetPart, newTenantForm.complemento, newTenantForm.bairro].filter(Boolean).join(' - ');
     const cityPart = [newTenantForm.municipio, newTenantForm.uf].filter(Boolean).join('/');
     const enderecoCompleto = [compPart, cityPart].filter(Boolean).join(' · ') || 'Endereço sede não informado';
 
-    const tenantId = `tenant-${Date.now()}`;
     const rawLat = String(newTenantForm.latitude ?? '').trim();
     const rawLng = String(newTenantForm.longitude ?? '').trim();
     const lat = rawLat !== '' && Number.isFinite(Number(rawLat)) ? Number(rawLat) : Number.NaN;
     const lng = rawLng !== '' && Number.isFinite(Number(rawLng)) ? Number(rawLng) : Number.NaN;
     const raio = Number(newTenantForm.cercaRaioMetros) || 100;
 
-    if (!bearerToken) {
-      setNewTenantError('Sessão autenticada necessária para salvar empresa no Supabase.');
-      return;
-    }
+    setIsProvisioningTenant(true);
+    setNewTenantError(null);
 
-    const novo: Tenant = {
-      id: tenantId,
-      cnpj: newTenantForm.cnpj,
-      razaoSocial: newTenantForm.razaoSocial.trim(),
-      nomeFantasia: (newTenantForm.nomeFantasia || newTenantForm.razaoSocial).trim(),
-      slug,
-      plano: newTenantForm.plano,
-      licencasContratadas: Number(newTenantForm.licencas) || 100,
-      licencasEmUso: 0,
-      status: 'ATIVO',
-      dataAdesao: getBrasiliaYmd(),
-      emailAdmin: newTenantForm.emailAdmin || 'admin@cliente.com.br',
-      cep: newTenantForm.cep,
-      logradouro: newTenantForm.logradouro,
-      numero: newTenantForm.numero,
-      complemento: newTenantForm.complemento,
-      bairro: newTenantForm.bairro,
-      municipio: newTenantForm.municipio || 'São Paulo',
-      uf: (newTenantForm.uf || 'SP').toUpperCase(),
-      enderecoCompleto,
-      latitude: Number.isFinite(lat) ? lat : undefined,
-      longitude: Number.isFinite(lng) ? lng : undefined,
-      cercaRaioMetros: raio,
-      bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio
-    };
-
-    // PERSISTÊNCIA NO SUPABASE (BLOQUEANTE)
     try {
-      const response = await fetch('/api/save-tenant', {
+      const response = await fetch('/api/developer/provision-tenant', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${bearerToken}` 
+          'Authorization': `Bearer ${bearerToken}`
         },
-        body: JSON.stringify(novo)
+        body: JSON.stringify({
+          cnpj: newTenantForm.cnpj,
+          razaoSocial: newTenantForm.razaoSocial.trim(),
+          nomeFantasia: (newTenantForm.nomeFantasia || newTenantForm.razaoSocial).trim(),
+          slug,
+          plano: newTenantForm.plano,
+          licencasContratadas: Number(newTenantForm.licencas) || 100,
+          cep: newTenantForm.cep,
+          logradouro: newTenantForm.logradouro,
+          numero: newTenantForm.numero,
+          complemento: newTenantForm.complemento,
+          bairro: newTenantForm.bairro,
+          municipio: newTenantForm.municipio || 'São Paulo',
+          uf: (newTenantForm.uf || 'SP').toUpperCase(),
+          enderecoCompleto,
+          latitude: Number.isFinite(lat) ? lat : null,
+          longitude: Number.isFinite(lng) ? lng : null,
+          cercaRaioMetros: raio,
+          bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio,
+          adminNome: newTenantForm.adminNome.trim(),
+          adminCpf: newTenantForm.adminCpf.trim(),
+          adminEmail: finalAdminEmail,
+          adminSenha: finalAdminSenha
+        })
       });
-      
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Falha ao salvar no Supabase');
-    } catch (err) {
-      console.error('Erro de persistência:', err);
-      setNewTenantError(`ERRO DE SINCRONIZAÇÃO: A empresa não pôde ser salva no Supabase. O registro foi bloqueado. Erro: ${err instanceof Error ? err.message : 'Falha de rede'}`);
-      return;
-    }
 
-    // Cachear localização completa do Tenant no navegador para recarregamentos
-    if (typeof window !== 'undefined') {
-      try {
-        const existingLocs = JSON.parse(localStorage.getItem('sc_tenant_locations') || '{}');
-        existingLocs[novo.id] = {
-          cep: novo.cep,
-          logradouro: novo.logradouro,
-          numero: novo.numero,
-          complemento: novo.complemento,
-          bairro: novo.bairro,
-          municipio: novo.municipio,
-          uf: novo.uf,
-          enderecoCompleto: novo.enderecoCompleto,
-          latitude: novo.latitude,
-          longitude: novo.longitude,
-          cercaRaioMetros: novo.cercaRaioMetros,
-          bloquearForaDoRaio: novo.bloquearForaDoRaio
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Falha ao provisionar cliente no servidor.');
+      }
+
+      const tRow = result.tenant;
+      const novo: Tenant = {
+        id: tRow.tenant_id,
+        cnpj: tRow.cnpj,
+        razaoSocial: tRow.razao_social,
+        nomeFantasia: tRow.nome_fantasia || tRow.razao_social,
+        slug: tRow.slug,
+        plano: tRow.plano,
+        licencasContratadas: Number(tRow.licencas_contratadas) || 100,
+        licencasEmUso: 1,
+        status: tRow.status || 'ATIVO',
+        dataAdesao: getBrasiliaYmd(),
+        emailAdmin: tRow.email_admin,
+        cep: tRow.cep,
+        logradouro: tRow.logradouro,
+        numero: tRow.numero,
+        complemento: tRow.complemento,
+        bairro: tRow.bairro,
+        municipio: tRow.municipio,
+        uf: tRow.uf,
+        enderecoCompleto: tRow.endereco_completo,
+        latitude: tRow.latitude != null ? Number(tRow.latitude) : undefined,
+        longitude: tRow.longitude != null ? Number(tRow.longitude) : undefined,
+        cercaRaioMetros: tRow.cerca_raio_metros ?? raio,
+        bloquearForaDoRaio: tRow.bloquear_fora_do_raio ?? true
+      };
+
+      const estRow = result.establishment;
+      const novaMatriz: Estabelecimento = {
+        id: estRow.establishment_id,
+        tenantId: novo.id,
+        codigo: '0001',
+        nome: estRow.nome,
+        cnpj: novo.cnpj,
+        tipo: 'MATRIZ',
+        fusoHorario: estRow.fuso_horario || 'America/Sao_Paulo',
+        cercaRaioMetros: Number(estRow.cerca_raio_metros) || raio,
+        latitude: estRow.latitude != null ? Number(estRow.latitude) : Number.NaN,
+        longitude: estRow.longitude != null ? Number(estRow.longitude) : Number.NaN,
+        uf: estRow.uf || 'SP',
+        municipio: estRow.municipio || 'São Paulo',
+        enderecoCompleto: estRow.endereco_completo || enderecoCompleto,
+        cep: estRow.cep || '',
+        bloquearForaDoRaio: estRow.bloquear_fora_do_raio ?? true
+      };
+
+      const depRow = result.department;
+      if (depRow) {
+        const novoDepto: Departamento = {
+          id: depRow.department_id,
+          tenantId: novo.id,
+          nome: depRow.nome,
+          codigo: depRow.codigo || 'ADM-01',
+          gestorId: depRow.gestor_id,
+          gestorNome: depRow.gestor_nome,
+          gestorEmail: depRow.gestor_email,
+          horarioInicioPadrao: depRow.horario_inicio_padrao || '08:00',
+          cargaHorariaDiariaHoras: Number(depRow.carga_horaria_diaria) || 8,
+          intervaloMinutos: Number(depRow.intervalo_minutos) || 60,
+          maxMinutosAntecedenciaPermitido: Number(depRow.max_minutos_antecedencia) ?? 15,
+          regraAntecedenciaAtiva: depRow.regra_antecedencia_ativa ?? true
         };
-        localStorage.setItem('sc_tenant_locations', JSON.stringify(existingLocs));
-      } catch (_) {}
-    }
+        setDepartamentos([novoDepto, ...departamentos]);
+      }
 
-    // Criar automaticamente o Estabelecimento Matriz da nova empresa com a localização exata para o ponto
-    const novaMatriz: Estabelecimento = {
-      id: `est-matriz-${Date.now()}`,
-      tenantId: novo.id,
-      codigo: '0001',
-      nome: `Matriz - ${novo.nomeFantasia}`,
-      cnpj: novo.cnpj,
-      tipo: 'MATRIZ',
-      fusoHorario: 'America/Sao_Paulo',
-      cercaRaioMetros: raio,
-      latitude: Number.isFinite(lat) ? lat : Number.NaN,
-      longitude: Number.isFinite(lng) ? lng : Number.NaN,
-      uf: (newTenantForm.uf || 'SP').toUpperCase(),
-      municipio: newTenantForm.municipio || 'São Paulo',
-      enderecoCompleto,
-      cep: newTenantForm.cep,
-      bloquearForaDoRaio: newTenantForm.bloquearForaDoRaio
-    };
+      const posRow = result.position;
+      if (posRow) {
+        setCargos(prev => [{
+          id: posRow.position_id,
+          tenantId: novo.id,
+          titulo: posRow.titulo,
+          codigo: posRow.codigo || 'CRG-ADM',
+          cbo: posRow.cbo || '1231-05',
+          cboDescricao: posRow.cbo_descricao || 'Diretor Administrativo',
+          cargaHorariaSemanal: Number(posRow.carga_horaria_semanal) || 40,
+          role: 'SUPER_ADMIN'
+        }, ...prev]);
+      }
 
-    try {
-      if (bearerToken) {
-        const resEst = await fetch('/api/establishments', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${bearerToken}`
-          },
-          body: JSON.stringify(novaMatriz)
+      if (result.adminCollaborator) {
+        setColaboradores([result.adminCollaborator, ...colaboradores]);
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          const existingLocs = JSON.parse(localStorage.getItem('sc_tenant_locations') || '{}');
+          existingLocs[novo.id] = {
+            cep: novo.cep,
+            logradouro: novo.logradouro,
+            numero: novo.numero,
+            complemento: novo.complemento,
+            bairro: novo.bairro,
+            municipio: novo.municipio,
+            uf: novo.uf,
+            enderecoCompleto: novo.enderecoCompleto,
+            latitude: novo.latitude,
+            longitude: novo.longitude,
+            cercaRaioMetros: novo.cercaRaioMetros,
+            bloquearForaDoRaio: novo.bloquearForaDoRaio
+          };
+          localStorage.setItem('sc_tenant_locations', JSON.stringify(existingLocs));
+        } catch (_) {}
+      }
+
+      setLocalEstabelecimentos([novaMatriz, ...estabelecimentos]);
+      propOnUpdateEstabelecimentos?.([novaMatriz, ...estabelecimentos]);
+      setTenants([novo, ...tenants]);
+      setSelectedTenantId(novo.id);
+      setIsNewTenantModalOpen(false);
+      setNewTenantForm({
+        cnpj: '',
+        razaoSocial: '',
+        nomeFantasia: '',
+        slug: '',
+        plano: 'Pro',
+        licencas: 100,
+        emailAdmin: '',
+        adminNome: '',
+        adminCpf: '',
+        adminEmail: '',
+        adminSenha: '',
+        cep: '',
+        logradouro: '',
+        numero: '',
+        complemento: '',
+        bairro: '',
+        municipio: '',
+        uf: 'SP',
+        latitude: '' as unknown as number,
+        longitude: '' as unknown as number,
+        cercaRaioMetros: 100,
+        bloquearForaDoRaio: true
+      });
+      setNewTenantError(null);
+
+      if (result.credentials) {
+        setGeneratedCredentials({
+          nome: result.credentials.nome,
+          cpf: result.credentials.cpf,
+          email: result.credentials.email,
+          senha: result.credentials.senha,
+          empresa: result.credentials.empresa,
+          roleLabel: 'Administrador da Empresa (Restrito ao Tenant)',
+          isTenantAdmin: true
         });
-        if (!resEst.ok) {
-          console.warn('Aviso ao criar estabelecimento matriz via API:', await resEst.text().catch(() => ''));
-        }
-      } else if (supabase) {
-        await supabase.from('establishments').upsert({
-          establishment_id: novaMatriz.id,
-          tenant_id: novaMatriz.tenantId,
-          nome: novaMatriz.nome,
-          cnpj: novaMatriz.cnpj,
-          tipo: 'MATRIZ',
-          cep: novaMatriz.cep || null,
-          latitude: Number.isFinite(novaMatriz.latitude) ? novaMatriz.latitude : null,
-          longitude: Number.isFinite(novaMatriz.longitude) ? novaMatriz.longitude : null,
-          cerca_raio_metros: novaMatriz.cercaRaioMetros,
-          bloquear_fora_do_raio: novaMatriz.bloquearForaDoRaio,
-          endereco_completo: novaMatriz.enderecoCompleto,
-          municipio: novaMatriz.municipio,
-          uf: novaMatriz.uf,
-          fuso_horario: novaMatriz.fusoHorario
-        }, { onConflict: 'establishment_id' });
       }
     } catch (err) {
-      console.warn('Aviso ao criar estabelecimento matriz:', err);
+      console.error('Erro ao provisionar cliente:', err);
+      setNewTenantError(err instanceof Error ? err.message : 'Falha ao provisionar cliente no servidor.');
+    } finally {
+      setIsProvisioningTenant(false);
     }
+  };
 
-    setLocalEstabelecimentos([novaMatriz, ...estabelecimentos]);
-    propOnUpdateEstabelecimentos?.([novaMatriz, ...estabelecimentos]);
-    setTenants([novo, ...tenants]);
-    setSelectedTenantId(novo.id);
-    setIsNewTenantModalOpen(false);
-    setNewTenantForm({
-      cnpj: '',
-      razaoSocial: '',
-      nomeFantasia: '',
-      slug: '',
-      plano: 'Pro',
-      licencas: 100,
-      emailAdmin: '',
-      cep: '',
-      logradouro: '',
-      numero: '',
-      complemento: '',
-      bairro: '',
-      municipio: '',
-      uf: 'SP',
-      latitude: '' as unknown as number,
-      longitude: '' as unknown as number,
-      cercaRaioMetros: 100,
-      bloquearForaDoRaio: true
-    });
-    setNewTenantError(null);
+  // Ação Exclusiva do Desenvolvedor: Suspender / Reativar Cliente SaaS
+  const handleToggleTenantStatus = async (tenant: Tenant) => {
+    if (!isDeveloper || !bearerToken) return;
+    const nextStatus = tenant.status === 'ATIVO' ? 'SUSPENSO' : 'ATIVO';
+    setTogglingTenantId(tenant.id);
+    try {
+      const res = await fetch('/api/developer/toggle-tenant-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`
+        },
+        body: JSON.stringify({ tenantId: tenant.id, status: nextStatus })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) {
+        setTenants(prev => prev.map(t => (t.id === tenant.id ? { ...t, status: nextStatus } : t)));
+      }
+    } catch (err) {
+      console.warn('Erro ao alternar status do tenant:', err);
+    } finally {
+      setTogglingTenantId(null);
+    }
   };
 
   // Ação: Criar Novo Colaborador
@@ -2669,19 +2781,25 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <span className="font-bold block">Nenhuma empresa cadastrada no banco de dados</span>
-              <span className="text-amber-800">Cadastre sua primeira empresa empregadora para iniciar admissões, registros de ponto e apurações fiscais.</span>
+              <span className="text-amber-800">
+                {isDeveloper
+                  ? 'Provisione a primeira empresa contratante para iniciar admissões, registros de ponto e apurações fiscais.'
+                  : 'Solicite ao administrador da plataforma Softcase o provisionamento da sua empresa.'}
+              </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setNewTenantError(null);
-              setIsNewTenantModalOpen(true);
-            }}
-            className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer"
-          >
-            + Nova Empresa
-          </button>
+          {isDeveloper && (
+            <button
+              type="button"
+              onClick={() => {
+                setNewTenantError(null);
+                setIsNewTenantModalOpen(true);
+              }}
+              className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer"
+            >
+              + Provisionar Cliente
+            </button>
+          )}
         </div>
       )}
 
@@ -3007,14 +3125,14 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block truncate">
-              Empresa Empregadora Selecionada
+              {isDeveloper ? 'Empresa Empregadora Selecionada (Multi-tenant)' : 'Empresa Contratante'}
             </span>
             <div className="flex flex-wrap items-center gap-2 min-w-0">
               {tenants.length === 0 ? (
                 <span className="text-sm font-bold text-slate-500">
                   {isBootstrapping ? 'Carregando empresas...' : 'Nenhuma empresa cadastrada'}
                 </span>
-              ) : (
+              ) : isDeveloper ? (
                 <select
                   value={selectedTenantId || activeTenant.id}
                   onChange={(e) => setSelectedTenantId(e.target.value)}
@@ -3026,10 +3144,19 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                     </option>
                   ))}
                 </select>
+              ) : (
+                <span className="text-sm font-bold text-slate-900 truncate max-w-full sm:max-w-md">
+                  {activeTenant.razaoSocial} {activeTenant.cnpj ? `(${activeTenant.cnpj})` : ''}
+                </span>
               )}
               {tenants.length > 0 && (
                 <span className="text-[11px] font-mono font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
                   Plano {activeTenant.plano}
+                </span>
+              )}
+              {isDeveloper && (
+                <span className="text-[10px] font-bold text-sky-800 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 shrink-0">
+                  Modo Desenvolvedor
                 </span>
               )}
             </div>
@@ -3081,7 +3208,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               estrutura: 'Estrutura (Deptos/Cargos/Unidades)',
               permissoes: 'Matriz de Permissões (RBAC)',
               registros: 'Registros & AFD Fiscal',
-              tenants: 'Painel Multi-tenant',
+              tenants: 'Console Desenvolvedor (Clientes SaaS)',
               config: 'Chaves de Conexão',
               escalas: 'Escalas & 12x36',
               afastamentos: 'Afastamentos & Férias',
@@ -3620,16 +3747,21 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* ABA: PAINEL MULTI-TENANT (ADMIN)                         */}
+      {/* ABA: CONSOLE DESENVOLVEDOR (PROVISIONAMENTO DE CLIENTES) */}
       {/* ========================================================= */}
-      {operationalTab === 'tenants' && (
+      {isDeveloper && operationalTab === 'tenants' && (
         <div className="space-y-6">
           <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Empresas Contratantes</h2>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-800 text-[10px] font-bold uppercase tracking-wider">
+                    Acesso Exclusivo Desenvolvedor
+                  </span>
+                </div>
+                <h2 className="text-lg font-bold text-slate-900">Console Desenvolvedor — Provisionamento &amp; Clientes SaaS</h2>
                 <p className="text-xs text-slate-500">
-                  Gestão multi-empresa, endereços de cerca geofence e colaboradores alocados em cada CNPJ.
+                  Provisione novas empresas contratantes (Tenant + Matriz Geofence + 1º Administrador restrito à empresa) e controle o ciclo de vida das assinaturas.
                 </p>
               </div>
               <button 
@@ -3637,9 +3769,9 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                   setNewTenantError(null);
                   setIsNewTenantModalOpen(true);
                 }}
-                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shrink-0"
               >
-                <Plus className="w-4 h-4 text-emerald-400" /> Nova Empresa (com Endereço &amp; CEP)
+                <Plus className="w-4 h-4 text-emerald-400" /> Provisionar Novo Cliente (Tenant + Admin)
               </button>
             </div>
 
@@ -3653,9 +3785,10 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                 const lngExibir = t.longitude ?? matriz?.longitude;
                 const raioExibir = t.cercaRaioMetros ?? matriz?.cercaRaioMetros ?? 100;
                 const isExpanded = expandedTenantRosterId === t.id;
+                const isSuspended = t.status === 'SUSPENSO';
 
                 return (
-                <div key={t.id} className={`p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3 ${t.id === selectedTenantId ? 'border-emerald-500 bg-emerald-50/30 shadow-xs' : 'border-slate-200 bg-slate-50/50 hover:bg-white'}`}>
+                <div key={t.id} className={`p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3 ${isSuspended ? 'border-rose-200 bg-rose-50/40' : t.id === selectedTenantId ? 'border-emerald-500 bg-emerald-50/30 shadow-xs' : 'border-slate-200 bg-slate-50/50 hover:bg-white'}`}>
                   <div>
                     <div className="flex justify-between items-start mb-3">
                       <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center border border-slate-100">
@@ -3667,7 +3800,7 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                             ATIVA
                           </span>
                         )}
-                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${t.status === 'ATIVO' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${t.status === 'ATIVO' ? 'bg-emerald-100 text-emerald-800' : isSuspended ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-600'}`}>
                           {t.status}
                         </span>
                       </div>
@@ -3695,13 +3828,13 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                       <span>Plano: <strong>{t.plano}</strong></span>
                     </div>
 
-                    <div className="flex items-center gap-2 pt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
                       <button
                         type="button"
                         onClick={() => setExpandedTenantRosterId(isExpanded ? null : t.id)}
-                        className="flex-1 py-1.5 px-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
+                        className="flex-1 py-1.5 px-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
                       >
-                        {isExpanded ? 'Ocultar Alocados ▲' : `Ver Alocados (${colabsDaEmpresa.length}) ▼`}
+                        {isExpanded ? 'Ocultar ▲' : `Alocados (${colabsDaEmpresa.length}) ▼`}
                       </button>
                       <button
                         type="button"
@@ -3713,6 +3846,20 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
                       >
                         Gerenciar RH
                       </button>
+                      {t.id !== 'tenant-01' && (
+                        <button
+                          type="button"
+                          disabled={togglingTenantId === t.id}
+                          onClick={() => handleToggleTenantStatus(t)}
+                          className={`py-1.5 px-2 rounded-lg text-[10px] font-bold transition-colors cursor-pointer border ${
+                            isSuspended
+                              ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-800'
+                              : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                          }`}
+                        >
+                          {togglingTenantId === t.id ? '...' : isSuspended ? 'Reativar' : 'Suspender'}
+                        </button>
+                      )}
                     </div>
 
                     {isExpanded && (
@@ -3755,13 +3902,22 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2">
                 <UserCheck className="w-8 h-8" />
               </div>
-              <h3 className="text-lg font-bold">Acesso Criado!</h3>
+              <h3 className="text-lg font-bold">
+                {generatedCredentials.isTenantAdmin ? 'Cliente Provisionado!' : 'Acesso Criado!'}
+              </h3>
               <p className="text-xs text-emerald-50 leading-relaxed">
-                As credenciais abaixo foram geradas para <strong>{generatedCredentials.nome}</strong>.
+                {generatedCredentials.isTenantAdmin
+                  ? <>1º Administrador criado para <strong>{generatedCredentials.empresa}</strong>: <strong>{generatedCredentials.nome}</strong>.</>
+                  : <>As credenciais abaixo foram geradas para <strong>{generatedCredentials.nome}</strong>.</>}
               </p>
             </div>
             <div className="p-6 space-y-4">
               <div className="space-y-2.5">
+                {generatedCredentials.roleLabel && (
+                  <div className="p-2 bg-sky-50 rounded-xl border border-sky-200 text-[11px] font-bold text-sky-900 text-center">
+                    {generatedCredentials.roleLabel}
+                  </div>
+                )}
                 {generatedCredentials.cpf && (
                   <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-0.5">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">CPF de Acesso</span>
@@ -3806,22 +3962,26 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
               <div className="bg-amber-50 border border-amber-100 p-2.5 rounded-xl flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-800 leading-tight">
-                  O colaborador pode acessar o sistema usando o <strong>CPF</strong> ou <strong>E-mail</strong> com a senha ou PIN cadastrado. Para registrar ponto no Coletor, cadastre a biometria facial.
+                  {generatedCredentials.isTenantAdmin
+                    ? 'Este administrador gerencia exclusivamente a própria empresa e filiais, sem acesso a outros clientes ou ao Console do Desenvolvedor.'
+                    : 'O colaborador pode acessar o sistema usando o CPF ou E-mail com a senha ou PIN cadastrado. Para registrar ponto no Coletor, cadastre a biometria facial.'}
                 </p>
               </div>
               <div className="space-y-2 pt-1">
-                <button 
-                  onClick={() => {
-                    setGeneratedCredentials(null);
-                    setOperationalTab('biometria');
-                  }}
-                  className="w-full py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
-                >
-                  <ScanFace className="w-4 h-4" /> Cadastrar Face Agora
-                </button>
+                {!generatedCredentials.isTenantAdmin && (
+                  <button 
+                    onClick={() => {
+                      setGeneratedCredentials(null);
+                      setOperationalTab('biometria');
+                    }}
+                    className="w-full py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
+                  >
+                    <ScanFace className="w-4 h-4" /> Cadastrar Face Agora
+                  </button>
+                )}
                 <button 
                   onClick={() => setGeneratedCredentials(null)}
-                  className="w-full py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-200 transition-all"
+                  className="w-full py-2 bg-slate-900 text-white rounded-xl text-xs font-semibold hover:bg-slate-800 transition-all cursor-pointer"
                 >
                   Fechar & Continuar
                 </button>
@@ -4564,17 +4724,22 @@ export const OperationalApp: React.FC<OperationalAppProps> = ({
         </div>
       )}
 
-      <NewTenantModal 
-        isOpen={isNewTenantModalOpen}
-        onClose={() => {
-          setIsNewTenantModalOpen(false);
-          setNewTenantError(null);
-        }}
-        onConfirm={handleCreateTenant}
-        form={newTenantForm}
-        setForm={setNewTenantForm}
-        error={newTenantError}
-      />
+      {isDeveloper && (
+        <NewTenantModal 
+          isOpen={isNewTenantModalOpen}
+          onClose={() => {
+            if (!isProvisioningTenant) {
+              setIsNewTenantModalOpen(false);
+              setNewTenantError(null);
+            }
+          }}
+          onConfirm={handleCreateTenant}
+          form={newTenantForm}
+          setForm={setNewTenantForm}
+          error={newTenantError}
+          isSubmitting={isProvisioningTenant}
+        />
+      )}
 
       <NewColaboradorModal
         isOpen={isNewColabModalOpen}
@@ -4605,7 +4770,8 @@ const NewTenantModal: React.FC<{
   form: any;
   setForm: (f: any) => void;
   error: string | null;
-}> = ({ isOpen, onClose, onConfirm, form, setForm, error }) => {
+  isSubmitting?: boolean;
+}> = ({ isOpen, onClose, onConfirm, form, setForm, error, isSubmitting }) => {
   const [cepLoading, setCepLoading] = useState(false);
   const [geoFeedback, setGeoFeedback] = useState<string | null>(null);
 
@@ -4704,8 +4870,8 @@ const NewTenantModal: React.FC<{
       <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
           <div>
-            <h3 className="text-base font-bold">Cadastrar Nova Empresa (com Endereço &amp; Local do Ponto)</h3>
-            <p className="text-[11px] text-slate-300">Ao salvar, a unidade Matriz é criada automaticamente com a cerca GPS exata.</p>
+            <h3 className="text-base font-bold">Provisionar Novo Cliente SaaS (Tenant + Matriz + 1º Admin)</h3>
+            <p className="text-[11px] text-slate-300">Exclusivo do Desenvolvedor: cria a empresa, a Matriz com geofence e o 1º Administrador restrito ao tenant.</p>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"><X className="w-5 h-5 text-slate-300" /></button>
         </div>
@@ -4758,9 +4924,9 @@ const NewTenantModal: React.FC<{
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Plano</label>
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Plano Contratado</label>
               <select 
                 value={form.plano}
                 onChange={e => setForm({...form, plano: e.target.value})}
@@ -4772,7 +4938,7 @@ const NewTenantModal: React.FC<{
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Licenças</label>
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Licenças de Colaboradores</label>
               <input 
                 type="number" 
                 value={form.licencas}
@@ -4780,15 +4946,71 @@ const NewTenantModal: React.FC<{
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">E-mail Admin</label>
-              <input 
-                type="email" 
-                placeholder="admin@empresa.com.br"
-                value={form.emailAdmin}
-                onChange={e => setForm({...form, emailAdmin: e.target.value})}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none"
-              />
+          </div>
+
+          {/* 1º Administrador do Cliente */}
+          <div className="p-4 bg-sky-50/70 rounded-xl border border-sky-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-200 pb-2">
+              <span className="text-[11px] font-bold text-sky-950 uppercase flex items-center gap-1.5">
+                <UserPlus className="w-4 h-4 text-sky-600" />
+                1º Administrador do Cliente (Acesso Restrito à Empresa)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const genPass = `Adm@${Math.floor(1000 + Math.random() * 9000)}`;
+                  setForm((prev: any) => ({ ...prev, adminSenha: genPass }));
+                }}
+                className="px-2.5 py-1 bg-white border border-sky-300 text-sky-800 rounded-lg text-[10px] font-bold hover:bg-sky-50 cursor-pointer"
+              >
+                Gerar Senha Provisória
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Nome do Administrador *</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Mariana Silva"
+                  value={form.adminNome}
+                  onChange={e => setForm({ ...form, adminNome: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">CPF do Administrador *</label>
+                <input
+                  type="text"
+                  placeholder="000.000.000-00"
+                  value={form.adminCpf}
+                  onChange={e => setForm({ ...form, adminCpf: formatCPF(e.target.value.replace(/\D/g, '').slice(0, 11)) })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-mono outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">E-mail de Login do Admin *</label>
+                <input
+                  type="email"
+                  placeholder="admin@empresa.com.br"
+                  value={form.adminEmail}
+                  onChange={e => setForm({ ...form, adminEmail: e.target.value, emailAdmin: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase">Senha / PIN Inicial *</label>
+                <input
+                  type="text"
+                  placeholder="Mín. 4 caracteres"
+                  value={form.adminSenha}
+                  onChange={e => setForm({ ...form, adminSenha: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-mono outline-none"
+                />
+              </div>
             </div>
           </div>
 
@@ -4975,8 +5197,10 @@ const NewTenantModal: React.FC<{
           {error && <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-xs rounded-lg font-medium">{error}</div>}
         </div>
         <div className="p-5 bg-slate-50 border-t border-slate-100 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold cursor-pointer">Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors">Confirmar Cadastro da Empresa</button>
+          <button onClick={onClose} disabled={isSubmitting} className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50">Cancelar</button>
+          <button onClick={onConfirm} disabled={isSubmitting} className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors disabled:opacity-60">
+            {isSubmitting ? 'Provisionando Cliente...' : 'Provisionar Cliente & Gerar Admin'}
+          </button>
         </div>
       </div>
     </div>

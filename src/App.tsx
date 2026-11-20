@@ -157,7 +157,11 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+  const isDeveloper = Boolean(
+    currentUser?.isPlatformDeveloper ||
+    currentUser?.id === 'admin-master' ||
+    String(currentUser?.email || '').trim().toLowerCase() === 'admin@softcase.com.br'
+  );
   const isOperatorAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'RH_ADMIN' || currentUser?.role === 'GESTOR';
 
   // Validar e reidratar sessão autenticada via /api/auth/session ao carregar / recarregar
@@ -198,7 +202,13 @@ export default function App() {
         const meta = data.user.user_metadata || {};
         const colab = data.colaborador || null;
         const userEmailLower = String(data.user.email || '').trim().toLowerCase();
-        const isSuper = meta.role === 'SUPER_ADMIN' || colab?.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
+        const isDev = Boolean(
+          meta.isPlatformDeveloper ||
+          data.user.id === 'admin-master' ||
+          colab?.id === 'colab-admin-01' ||
+          userEmailLower === 'admin@softcase.com.br'
+        );
+        const isSuper = isDev || meta.role === 'SUPER_ADMIN' || colab?.role === 'SUPER_ADMIN';
         const role = (
           isSuper
             ? 'SUPER_ADMIN'
@@ -211,12 +221,13 @@ export default function App() {
           email: colab?.email || data.user.email || currentUser?.email || '',
           cpf: colab?.cpf || meta.cpf || currentUser?.cpf || '',
           role,
-          roleLabel: meta.roleLabel || currentUser?.roleLabel || (isSuper ? 'Super Administrador Softcase' : role === 'GESTOR' ? 'Gestor de Equipe' : role === 'RH_ADMIN' ? 'RH & Departamento Pessoal' : 'Colaborador CLT'),
+          roleLabel: meta.roleLabel || currentUser?.roleLabel || (isDev ? 'Desenvolvedor / Super Admin Softcase' : isSuper ? 'Administrador da Empresa' : role === 'GESTOR' ? 'Gestor de Equipe' : role === 'RH_ADMIN' ? 'RH & Departamento Pessoal' : 'Colaborador CLT'),
           tenantId: colab?.tenantId || meta.tenantId || currentUser?.tenantId || 'tenant-01',
           tenantNome: meta.tenantNome || currentUser?.tenantNome || 'Empresa',
           departamentoNome: colab?.departamentoNome || currentUser?.departamentoNome,
           cargoTitulo: colab?.cargoTitulo || currentUser?.cargoTitulo,
-          mfaHabilitado: currentUser?.mfaHabilitado ?? false
+          mfaHabilitado: currentUser?.mfaHabilitado ?? false,
+          isPlatformDeveloper: isDev
         };
 
         setCurrentUser(hydratedUser);
@@ -263,10 +274,10 @@ export default function App() {
     if (!currentUser) return;
     if (!isOperatorAdmin && activeView !== 'welcome') {
       setActiveView('colaborador');
-    } else if (!isSuperAdmin && ['spec', 'prototype', 'legal', 'plan'].includes(activeView)) {
+    } else if (!isDeveloper && ['spec', 'prototype', 'legal', 'plan'].includes(activeView)) {
       setActiveView(isOperatorAdmin ? 'operational' : 'colaborador');
     }
-  }, [currentUser, isOperatorAdmin, isSuperAdmin, activeView]);
+  }, [currentUser, isOperatorAdmin, isDeveloper, activeView]);
 
   // Estado do Menu Hambúrguer Responsivo (Mobile & Tablet)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -284,14 +295,18 @@ export default function App() {
   const [solicitacoesAjuste, setSolicitacoesAjuste] = useState<SolicitacaoAjustePonto[]>([]);
   const [assinaturasEspelho, setAssinaturasEspelho] = useState<AssinaturaEspelhoPonto[]>([]);
 
-  // Redirecionar aba caso RBAC bloqueie acesso
+  // Redirecionar aba caso RBAC ou escopo de desenvolvedor bloqueie acesso
   React.useEffect(() => {
     if (!currentUser || !isOperatorAdmin) return;
+    if (!isDeveloper && (operationalTab === 'tenants' || operationalTab === 'config')) {
+      setOperationalTab('relatorios');
+      return;
+    }
     const permKey = TAB_PERMISSION_MAP[operationalTab];
     if (!hasPermission(rolePermissions, currentUser.role, permKey)) {
       setOperationalTab('relatorios');
     }
-  }, [currentUser, isOperatorAdmin, operationalTab, rolePermissions]);
+  }, [currentUser, isOperatorAdmin, isDeveloper, operationalTab, rolePermissions]);
 
   // Carregar dados iniciais via endpoint autenticado /api/bootstrap-data (Server-Side RLS / Multi-Tenant Guard)
   React.useEffect(() => {
@@ -503,7 +518,8 @@ export default function App() {
     if (session && session.user && !currentUser) {
       const meta = session.user.user_metadata || {};
       const userEmailLower = String(session.user.email || '').trim().toLowerCase();
-      const isSuper = meta.role === 'SUPER_ADMIN' || userEmailLower === 'admin@softcase.com.br';
+      const isDev = Boolean(meta.isPlatformDeveloper || userEmailLower === 'admin@softcase.com.br');
+      const isSuper = isDev || meta.role === 'SUPER_ADMIN';
       // Se não há role explícita ainda e existe token para validar no servidor, aguarda /api/auth/session
       if (!meta.role && !isSuper && bearerToken) return;
       const role = (meta.role as any) || (isSuper ? 'SUPER_ADMIN' : 'COLABORADOR');
@@ -513,10 +529,11 @@ export default function App() {
         email: session.user.email || '',
         cpf: meta.cpf || '',
         role,
-        roleLabel: meta.roleLabel || (isSuper ? 'Super Administrador Softcase' : role === 'GESTOR' ? 'Gestor de Equipe' : 'Colaborador CLT'),
+        roleLabel: meta.roleLabel || (isDev ? 'Desenvolvedor / Super Admin Softcase' : isSuper ? 'Administrador da Empresa' : role === 'GESTOR' ? 'Gestor de Equipe' : 'Colaborador CLT'),
         tenantId: meta.tenantId || 'tenant-01',
         tenantNome: meta.tenantNome || 'Empresa',
-        mfaHabilitado: false
+        mfaHabilitado: false,
+        isPlatformDeveloper: isDev
       };
       updateCurrentUser(u, (role === 'SUPER_ADMIN' || role === 'RH_ADMIN' || role === 'GESTOR') ? 'operational' : 'colaborador');
     }
@@ -616,9 +633,13 @@ export default function App() {
       items: [
         { tab: 'estrutura', label: 'Estrutura & Unidades', icon: Building2 },
         { tab: 'permissoes', label: 'Matriz de Permissões', icon: ShieldCheck },
-        { tab: 'tenants', label: 'Painel Multi-tenant', icon: Globe },
         { tab: 'mobile', label: 'App Mobile & Totem', icon: Smartphone },
-        { tab: 'config', label: 'Chaves de Acesso', icon: Key }
+        ...(isDeveloper
+          ? [
+              { tab: 'tenants', label: 'Console Desenvolvedor', icon: Globe },
+              { tab: 'config', label: 'Chaves de Acesso', icon: Key }
+            ]
+          : [])
       ]
     }
   ] as const;
@@ -725,8 +746,8 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Diagnóstico & Documentação Técnica (Exclusivo SUPER_ADMIN) */}
-              {isSuperAdmin && (
+              {/* Diagnóstico & Documentação Técnica (Exclusivo Desenvolvedor da Plataforma) */}
+              {isDeveloper && (
                 <div className="pt-3 border-t border-slate-200 space-y-1">
                   <button
                     onClick={() => setShowSuperAdminDocs(prev => !prev)}
@@ -1071,17 +1092,17 @@ export default function App() {
               />
             )}
 
-            {(isSuperAdmin && activeView === 'spec') && (
+            {(isDeveloper && activeView === 'spec') && (
               <SpecificationReader onSelectScreenForPrototype={handleOpenPrototypeForScreen} />
             )}
 
-            {(isSuperAdmin && activeView === 'prototype') && (
+            {(isDeveloper && activeView === 'prototype') && (
               <InteractivePrototype initialScreenId={prototypeTargetScreen} />
             )}
 
-            {(isSuperAdmin && activeView === 'legal') && <LegalMatrixViewer />}
+            {(isDeveloper && activeView === 'legal') && <LegalMatrixViewer />}
 
-            {(isSuperAdmin && activeView === 'plan') && <ProjectPlanViewer />}
+            {(isDeveloper && activeView === 'plan') && <ProjectPlanViewer />}
           </Suspense>
         </main>
 
@@ -1707,7 +1728,7 @@ export default function App() {
                         </button>
                       )}
 
-                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['tenants']) && (
+                      {isDeveloper && hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['tenants']) && (
                         <button
                           onClick={() => {
                             setActiveView('operational');
@@ -1722,13 +1743,13 @@ export default function App() {
                         >
                           <Globe className="w-4 h-4 text-sky-400 shrink-0" />
                           <div className="truncate">
-                            <div className="text-xs font-semibold truncate">Multi-tenant</div>
-                            <div className="text-[9px] text-slate-400">Empresas e filiais</div>
+                            <div className="text-xs font-semibold truncate">Console Desenvolvedor</div>
+                            <div className="text-[9px] text-slate-400">Provisionar clientes SaaS</div>
                           </div>
                         </button>
                       )}
 
-                      {hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
+                      {isDeveloper && hasPermission(rolePermissions, currentUser.role, TAB_PERMISSION_MAP['config']) && (
                         <button
                           onClick={() => {
                             setActiveView('operational');
@@ -1751,10 +1772,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Seção 4: Ajuda & Diagnóstico Super Admin */}
+                  {/* Seção 4: Ajuda & Diagnóstico Desenvolvedor */}
                   <div className="space-y-2">
                     <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider block">
-                      Treinamento {isSuperAdmin ? '& Diagnóstico Técnico' : '& Ajuda'}
+                      Treinamento {isDeveloper ? '& Diagnóstico Técnico' : '& Ajuda'}
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       <button
@@ -1775,7 +1796,7 @@ export default function App() {
                         </div>
                       </button>
 
-                      {isSuperAdmin && (
+                      {isDeveloper && (
                         <>
                           <button
                             onClick={() => {
@@ -2004,7 +2025,7 @@ export default function App() {
                 </button>
               </div>
 
-              {isSuperAdmin && (
+              {isDeveloper && (
                 <button
                   onClick={() => {
                     handleOpenExportModal();

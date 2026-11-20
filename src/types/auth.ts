@@ -12,6 +12,7 @@ export interface AuthUser {
   departamentoNome?: string;
   cargoTitulo?: string;
   mfaHabilitado: boolean;
+  isPlatformDeveloper?: boolean;
 }
 
 export interface RegisteredAccount {

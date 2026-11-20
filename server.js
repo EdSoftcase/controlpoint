@@ -192,9 +192,18 @@ function isConfiguredAdminEmail(email) {
   const configured = (process.env.ADMIN_EMAIL || "admin@softcase.com.br").trim().toLowerCase();
   return clean === configured || clean === "admin@softcase.com.br";
 }
+function isPlatformDeveloper(user) {
+  if (!user) return false;
+  const meta = user.user_metadata || {};
+  if (meta.isPlatformDeveloper === true) return true;
+  if (user.id === "admin-master") return true;
+  if (meta.collaboratorId === "colab-admin-01") return true;
+  return isConfiguredAdminEmail(user.email);
+}
 function normalizeAuthenticatedUser(user) {
   if (!user) return null;
   const meta = { ...user.user_metadata || {} };
+  const devAccess = isPlatformDeveloper({ ...user, user_metadata: meta });
   if (isConfiguredAdminEmail(user.email) && meta.role !== "SUPER_ADMIN") {
     meta.role = "SUPER_ADMIN";
     meta.nome = meta.nome || "Super Administrador Softcase";
@@ -202,6 +211,7 @@ function normalizeAuthenticatedUser(user) {
     meta.tenantId = meta.tenantId || "tenant-01";
     meta.tenantNome = meta.tenantNome || "Softcase Tecnologia";
   }
+  meta.isPlatformDeveloper = devAccess;
   return {
     ...user,
     user_metadata: meta
@@ -232,7 +242,7 @@ function isManagerOrAdmin(user) {
 }
 function canAccessTenant(user, tenantId) {
   if (!user) return false;
-  if (isSuperAdmin(user)) return true;
+  if (isPlatformDeveloper(user)) return true;
   if (!tenantId) return true;
   if (!user.user_metadata?.tenantId) return false;
   return user.user_metadata.tenantId === tenantId;
@@ -432,16 +442,18 @@ app.post("/api/auth/login", async (req, res) => {
                 }
                 const effectiveExplicit2 = matchedColab.role && matchedColab.role !== "COLABORADOR" ? matchedColab.role : posRole;
                 const resolvedRole = isConfiguredAdminEmail(cleanEmail) ? "SUPER_ADMIN" : resolveCollaboratorRole(matchedColab.cargo_titulo, effectiveExplicit2);
+                const isDev2 = isConfiguredAdminEmail(cleanEmail) || matchedColab.collaborator_id === "colab-admin-01";
                 normalizedUser = {
                   ...normalizedUser,
                   user_metadata: {
                     ...normalizedUser.user_metadata,
                     nome: matchedColab.nome || normalizedUser.user_metadata?.nome,
                     role: resolvedRole,
-                    roleLabel: matchedColab.cargo_titulo || (resolvedRole === "SUPER_ADMIN" ? "Super Administrador" : "Colaborador"),
+                    roleLabel: matchedColab.cargo_titulo || (resolvedRole === "SUPER_ADMIN" ? "Administrador da Empresa" : "Colaborador"),
                     tenantId: matchedColab.tenant_id || "tenant-01",
                     collaboratorId: matchedColab.collaborator_id,
-                    cpf: matchedColab.cpf
+                    cpf: matchedColab.cpf,
+                    isPlatformDeveloper: isDev2
                   }
                 };
               }
@@ -464,9 +476,10 @@ app.post("/api/auth/login", async (req, res) => {
           user_metadata: {
             nome: DEFAULT_ADMIN.nome,
             role: "SUPER_ADMIN",
-            roleLabel: "Super Administrador Softcase",
+            roleLabel: "Desenvolvedor / Super Admin Softcase",
             tenantId: "tenant-01",
-            tenantNome: "Softcase Tecnologia"
+            tenantNome: "Softcase Tecnologia",
+            isPlatformDeveloper: true
           }
         };
         const token2 = signSessionToken(adminUser);
@@ -521,17 +534,19 @@ app.post("/api/auth/login", async (req, res) => {
     const colabEmail = parseColabEmail(colab) || `${colab.collaborator_id}@pointcontrol.local`;
     const effectiveExplicit = colab.role && colab.role !== "COLABORADOR" ? colab.role : positionRole;
     const role = isConfiguredAdminEmail(colabEmail) ? "SUPER_ADMIN" : resolveCollaboratorRole(colab.cargo_titulo, effectiveExplicit);
+    const isDev = isConfiguredAdminEmail(colabEmail) || colab.collaborator_id === "colab-admin-01";
     const sessionUser = {
       id: `user-${colab.collaborator_id}`,
       email: colabEmail,
       user_metadata: {
         nome: colab.nome,
         role,
-        roleLabel: role === "SUPER_ADMIN" ? "Super Administrador Softcase" : colab.cargo_titulo || "Colaborador",
+        roleLabel: isDev ? "Desenvolvedor / Super Admin Softcase" : role === "SUPER_ADMIN" ? colab.cargo_titulo || "Administrador da Empresa" : colab.cargo_titulo || "Colaborador",
         tenantId: colab.tenant_id,
         tenantNome,
         collaboratorId: colab.collaborator_id,
-        cpf: colab.cpf
+        cpf: colab.cpf,
+        isPlatformDeveloper: isDev
       }
     };
     const token = signSessionToken(sessionUser);
@@ -583,14 +598,16 @@ app.get("/api/auth/session", async (req, res) => {
         }
         const effectiveExplicit = colabRow.role && colabRow.role !== "COLABORADOR" ? colabRow.role : posRole;
         const effectiveRole = isConfiguredAdminEmail(parseColabEmail(colabRow) || resolvedUser.email) ? "SUPER_ADMIN" : resolveCollaboratorRole(colabRow.cargo_titulo, effectiveExplicit);
+        const effectiveDev = isPlatformDeveloper(resolvedUser) || isConfiguredAdminEmail(parseColabEmail(colabRow)) || colabRow.collaborator_id === "colab-admin-01";
         colaborador = { ...mapCollaboratorRow(colabRow), role: effectiveRole };
-        if (effectiveRole !== resolvedUser.user_metadata?.role) {
+        if (effectiveRole !== resolvedUser.user_metadata?.role || effectiveDev !== Boolean(resolvedUser.user_metadata?.isPlatformDeveloper)) {
           resolvedUser = {
             ...resolvedUser,
             user_metadata: {
               ...resolvedUser.user_metadata || {},
               role: effectiveRole,
-              roleLabel: colabRow.cargo_titulo || resolvedUser.user_metadata?.roleLabel
+              roleLabel: colabRow.cargo_titulo || resolvedUser.user_metadata?.roleLabel,
+              isPlatformDeveloper: effectiveDev
             }
           };
           if (token.startsWith("sc_sess_")) {
@@ -618,8 +635,8 @@ app.post("/api/update-config", async (req, res) => {
   if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
   const token = authHeader.split("Bearer ")[1];
   const user = await getAuthenticatedUser(token);
-  if (!user || !isSuperAdmin(user)) {
-    return res.status(403).json({ error: "Forbidden: Somente SUPER_ADMIN pode reconfigurar o servidor." });
+  if (!user || !isPlatformDeveloper(user)) {
+    return res.status(403).json({ error: "Forbidden: Somente o Desenvolvedor da plataforma pode reconfigurar o servidor." });
   }
   const { url, key } = req.body;
   if (!url || !key) return res.status(400).json({ error: "URL and Key are required" });
@@ -637,7 +654,7 @@ app.post("/api/bootstrap-admin", async (req, res) => {
   let authorized = false;
   if (authHeader?.startsWith("Bearer ")) {
     const user = await getAuthenticatedUser(authHeader.split("Bearer ")[1]);
-    if (user && isSuperAdmin(user)) authorized = true;
+    if (user && isPlatformDeveloper(user)) authorized = true;
   }
   if (!authorized) {
     const setupSecret = req.body?.setupSecret;
@@ -648,7 +665,7 @@ app.post("/api/bootstrap-admin", async (req, res) => {
     }
   }
   if (!authorized) {
-    return res.status(403).json({ error: "Forbidden: Necess\xE1rio token de Super Admin para executar bootstrap." });
+    return res.status(403).json({ error: "Forbidden: Necess\xE1rio token de Desenvolvedor para executar bootstrap." });
   }
   const email = req.body?.email || DEFAULT_ADMIN.email;
   const password = req.body?.password || DEFAULT_ADMIN.password;
@@ -663,9 +680,10 @@ app.post("/api/bootstrap-admin", async (req, res) => {
           user_metadata: {
             nome,
             role: "SUPER_ADMIN",
-            roleLabel: "Super Administrador Softcase",
+            roleLabel: "Desenvolvedor / Super Admin Softcase",
             tenantId: "tenant-01",
-            tenantNome: "Softcase Tecnologia"
+            tenantNome: "Softcase Tecnologia",
+            isPlatformDeveloper: true
           }
         });
         if (authError && authError.message !== "User already exists") {
@@ -679,9 +697,10 @@ app.post("/api/bootstrap-admin", async (req, res) => {
                 data: {
                   nome,
                   role: "SUPER_ADMIN",
-                  roleLabel: "Super Administrador Softcase",
+                  roleLabel: "Desenvolvedor / Super Admin Softcase",
                   tenantId: "tenant-01",
-                  tenantNome: "Softcase Tecnologia"
+                  tenantNome: "Softcase Tecnologia",
+                  isPlatformDeveloper: true
                 }
               }
             });
@@ -1230,30 +1249,40 @@ app.post("/api/recover-access", async (req, res) => {
 });
 app.post("/api/save-tenant", async (req, res) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) return res.status(401).send("Unauthorized");
+  if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
   try {
     const token = authHeader.split("Bearer ")[1];
     if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
     const user = await getAuthenticatedUser(token);
-    if (!user) return res.status(401).send("Unauthorized");
-    const tenant = req.body;
-    const isOwnRhAdmin = user.user_metadata?.role === "RH_ADMIN" && user.user_metadata?.tenantId === tenant.id;
-    if (!isSuperAdmin(user) && !isOwnRhAdmin) {
-      return res.status(403).send("Forbidden: Only SUPER_ADMIN or Tenant RH_ADMIN can manage tenants");
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const tenant = req.body || {};
+    const isDev = isPlatformDeveloper(user);
+    const { data: existingById } = tenant.id ? await supabase.from("tenants").select("*").eq("tenant_id", tenant.id).maybeSingle() : { data: null };
+    const { data: existingByCnpj } = !existingById && tenant.cnpj ? await supabase.from("tenants").select("*").eq("cnpj", tenant.cnpj).maybeSingle() : { data: null };
+    const existingTenant = existingById || existingByCnpj;
+    if (!existingTenant && !isDev) {
+      return res.status(403).json({
+        error: "Acesso negado: somente o Desenvolvedor da plataforma pode cadastrar novas empresas (tenants)."
+      });
     }
-    const { data: existingByCnpj } = await supabase.from("tenants").select("tenant_id").eq("cnpj", tenant.cnpj).maybeSingle();
-    const tenantIdToUse = existingByCnpj?.tenant_id || tenant.id;
+    const tenantIdToUse = existingTenant?.tenant_id || tenant.id || `tenant-${Date.now()}`;
+    const isOwnAdmin = (user.user_metadata?.role === "SUPER_ADMIN" || user.user_metadata?.role === "RH_ADMIN") && user.user_metadata?.tenantId === tenantIdToUse;
+    if (!isDev && !isOwnAdmin) {
+      return res.status(403).json({
+        error: "Forbidden: Voc\xEA s\xF3 pode atualizar os dados cadastrais da sua pr\xF3pria empresa."
+      });
+    }
     const { data, error: dbError } = await supabase.from("tenants").upsert(
       {
         tenant_id: tenantIdToUse,
-        cnpj: tenant.cnpj,
-        razao_social: tenant.razaoSocial,
-        nome_fantasia: tenant.nomeFantasia,
-        slug: tenant.slug,
-        plano: tenant.plano,
-        licencas_contratadas: tenant.licencasContratadas,
-        email_admin: tenant.emailAdmin,
-        status: tenant.status,
+        cnpj: isDev ? tenant.cnpj || existingTenant?.cnpj : existingTenant?.cnpj || tenant.cnpj,
+        razao_social: tenant.razaoSocial || existingTenant?.razao_social,
+        nome_fantasia: tenant.nomeFantasia || existingTenant?.nome_fantasia,
+        slug: tenant.slug || existingTenant?.slug,
+        plano: isDev ? tenant.plano || existingTenant?.plano || "Pro" : existingTenant?.plano || "Pro",
+        licencas_contratadas: isDev ? tenant.licencasContratadas ?? existingTenant?.licencas_contratadas ?? 100 : existingTenant?.licencas_contratadas ?? 100,
+        email_admin: tenant.emailAdmin || existingTenant?.email_admin,
+        status: isDev ? tenant.status || existingTenant?.status || "ATIVO" : existingTenant?.status || "ATIVO",
         cep: tenant.cep || null,
         logradouro: tenant.logradouro || null,
         numero: tenant.numero || null,
@@ -1270,10 +1299,250 @@ app.post("/api/save-tenant", async (req, res) => {
       { onConflict: "tenant_id" }
     ).select();
     if (dbError) throw dbError;
-    await logEvent(tenant.id || "system", `Tenant saved/updated: ${tenant.razaoSocial}`);
+    await logEvent(tenantIdToUse, `Tenant saved/updated: ${tenant.razaoSocial || existingTenant?.razao_social}`);
     res.json({ success: true, data });
   } catch (error) {
     await logEvent("error", `Save tenant error: ${error}`);
+    res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+app.post("/api/developer/provision-tenant", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const token = authHeader.split("Bearer ")[1];
+    if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!isPlatformDeveloper(user)) {
+      return res.status(403).json({
+        error: "Acesso exclusivo do Desenvolvedor: voc\xEA n\xE3o possui permiss\xE3o para provisionar novos tenants."
+      });
+    }
+    const body = req.body || {};
+    const cnpj = String(body.cnpj || "").trim();
+    const cleanCnpj = cnpj.replace(/\D/g, "");
+    const razaoSocial = String(body.razaoSocial || "").trim();
+    const nomeFantasia = String(body.nomeFantasia || razaoSocial).trim();
+    const slug = String(body.slug || razaoSocial.toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 24) || `tenant-${Date.now()}`).trim();
+    const plano = body.plano || "Pro";
+    const licencasContratadas = Math.max(1, Number(body.licencasContratadas ?? body.licencas ?? 100));
+    const adminNome = String(body.adminNome || "").trim();
+    const adminCpf = String(body.adminCpf || "").trim();
+    const cleanAdminCpf = adminCpf.replace(/\D/g, "");
+    const adminEmail = String(body.adminEmail || body.emailAdmin || "").trim().toLowerCase();
+    const adminSenha = String(body.adminSenha || "").trim();
+    if (cleanCnpj.length !== 14) {
+      return res.status(400).json({ error: "CNPJ inv\xE1lido. Informe os 14 d\xEDgitos da empresa contratante." });
+    }
+    if (!razaoSocial) {
+      return res.status(400).json({ error: "Raz\xE3o Social da empresa \xE9 obrigat\xF3ria." });
+    }
+    if (!adminNome || cleanAdminCpf.length !== 11 || !adminEmail || adminSenha.length < 4) {
+      return res.status(400).json({
+        error: "Informe Nome, CPF v\xE1lido (11 d\xEDgitos), E-mail e Senha provis\xF3ria (m\xEDn. 4 caracteres) para o 1\xBA Administrador do Cliente."
+      });
+    }
+    const { data: existingByCnpj } = await supabase.from("tenants").select("tenant_id, razao_social").eq("cnpj", cnpj).maybeSingle();
+    if (existingByCnpj) {
+      return res.status(409).json({
+        error: `J\xE1 existe uma empresa cadastrada com o CNPJ ${cnpj} (${existingByCnpj.razao_social}).`
+      });
+    }
+    const nowTs = Date.now();
+    const brNow = getBrasiliaTimeParts();
+    const tenantId = `tenant-${nowTs}`;
+    const estId = `est-${tenantId}-matriz`;
+    const depId = `dep-${tenantId}-adm`;
+    const posId = `crg-${tenantId}-adm`;
+    const colabId = `colab-adm-${nowTs}`;
+    const latRaw = body.latitude !== "" && body.latitude !== void 0 && body.latitude !== null ? Number(body.latitude) : Number.NaN;
+    const lngRaw = body.longitude !== "" && body.longitude !== void 0 && body.longitude !== null ? Number(body.longitude) : Number.NaN;
+    const hasCoords = Number.isFinite(latRaw) && Number.isFinite(lngRaw);
+    const raio = Math.max(20, Number(body.cercaRaioMetros) || 100);
+    const bloquearFora = body.bloquearForaDoRaio ?? true;
+    const streetPart = [body.logradouro, body.numero].filter(Boolean).join(", ");
+    const compPart = [streetPart, body.complemento, body.bairro].filter(Boolean).join(" - ");
+    const cityPart = [body.municipio, body.uf].filter(Boolean).join("/");
+    const enderecoCompleto = body.enderecoCompleto || [compPart, cityPart].filter(Boolean).join(" \xB7 ") || "Endere\xE7o sede n\xE3o informado";
+    const tenantRow = {
+      tenant_id: tenantId,
+      cnpj,
+      razao_social: razaoSocial,
+      nome_fantasia: nomeFantasia,
+      slug,
+      plano,
+      licencas_contratadas: licencasContratadas,
+      email_admin: adminEmail,
+      status: "ATIVO",
+      cep: body.cep || null,
+      logradouro: body.logradouro || null,
+      numero: body.numero || null,
+      complemento: body.complemento || null,
+      bairro: body.bairro || null,
+      municipio: body.municipio || "S\xE3o Paulo",
+      uf: String(body.uf || "SP").toUpperCase(),
+      endereco_completo: enderecoCompleto,
+      latitude: hasCoords ? latRaw : null,
+      longitude: hasCoords ? lngRaw : null,
+      cerca_raio_metros: raio,
+      bloquear_fora_do_raio: bloquearFora
+    };
+    const { error: tenantErr } = await supabase.from("tenants").upsert(tenantRow, { onConflict: "tenant_id" });
+    if (tenantErr) throw tenantErr;
+    const estRow = {
+      establishment_id: estId,
+      tenant_id: tenantId,
+      nome: `Matriz - ${nomeFantasia}`,
+      cnpj,
+      tipo: "MATRIZ",
+      cep: body.cep || null,
+      latitude: hasCoords ? latRaw : 0,
+      longitude: hasCoords ? lngRaw : 0,
+      cerca_raio_metros: raio,
+      bloquear_fora_do_raio: bloquearFora,
+      endereco_completo: enderecoCompleto,
+      municipio: body.municipio || "S\xE3o Paulo",
+      uf: String(body.uf || "SP").toUpperCase(),
+      fuso_horario: "America/Sao_Paulo"
+    };
+    await supabase.from("establishments").upsert(estRow, { onConflict: "establishment_id" });
+    const depRow = {
+      department_id: depId,
+      tenant_id: tenantId,
+      nome: "Diretoria & Administra\xE7\xE3o",
+      codigo: "ADM-01",
+      gestor_id: colabId,
+      gestor_nome: adminNome,
+      gestor_email: adminEmail,
+      horario_inicio_padrao: "08:00",
+      carga_horaria_diaria: 8,
+      intervalo_minutos: 60,
+      max_minutos_antecedencia: 15,
+      regra_antecedencia_ativa: true
+    };
+    await supabase.from("departments").upsert(depRow, { onConflict: "department_id" });
+    const posRow = {
+      position_id: posId,
+      tenant_id: tenantId,
+      titulo: "Administrador da Empresa",
+      codigo: "CRG-ADM",
+      cbo: "1231-05",
+      cbo_descricao: "Diretor Administrativo",
+      carga_horaria_semanal: 40,
+      role: "SUPER_ADMIN"
+    };
+    await supabase.from("positions").upsert(posRow, { onConflict: "position_id" });
+    const matricula = `ADM-${cleanAdminCpf.slice(0, 4)}`;
+    const colabPayload = {
+      collaborator_id: colabId,
+      tenant_id: tenantId,
+      nome: adminNome,
+      cpf: adminCpf,
+      matricula,
+      email: adminEmail,
+      data_admissao: brNow.ymd,
+      cargo_id: posId,
+      cargo_titulo: "Administrador da Empresa",
+      departamento_id: depId,
+      departamento_nome: "Diretoria & Administra\xE7\xE3o",
+      gestor_id: colabId,
+      gestor_nome: adminNome,
+      estabelecimento_id: estId,
+      estabelecimento_nome: estRow.nome,
+      regime: "REGULAR",
+      horario_inicio: "08:00",
+      horario_fim: "17:00",
+      carga_horaria_diaria: 8,
+      intervalo_minutos: 60,
+      max_minutos_antecedencia: 15,
+      regra_antecedencia_ativa: true,
+      pin_coletor: hashPin(adminSenha),
+      role: "SUPER_ADMIN",
+      status: "ATIVO",
+      biometric_template: JSON.stringify({ email: adminEmail, role: "SUPER_ADMIN" }),
+      updated_at: brNow.iso
+    };
+    let { error: colabErr } = await supabase.from("collaborators").upsert(colabPayload, { onConflict: "collaborator_id" });
+    if (colabErr && String(colabErr.message || "").includes("role")) {
+      delete colabPayload.role;
+      const retry = await supabase.from("collaborators").upsert(colabPayload, { onConflict: "collaborator_id" });
+      colabErr = retry.error;
+    }
+    if (colabErr) throw colabErr;
+    try {
+      if (supabase.auth?.admin?.createUser) {
+        await supabase.auth.admin.createUser({
+          email: adminEmail,
+          password: adminSenha,
+          email_confirm: true,
+          user_metadata: {
+            nome: adminNome,
+            tenantId,
+            tenantNome: nomeFantasia,
+            role: "SUPER_ADMIN",
+            roleLabel: "Administrador da Empresa",
+            collaboratorId: colabId,
+            cpf: adminCpf,
+            isPlatformDeveloper: false
+          }
+        });
+      }
+    } catch {
+    }
+    await logEvent(tenantId, `Cliente provisionado pelo Desenvolvedor: ${razaoSocial} (${cnpj}) \xB7 Admin: ${adminEmail}`);
+    res.json({
+      success: true,
+      tenant: tenantRow,
+      establishment: estRow,
+      department: depRow,
+      position: posRow,
+      adminCollaborator: mapCollaboratorRow(colabPayload),
+      credentials: {
+        tenantId,
+        empresa: razaoSocial,
+        cnpj,
+        nome: adminNome,
+        cpf: adminCpf,
+        email: adminEmail,
+        senha: adminSenha,
+        role: "SUPER_ADMIN",
+        isPlatformDeveloper: false
+      }
+    });
+  } catch (error) {
+    console.error("Developer provision tenant error:", error);
+    res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+app.post("/api/developer/toggle-tenant-status", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const token = authHeader.split("Bearer ")[1];
+    if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
+    const user = await getAuthenticatedUser(token);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!isPlatformDeveloper(user)) {
+      return res.status(403).json({
+        error: "Acesso exclusivo do Desenvolvedor: somente o desenvolvedor pode alterar status ou licen\xE7as de empresas."
+      });
+    }
+    const { tenantId, status, plano, licencasContratadas } = req.body || {};
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenantId \xE9 obrigat\xF3rio." });
+    }
+    const updates = {};
+    if (status === "ATIVO" || status === "SUSPENSO" || status === "TRIAL") {
+      updates.status = status;
+    }
+    if (plano) updates.plano = plano;
+    if (licencasContratadas !== void 0) updates.licencas_contratadas = Math.max(1, Number(licencasContratadas));
+    const { data, error } = await supabase.from("tenants").update(updates).eq("tenant_id", tenantId).select().maybeSingle();
+    if (error) throw error;
+    await logEvent(tenantId, `Status/Plano atualizado pelo Desenvolvedor: ${JSON.stringify(updates)}`);
+    res.json({ success: true, tenant: data });
+  } catch (error) {
     res.status(500).json({ error: getErrorMessage(error) });
   }
 });
@@ -1514,7 +1783,11 @@ app.post("/api/create-auth-user", async (req, res) => {
     if (!isManagerOrAdmin(adminUser)) {
       return res.status(403).send("Forbidden: Insufficient permissions");
     }
-    const { email, password, nome, tenantId, role: targetRole, cpf } = req.body;
+    const { email, password, nome, tenantId: reqTenantId, role: targetRole, cpf } = req.body;
+    const tenantId = reqTenantId || adminUser.user_metadata?.tenantId || "tenant-01";
+    if (!canAccessTenant(adminUser, tenantId)) {
+      return res.status(403).send("Forbidden: Tenant access denied");
+    }
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -1523,7 +1796,8 @@ app.post("/api/create-auth-user", async (req, res) => {
         nome,
         tenantId,
         role: targetRole || "COLABORADOR",
-        cpf
+        cpf,
+        isPlatformDeveloper: false
       }
     });
     if (error) throw error;
@@ -2126,7 +2400,7 @@ app.get("/api/bootstrap-data", async (req, res) => {
     if (!user) return res.status(401).send("Unauthorized");
     if (!supabase) return res.status(503).json({ error: "Supabase n\xE3o configurado." });
     const requestedTenant = String(req.query.tenantId || "");
-    const tenantScope = requestedTenant && requestedTenant !== "all" ? requestedTenant : isSuperAdmin(user) ? null : user.user_metadata?.tenantId || "tenant-01";
+    const tenantScope = requestedTenant && requestedTenant !== "all" ? requestedTenant : isPlatformDeveloper(user) ? null : user.user_metadata?.tenantId || "tenant-01";
     if (tenantScope && !canAccessTenant(user, tenantScope)) {
       return res.status(403).send("Forbidden");
     }
@@ -2153,7 +2427,7 @@ app.get("/api/bootstrap-data", async (req, res) => {
       adjsRes,
       positionsRes
     ] = await Promise.all([
-      isSuperAdmin(user) && !tenantScope ? supabase.from("tenants").select("*") : supabase.from("tenants").select("*").eq("tenant_id", settingsTenantId),
+      isPlatformDeveloper(user) && !tenantScope ? supabase.from("tenants").select("*") : supabase.from("tenants").select("*").eq("tenant_id", settingsTenantId),
       q("collaborators"),
       q("establishments"),
       q("departments"),
@@ -2673,7 +2947,7 @@ app.get("/api/vacations", async (req, res) => {
     const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || "tenant-01");
     if (!canAccessTenant(user, requestedTenant)) return res.status(403).send("Forbidden");
     let query = supabase.from("vacations").select("*").order("created_at", { ascending: false });
-    if (!isSuperAdmin(user) || req.query.tenantId) {
+    if (!isPlatformDeveloper(user) || req.query.tenantId) {
       query = query.eq("tenant_id", requestedTenant);
     }
     const { data, error } = await query;
@@ -2732,7 +3006,7 @@ app.get("/api/absences", async (req, res) => {
     const requestedTenant = String(req.query.tenantId || user.user_metadata?.tenantId || "tenant-01");
     if (!canAccessTenant(user, requestedTenant)) return res.status(403).send("Forbidden");
     let query = supabase.from("absences").select("*").order("data_registro", { ascending: false });
-    if (!isSuperAdmin(user) || req.query.tenantId) {
+    if (!isPlatformDeveloper(user) || req.query.tenantId) {
       query = query.eq("tenant_id", requestedTenant);
     }
     const { data, error } = await query;
